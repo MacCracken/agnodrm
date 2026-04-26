@@ -9,7 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.0.2] — 2026-04-26
 
-**P(-1) sweep follow-up to 1.0.1.** Doc + test gaps caught while re-walking the P(-1) Scaffold/Project Hardening process against the just-released 1.0.1 tree. No source changes; the audit fixes themselves shipped clean in 1.0.1. This release closes the regression-test contract (audit step 6) and the documentation contract (audit step 8) that the prior pass landed only partially.
+**P(-1) sweep follow-up to 1.0.1 + cyrius 5.7.7 toolchain bump.** Doc + test gaps caught while re-walking the P(-1) Scaffold/Project Hardening process against the just-released 1.0.1 tree. No `src/*.cyr` changes; the audit fixes themselves shipped clean in 1.0.1. This release closes the regression-test contract (audit step 6), the documentation contract (audit step 8), and bumps the toolchain pin to the latest cyrius.
+
+### Changed
+- `cyrius.cyml [package].cyrius`: pin `5.7.6` → `5.7.7`. agnosys builds clean against 5.7.7 with no source or vendored-stdlib changes — `cyrius deps` is a no-op against the existing vendor (5.7.7 introduced no changes to the `syscalls` / `string` / `alloc` / `fmt` / `vec` / `str` / `io` modules in our dep list). Binary size unchanged at 73,144 B; integration tests 234/234.
 
 ### Added
 - `tests/tcyr/test_integration.tcyr::test_audit_regressions` — 12 deterministic assertions pinning the 1.0.1 audit-finding fixes. F-1 round-trips shell-metacharacter strings through `journald_filter_set_grep` / `set_unit` and asserts verbatim get-back (would catch any future setter that escapes or splits). F-2 covers seven cipher allowlist cases: three `null` substring variants (`cipher_null`, `Cipher_Null`, `xts-NULL`), two off-allowlist rejections, two allowed pairs (`aes`/`xts-plain64`, `serpent`/`cbc-essiv:sha256`). F-3 calls `luks_keyfile_path()` twice and asserts the paths differ (proves the getrandom suffix is actually random, not a degraded constant). Total integration assertions: 245 → 257.
