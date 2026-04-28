@@ -93,7 +93,7 @@ fn security_apply_landlock(rules, count) {
         if (allowed_access != 0) {
             var path = security_fs_rule_path(rule);
             # O_PATH = 0x200000, O_CLOEXEC = 0x80000
-            var path_fd = syscall(SYS_OPEN, path, 0x280000, 0);
+            var path_fd = sys_open(path, 0x280000, 0);
             if (path_fd < 0) {
                 return err_syscall_failed(0 - path_fd, "landlock open path failed");
             }

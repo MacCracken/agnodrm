@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-04-28
+
+**aarch64-portability fix.** Single call site in `src/security.cyr` was using
+the raw `syscall(SYS_OPEN, …)` form, which only resolves on x86_64 Linux —
+aarch64 Linux has no `open` syscall (only `openat`). When `dist/agnosys.cyr`
+was bundled into a downstream consumer (sigil → phylax) and that consumer
+attempted an aarch64 cross-build, the unresolved `SYS_OPEN` constant aborted
+compilation with `undefined variable 'SYS_OPEN'`. Standalone agnosys
+builds were unaffected because they got their syscalls module from cyrius
+stdlib at compile time and the dead-code path simply didn't reach the call
+site.
+
+The other 19 `sys_open(...)` call sites across `src/drm.cyr`,
+`src/secureboot.cyr`, `src/logging.cyr`, `src/bootloader.cyr`,
+`src/update.cyr`, `src/audit.cyr`, `src/luks.cyr`, `src/tpm.cyr`,
+`src/mac.cyr` already used the portable `sys_open(path, flags, mode)`
+stdlib wrapper that internally dispatches to `SYS_OPEN` (x86_64) or
+`SYS_OPENAT(AT_FDCWD, ...)` (aarch64). This patch makes the security/
+landlock site match.
+
+### Fixed
+- `src/security.cyr:96` — `syscall(SYS_OPEN, path, 0x280000, 0)` →
+  `sys_open(path, 0x280000, 0)`. Behavior identical on x86_64 (stdlib
+  helper expands to the same syscall); aarch64 now resolves through
+  `SYS_OPENAT` with `AT_FDCWD`. No semantic change to the landlock
+  ruleset wiring.
+
+### Verified
+- `cyrius test tests/tcyr/test_integration.tcyr` — 234 passed, 0 failed
+  (unchanged from 1.0.2).
+- `cyrius build src/main.cyr build/agnosys` (x86_64, DCE) — clean.
+- `cyrius build --aarch64 src/main.cyr build/agnosys-aarch64` — clean
+  (warnings only — pre-existing arity mismatches on the agnosys-internal
+  syscall-table aliases, unrelated to this patch).
+- `cyrius distlib` — `dist/agnosys.cyr` regenerated, header now
+  `# Version: 1.0.3`. Module bodies differ from 1.0.2 only at the one
+  patched call site; bundle stays at 9,900 lines.
+
 ## [1.0.2] — 2026-04-26
 
 **P(-1) sweep follow-up to 1.0.1 + cyrius 5.7.7 toolchain bump.** Doc + test gaps caught while re-walking the P(-1) Scaffold/Project Hardening process against the just-released 1.0.1 tree. No `src/*.cyr` changes; the audit fixes themselves shipped clean in 1.0.1. This release closes the regression-test contract (audit step 6), the documentation contract (audit step 8), and bumps the toolchain pin to the latest cyrius.
