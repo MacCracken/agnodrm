@@ -283,7 +283,7 @@ fn ima_measurement_filename(m) { return load64(m + 32); }
 
 fn ima_get_status() {
     var ima_dir = "/sys/kernel/security/ima";
-    var acc = syscall(SYS_ACCESS, ima_dir, 0);
+    var acc = sys_access(ima_dir, 0);
 
     if (acc < 0) {
         # IMA not active
@@ -318,7 +318,7 @@ fn ima_get_status() {
     # Check if policy file exists
     var ppath = "/sys/kernel/security/ima/policy";
     var policy_loaded = 0;
-    var pacc = syscall(SYS_ACCESS, ppath, 0);
+    var pacc = sys_access(ppath, 0);
     if (pacc == 0) { policy_loaded = 1; }
 
     return Ok(ima_status_new(1, mcount, policy_loaded));
@@ -506,7 +506,7 @@ fn ima_write_policy(rules) {
 
     # Write to /sys/kernel/security/ima/policy
     var ppath = "/sys/kernel/security/ima/policy";
-    var pacc = syscall(SYS_ACCESS, ppath, 0);
+    var pacc = sys_access(ppath, 0);
     if (pacc < 0) {
         return err_unknown("IMA policy file not found; is IMA enabled?");
     }
@@ -536,7 +536,7 @@ fn ima_write_policy(rules) {
 # ================================================================
 
 fn ima_verify_file_integrity(path) {
-    var acc = syscall(SYS_ACCESS, path, 0);
+    var acc = sys_access(path, 0);
     if (acc < 0) {
         return err_invalid_argument("File not found");
     }

@@ -245,7 +245,7 @@ fn dmverity_run_checked(args) {
 # Returns Ok(root_hash_ptr) — the computed root hash as a heap string.
 fn dmverity_format(data_device, hash_device, algorithm, salt) {
     # Verify data device exists
-    var acc = syscall(SYS_ACCESS, data_device, 0);
+    var acc = sys_access(data_device, 0);
     if (acc < 0) {
         return err_invalid_argument("Data device not found");
     }
@@ -439,11 +439,11 @@ fn dmverity_status(name) {
 # Returns Ok(1) if valid, Ok(0) if failed.
 fn dmverity_verify(data_device, hash_device, root_hash) {
     # Validate inputs
-    var acc1 = syscall(SYS_ACCESS, data_device, 0);
+    var acc1 = sys_access(data_device, 0);
     if (acc1 < 0) {
         return err_invalid_argument("Data device not found");
     }
-    var acc2 = syscall(SYS_ACCESS, hash_device, 0);
+    var acc2 = sys_access(hash_device, 0);
     if (acc2 < 0) {
         return err_invalid_argument("Hash device not found");
     }
@@ -474,7 +474,7 @@ fn dmverity_verify(data_device, hash_device, root_hash) {
 # Returns 1 if supported, 0 if not.
 fn dmverity_supported() {
     # Check for kernel module
-    if (syscall(SYS_ACCESS, "/sys/module/dm_verity", 0) == 0) { return 1; }
+    if (sys_access("/sys/module/dm_verity", 0) == 0) { return 1; }
 
     # Check if veritysetup is available
     var args = vec_new();

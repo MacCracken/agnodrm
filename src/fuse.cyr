@@ -264,7 +264,7 @@ fn fuse_validate_mountpoint(path) {
     # Check path exists and is a directory
     # stat64 struct: 144 bytes, mode at offset 24
     var statbuf = alloc(144);
-    var ret = syscall(4, path, statbuf);  # SYS_STAT
+    var ret = sys_stat(path, statbuf);
     if (ret < 0) {
         return err_invalid_argument("mountpoint does not exist");
     }

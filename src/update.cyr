@@ -77,23 +77,23 @@ fn update_atomic_write(path, data, data_len) {
         if (chunk > 4096) { chunk = 4096; }
         var ret = sys_write(fd, data + written, chunk);
         if (ret < 0) {
-            syscall(87, tmppath);
+            sys_unlink(tmppath);
             return err_io(0 - ret, "atomic_write: write failed");
         }
         written = written + ret;
     }
 
     # fsync
-    var ret = syscall(74, fd);  # SYS_FSYNC
+    var ret = agnosys_fsync(fd);  # SYS_FSYNC
     if (ret < 0) {
-        syscall(87, tmppath);
+        sys_unlink(tmppath);
         return err_io(0 - ret, "atomic_write: fsync failed");
     }
 
     # Rename temp to target: syscall 82 = SYS_RENAME
-    ret = syscall(82, tmppath, path);
+    ret = agnosys_rename(tmppath, path);
     if (ret < 0) {
-        syscall(87, tmppath);
+        sys_unlink(tmppath);
         return err_io(0 - ret, "atomic_write: rename failed");
     }
 
@@ -139,7 +139,7 @@ fn update_atomic_copy(src, dst) {
         while (nwritten < nread) {
             var ret = sys_write(dst_fd, buf + nwritten, nread - nwritten);
             if (ret < 0) {
-                syscall(87, tmppath);
+                sys_unlink(tmppath);
                 return err_io(0 - ret, "atomic_copy: write failed");
             }
             nwritten = nwritten + ret;
@@ -149,17 +149,17 @@ fn update_atomic_copy(src, dst) {
     }
 
     if (nread < 0) {
-        syscall(87, tmppath);
+        sys_unlink(tmppath);
         return err_io(0 - nread, "atomic_copy: read failed");
     }
 
     # fsync (fd closed by defer)
-    syscall(74, dst_fd);
+    agnosys_fsync(dst_fd);
 
     # Rename temp to target
-    var ret = syscall(82, tmppath, dst);
+    var ret = agnosys_rename(tmppath, dst);
     if (ret < 0) {
-        syscall(87, tmppath);
+        sys_unlink(tmppath);
         return err_io(0 - ret, "atomic_copy: rename failed");
     }
 

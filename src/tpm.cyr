@@ -161,8 +161,8 @@ fn tpm_pcr_selection(bank, indices) {
 # Check if a TPM 2.0 device is available.
 # Returns 1 if available, 0 if not.
 fn tpm_detect() {
-    if (syscall(SYS_ACCESS, "/dev/tpmrm0", 0) == 0) { return 1; }
-    return syscall(SYS_ACCESS, "/dev/tpm0", 0) == 0;
+    if (sys_access("/dev/tpmrm0", 0) == 0) { return 1; }
+    return sys_access("/dev/tpm0", 0) == 0;
 }
 
 # ================================================================
@@ -350,7 +350,7 @@ fn tpm_seal(bank, pcr_indices, data_ptr, data_len, output_dir) {
         return err_invalid_argument("Sealed data too large (max 2048 bytes)");
     }
 
-    var acc = syscall(SYS_ACCESS, output_dir, 0);
+    var acc = sys_access(output_dir, 0);
     if (acc < 0) {
         return err_invalid_argument("Output directory not found");
     }
@@ -442,7 +442,7 @@ fn tpm_unseal(sealed, buf, buflen) {
     var ctx = tpm_sealed_context(sealed);
     var pcr_sel = tpm_sealed_pcr_sel(sealed);
 
-    var acc = syscall(SYS_ACCESS, ctx, 0);
+    var acc = sys_access(ctx, 0);
     if (acc < 0) {
         return err_invalid_argument("Sealed context file not found");
     }

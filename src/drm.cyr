@@ -80,14 +80,8 @@ enum DrmConnStatus {
     DRM_CONN_STATUS_UNKNOWN = 3;
 }
 
-# ================================================================
-# Syscall numbers
-# ================================================================
-
-enum DrmSysNr {
-    SYS_IOCTL = 16;
-    SYS_GETDENTS64 = 217;
-}
+# SYS_IOCTL and SYS_GETDENTS64 are now exposed by lib/syscalls.cyr
+# with arch-correct values; no local redefinition needed.
 
 # ================================================================
 # DRM Version struct (on-wire for ioctl)

@@ -20,6 +20,7 @@ include "lib/syscalls.cyr"
 include "lib/net.cyr"
 include "lib/process.cyr"
 include "src/error.cyr"
+include "src/syscall_arch.cyr"
 
 # ================================================================
 # Netlink / audit constants
@@ -47,13 +48,9 @@ enum AuditConst {
     EPROTONOSUPPORT = 93;
 }
 
-# Syscall numbers for socket operations
-enum SysNrAudit {
-    SYS_SOCKET_NR = 41;
-    SYS_BIND_NR = 49;
-    SYS_SENDTO_NR = 44;
-    SYS_RECVFROM_NR = 45;
-}
+# Socket-syscall numbers (SYS_SOCKET_NR/SYS_BIND_NR/SYS_SENDTO_NR/
+# SYS_RECVFROM_NR) are arch-varying and now supplied via
+# src/syscall_arch.cyr's per-arch peer.
 
 # ================================================================
 # Audit rule type constants

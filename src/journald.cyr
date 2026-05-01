@@ -5,7 +5,7 @@
 # and query the journal via journalctl subprocess.
 #
 # Requires: lib/string.cyr, lib/str.cyr, lib/vec.cyr, lib/process.cyr,
-#           lib/syscalls.cyr, src/error.cyr
+#           lib/syscalls.cyr, src/error.cyr, src/syscall_arch.cyr
 #
 # All structs are bags of i64 fields accessed via store64/load64.
 # Strings are Str (fat pointer: data + length) from lib/str.cyr.
@@ -17,13 +17,14 @@
 enum JournalConst {
     # AF_UNIX = 1, SOCK_DGRAM = 2
     AF_UNIX = 1;
-    # sendto syscall
-    SYS_SENDTO = 44;
     # sockaddr_un: { family(2), path(108) } = 110 bytes
     SOCKADDR_UN_SIZE = 110;
     # Journal socket path length (including null)
     JOURNAL_SOCKET_PATH_LEN = 33;
 }
+
+# Socket-syscall numbers (SYS_SOCKET_NR, SYS_SENDTO_NR) come from
+# src/syscall_arch.cyr's per-arch peer.
 
 # Syslog priority levels
 enum JournalPriority {
@@ -234,8 +235,8 @@ fn journald_send(message, priority, identifier) {
     var payload = str_builder_build(sb);
 
     # Create AF_UNIX SOCK_DGRAM socket
-    var SYS_SOCKET = 41;
-    var fd = syscall(SYS_SOCKET, AF_UNIX, 2, 0);  # SOCK_DGRAM = 2
+
+    var fd = syscall(SYS_SOCKET_NR, AF_UNIX, 2, 0);  # SOCK_DGRAM = 2
     if (fd < 0) {
         return err_syscall_failed(0 - fd, "failed to create unix socket");
     }
@@ -245,7 +246,7 @@ fn journald_send(message, priority, identifier) {
     var sa = journald_make_sockaddr();
 
     # sendto(fd, buf, len, flags, dest_addr, addrlen)
-    var ret = syscall(SYS_SENDTO, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
+    var ret = syscall(SYS_SENDTO_NR, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
     if (ret < 0) {
         return err_syscall_failed(0 - ret, "sendto journal socket failed");
     }
@@ -310,15 +311,15 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
 
     var payload = str_builder_build(sb);
 
-    var SYS_SOCKET = 41;
-    var fd = syscall(SYS_SOCKET, AF_UNIX, 2, 0);
+
+    var fd = syscall(SYS_SOCKET_NR, AF_UNIX, 2, 0);
     if (fd < 0) {
         return err_syscall_failed(0 - fd, "failed to create unix socket");
     }
     defer { sys_close(fd); }
 
     var sa = journald_make_sockaddr();
-    var ret = syscall(SYS_SENDTO, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
+    var ret = syscall(SYS_SENDTO_NR, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
     if (ret < 0) {
         return err_syscall_failed(0 - ret, "sendto journal socket failed");
     }

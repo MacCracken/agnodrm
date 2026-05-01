@@ -48,11 +48,11 @@ fn main() {
     }
 
     # -- syscall module --
-    syscall(1, 1, "pid: ", 5);
+    sys_write(1, "pid: ", 5);
     print_num(agnosys_getpid());
-    syscall(1, 1, ", uid: ", 7);
+    sys_write(1, ", uid: ", 7);
     print_num(agnosys_getuid());
-    syscall(1, 1, "\n", 1);
+    sys_write(1, "\n", 1);
 
     if (agnosys_is_root() == 1) { println("running as root"); }
     else { println("running as user"); }
@@ -61,28 +61,28 @@ fn main() {
     var ures = agnosys_uname(&uts);
     if (is_ok(ures) == 1) {
         var h = uname_hostname(&uts);
-        syscall(1, 1, "hostname: ", 10);
-        syscall(1, 1, h, strlen(h));
-        syscall(1, 1, "\n", 1);
+        sys_write(1, "hostname: ", 10);
+        sys_write(1, h, strlen(h));
+        sys_write(1, "\n", 1);
     }
 
     var sibuf[120];
     var sres = query_sysinfo(&sibuf);
     if (is_ok(sres) == 1) {
-        syscall(1, 1, "uptime: ", 8);
+        sys_write(1, "uptime: ", 8);
         print_num(sysinfo_uptime(&sibuf));
-        syscall(1, 1, "s, ram: ", 8);
+        sys_write(1, "s, ram: ", 8);
         print_num(sysinfo_total_memory(&sibuf));
-        syscall(1, 1, " bytes, procs: ", 15);
+        sys_write(1, " bytes, procs: ", 15);
         print_num(sysinfo_procs(&sibuf));
-        syscall(1, 1, "\n", 1);
+        sys_write(1, "\n", 1);
     }
 
     if (is_ok(ures) == 1) {
         var rel = uname_release(&uts);
-        syscall(1, 1, "kernel: ", 8);
-        syscall(1, 1, rel, strlen(rel));
-        syscall(1, 1, "\n", 1);
+        sys_write(1, "kernel: ", 8);
+        sys_write(1, rel, strlen(rel));
+        sys_write(1, "\n", 1);
     }
 
     # -- security module --
@@ -91,9 +91,9 @@ fn main() {
     var fres = security_create_basic_seccomp_filter();
     if (is_ok(fres) == 1) {
         var fi = payload(fres);
-        syscall(1, 1, "seccomp filter: ", 16);
+        sys_write(1, "seccomp filter: ", 16);
         print_num(security_seccomp_filter_len(fi));
-        syscall(1, 1, " bytes\n", 7);
+        sys_write(1, " bytes\n", 7);
     }
 
     println("agnosys ready — 20 modules ported");

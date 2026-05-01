@@ -40,8 +40,10 @@ enum LuksConst {
     LUKS_NAME_MAX_LEN = 128;
     LUKS_DEFAULT_SIZE_MB = 256;
     LUKS_DEFAULT_KEY_BITS = 512;
-    SYS_GETRANDOM = 318;
 }
+
+# SYS_GETRANDOM is now exposed by lib/syscalls.cyr with arch-correct
+# values (cyrius 5.7.x); no local redefinition needed.
 
 # ================================================================
 # LuksConfig struct
@@ -566,7 +568,7 @@ fn luks_close(name) {
     memcpy(mapper + plen, name, nlen);
     store8(mapper + plen + nlen, 0);
 
-    var acc = syscall(SYS_ACCESS, mapper, 0);
+    var acc = sys_access(mapper, 0);
     if (acc < 0) {
         # Not open, nothing to close
         return Ok(0);

@@ -7,6 +7,126 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.4] — 2026-04-30
+
+**aarch64 portability sweep — full agnosys-side fix per the
+2026-04-28 phylax handoff doc.** 1.0.3 patched the single
+`syscall(SYS_OPEN, …)` site that downstream consumers hit on the
+cross-build dead-code path; 1.0.4 closes the remaining
+agnosys-internal arch-hardcoded sites flagged by the same audit.
+After this release, `cyrius build --aarch64 src/main.cyr` produces
+a well-formed ELF with no agnosys-side syscall-number drift, and
+the `dist/agnosys.cyr` bundle ships both arches' constants
+self-gated for downstream consumers (sigil 2.9.5+, phylax 1.1.x+).
+
+### Added
+- **`src/syscall_x86_64_linux.cyr`** + **`src/syscall_aarch64_linux.cyr`**
+  — per-arch peer files holding agnosys-private syscall numbers
+  (`SYS_PRCTL`, `SYS_SYSINFO`, `SYS_UNSHARE`, `SYS_SOCKET_NR`,
+  `SYS_BIND_NR`, `SYS_SENDTO_NR`, `SYS_RECVFROM_NR`,
+  `AGNOS_SYS_FSYNC`, `AGNOS_SYS_RENAME` / `AGNOS_SYS_RENAMEAT2`)
+  plus arch-correct `agnosys_fsync(fd)` / `agnosys_rename(old, new)`
+  wrappers. Each peer self-gates with
+  `#ifdef CYRIUS_ARCH_X86 / AARCH64` so both ship in
+  `dist/agnosys.cyr` (cyrius distlib strips include lines but
+  concatenates everything in `[lib] modules`); only the matching
+  arch's block compiles in the consumer's build. Pattern mirrors
+  `lib/syscalls_x86_64_linux.cyr` / `lib/syscalls_aarch64_linux.cyr`
+  in cyrius stdlib; deliberate file-per-arch split chosen over
+  inline `#ifdef` for read-clarity (per-repo arch deltas live
+  in their own discoverable file).
+- **`src/syscall_arch.cyr`** — dispatcher; consumed by
+  `src/syscall.cyr`, `src/security.cyr`, `src/audit.cyr`,
+  and (transitively) `src/journald.cyr` for the in-binary
+  build path. Source-tree-only; the bundle path ships the
+  peer files directly via `[lib] modules`.
+
+### Changed
+- **`cyrius.cyml [package].cyrius`** pinned `5.7.8` → `5.7.48`.
+  Picks up the syscall-portability narrative landed in cyrius
+  5.7.x: `lib/syscalls.cyr` now exposes `SYS_GETDENTS64` /
+  `SYS_GETRANDOM` / `SYS_LANDLOCK_*` / `SYS_UNAME` constants and
+  matching `sys_*` wrappers on both arches. The 2026-04-28
+  handoff doc's "Cyrius stdlib gaps" section is therefore
+  resolved — agnosys no longer needs to redefine these locally.
+- **`cyrius.cyml [lib] modules`** — peer files prepended to the
+  module list so they bundle ahead of every consumer
+  (audit/security/syscall/etc.).
+- **`src/syscall.cyr`** — dropped the `SysNrExt` enum entirely.
+  `SYS_GETTID` / `SYS_UNAME` now come from cyrius stdlib;
+  `SYS_PRCTL` / `SYS_SYSINFO` come from the per-arch peer.
+  Single call-site fix: `syscall(SYS_UNAME_NR, out)` →
+  `syscall(SYS_UNAME, out)` (uses stdlib's now-portable name).
+- **`src/security.cyr`** — dropped local `SYS_LANDLOCK_*` (stdlib),
+  `SYS_PRCTL` (peer), `SYS_UNSHARE` (peer); LandlockConst enum
+  trimmed to the access-flag / rule-type bits only.
+- **`src/audit.cyr`** — dropped `SysNrAudit` enum
+  (`SYS_SOCKET_NR` / `SYS_BIND_NR` / `SYS_SENDTO_NR` /
+  `SYS_RECVFROM_NR` come from peer); `SYS_AGNOS_AUDIT_LOG = 520`
+  (the AGNOS-defined custom syscall, arch-invariant) stays.
+- **`src/drm.cyr`** — dropped local `SYS_IOCTL` / `SYS_GETDENTS64`
+  redefinitions; both now resolve from cyrius stdlib at the
+  arch-correct value.
+- **`src/luks.cyr`** — dropped local `SYS_GETRANDOM` redefinition;
+  resolves from cyrius stdlib.
+- **`src/journald.cyr`** — dropped local `SYS_SENDTO = 44` from
+  `JournalConst`, dropped two function-scope `var SYS_SOCKET = 41`
+  declarations; call sites switched to peer-file
+  `SYS_SOCKET_NR` / `SYS_SENDTO_NR` (matches existing audit.cyr
+  convention).
+
+### Fixed (raw-numeric syscall sweep — not in the original handoff doc)
+- **`src/error.cyr`** — 20× `syscall(1, 2, …)` (raw SYS_WRITE
+  with x86_64-hardcoded number 1; aarch64 syscall #1 is
+  `io_cancel`) → `sys_write(2, …)`. These stderr writes would
+  have silently invoked the wrong syscall on aarch64 builds.
+- **`src/main.cyr`** — 15× `syscall(1, 1, …)` → `sys_write(1, …)`.
+  Same x86_64 hardcode; same silent-misfire on aarch64.
+- **`src/logging.cyr`** — 10× `syscall(1, 2, …)` →
+  `sys_write(2, …)`.
+- **`src/fuse.cyr`** — `syscall(4, path, statbuf)` (SYS_STAT
+  number 4 on x86_64; on aarch64 generic-table the legacy `stat`
+  number was retired in favor of `newfstatat`) →
+  `sys_stat(path, statbuf)` (stdlib wrapper, dispatches per-arch).
+- **`src/update.cyr`** — 5× `syscall(87, …)` (raw SYS_UNLINK) →
+  `sys_unlink(…)`; 2× `syscall(74, fd)` (raw SYS_FSYNC, x86_64=74,
+  aarch64=82) → `agnosys_fsync(fd)`; 2× `syscall(82, old, new)`
+  (raw SYS_RENAME — does not exist on aarch64 generic-table) →
+  `agnosys_rename(old, new)` (peer-file wrapper, routes via
+  `renameat2(AT_FDCWD, …)` on aarch64).
+- **`src/netns.cyr`** — `syscall(87, tmp_path)` →
+  `sys_unlink(tmp_path)`.
+- **`src/dmverity.cyr` / `src/tpm.cyr` / `src/ima.cyr` /
+  `src/luks.cyr`** — 13× `syscall(SYS_ACCESS, path, mode)` →
+  `sys_access(path, mode)`. Stdlib's `sys_access` dispatches
+  to `SYS_ACCESS` on x86_64 and `SYS_FACCESSAT(AT_FDCWD, …)`
+  on aarch64. Was the largest single class of breakage in
+  the handoff doc's catalog (13 sites across 4 files).
+
+### Verified
+- `CYRIUS_DCE=1 cyrius build src/main.cyr build/agnosys`
+  (x86_64) — clean (only dead-symbol pruning notes).
+- `cyrius build --aarch64 src/main.cyr build/agnosys-aarch64`
+  — produces a well-formed `ELF 64-bit LSB executable, ARM
+  aarch64`. 11 `syscall arity mismatch` warnings remain; 9 are
+  pre-existing cc5_aarch64 false-positives in
+  `lib/syscalls_aarch64_linux.cyr`'s at-family wrappers
+  (reproducible against a 4-line empty cyrius program — see
+  the cyrius CHANGELOG `_SC_ARITY` entries for prior fixes in
+  the same family); the remaining 2 sit at preprocessed-unit
+  lines 3477 / 3509 and are likely the same false-positive
+  class hitting agnosys-side calls. None correspond to a real
+  arity bug — every call site was hand-verified against the
+  Linux kernel `__SYSCALL` arity table for the relevant arch.
+  Tracked as a cyrius-side hygiene item; does not block this
+  release.
+- `cyrius test tests/tcyr/test_integration.tcyr` — 234/234
+  pass (unchanged from 1.0.3).
+- `cyrius distlib` — `dist/agnosys.cyr` regenerated at
+  9,957 lines (was 9,883 in 1.0.3; +74 lines = peer files
+  + dispatcher + per-arch wrappers). Header now
+  `# Version: 1.0.4`.
+
 ## [1.0.3] — 2026-04-28
 
 **aarch64-portability fix.** Single call site in `src/security.cyr` was using

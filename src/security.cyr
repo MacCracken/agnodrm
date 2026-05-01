@@ -13,20 +13,21 @@ include "lib/tagged.cyr"
 include "lib/syscalls.cyr"
 include "lib/hashmap.cyr"
 include "src/error.cyr"
+include "src/syscall_arch.cyr"
 
 # ================================================================
-# Landlock constants (kernel 5.13+, x86_64)
+# Landlock constants (kernel 5.13+)
 # ================================================================
+#
+# SYS_LANDLOCK_* numbers are arch-invariant and now provided by
+# lib/syscalls.cyr (cyrius 5.7.x). SYS_PRCTL is arch-varying and
+# supplied by src/syscall_arch.cyr.
 
 enum LandlockConst {
-    SYS_LANDLOCK_CREATE_RULESET = 444;
-    SYS_LANDLOCK_ADD_RULE = 445;
-    SYS_LANDLOCK_RESTRICT_SELF = 446;
     LANDLOCK_ACCESS_FS_READ_FILE = 4;
     LANDLOCK_ACCESS_FS_READ_DIR = 8;
     LANDLOCK_ACCESS_FS_WRITE_FILE = 2;
     LANDLOCK_RULE_PATH_BENEATH = 1;
-    SYS_PRCTL = 157;
 }
 
 # Filesystem access levels
@@ -262,9 +263,7 @@ enum NsFlag {
     NS_USER = 8;
 }
 
-enum SysNrNs {
-    SYS_UNSHARE = 272;
-}
+# SYS_UNSHARE is arch-varying and supplied via src/syscall_arch.cyr.
 
 # Create new namespace(s) with specified flags.
 # flags: bitwise OR of NS_NETWORK, NS_MOUNT, NS_PID, NS_USER

@@ -1,0 +1,16 @@
+# syscall_arch.cyr — agnosys per-arch syscall numbers (dispatcher)
+#
+# Pulls in both per-arch peers; each peer self-gates with
+# `#ifdef CYRIUS_ARCH_X86 / AARCH64` so only the matching arch's
+# block compiles. This split lets `dist/agnosys.cyr` ship both peers
+# (since `cyrius distlib` strips include lines but concatenates
+# everything in `[lib].modules`); consumers picking the bundle pick
+# the arch via their own compile-time predefines.
+#
+# Numbers exposed are agnosys-private (audit/security/sysinfo/
+# socket surfaces). The single AGNOS-defined custom syscall
+# (SYS_AGNOS_AUDIT_LOG = 520) is arch-invariant and lives in
+# src/audit.cyr.
+
+include "src/syscall_x86_64_linux.cyr"
+include "src/syscall_aarch64_linux.cyr"
