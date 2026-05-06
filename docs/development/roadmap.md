@@ -99,19 +99,95 @@ Freeze prerequisites added pre-1.0 — closed:
 - [x] `docs/development/state.md` created
 - [x] P(-1) Scaffold Hardening pass; security audit at `docs/audit/2026-04-26-audit.md`
 
-## Phase 8 — Post-1.0 Backlog (V1.1.0+)
+## Phase 8 — Post-1.0 Backlog (replanned 2026-05-06)
 
-Open items that don't block 1.x consumer adoption but tighten the platform.
+Reorganized into 1.1.x (language-feature adoption) → 1.2.x (ecosystem) → 1.3+ (cross-repo).
+The 2026-05-06 P(-1) review against the cyrius 5.9.1 feature surface (vidya
+`content/cyrius/language/`) added new slots leveraging `defer`, first-class
+slices, tagged-union sum types, exhaustive match, `secret var`, multi-width
+struct fields, and `#derive(Serialize)` — none of which existed when the agnosys
+port shipped at 5.7.6. See [ADR-004](../adr/004-1-1-x-roadmap-rework.md) for the
+reasoning. Audit-derived fixes from the 2026-04-26 P(-1) all landed in 1.0.1
+(see [`docs/audit/2026-04-26-audit.md`](../audit/2026-04-26-audit.md)); this
+phase covers items that are not security-blocking.
 
-### 8.1 — `#derive(accessors)` adoption (post-1.0 follow-up; CLAUDE.md-flagged)
+### V1.1 — Language-feature adoption
 
-- [ ] Migrate all 20 modules' struct accessors from `store64`/`load64` at fixed offsets to `#derive(accessors)` syntax.
-- [ ] Update `docs/development/api-surface-1.0.snapshot` if accessor naming changes (likely additive — add to snapshot, no breakage).
-- [ ] Each module's struct migration ships as its own patch with bench parity proof.
+Theme: leverage cyrius 5.8.x / 5.9.x features that landed after the agnosys
+port. Min-cyrius pin stays at 5.9.x for the duration unless a specific bug fix
+in a later 5.9.y matters (cyrius 5.9.x is the maintenance line — improvements
+and optimizations only, not new features).
 
-**Rationale:** removes hand-written offset arithmetic; reduces off-by-one risk; readable. Cyrius 5.x supports it. Mechanical but invasive (touches every struct), so kept off the 1.0 freeze.
+#### V1.1.0 — `#derive(accessors)` migration (was 8.1)
 
-### 8.2 — Multi-profile `cyrius distlib` (yukti pattern)
+- [ ] Migrate all 20 modules' struct accessors from `store64`/`load64` at fixed offsets to `#derive(accessors)` syntax (~635 raw offset-arithmetic sites today).
+- [ ] Update `docs/development/api-surface-1.0.snapshot` — additive (accessor fns added; no removals/arity changes), so `--update` after each module migrates.
+- [ ] Each module's struct migration ships as a 1.1.0-rcN per-module patch with bench parity proof; 1.1.0 ships as the bundled closeout.
+
+**Rationale:** removes hand-written offset arithmetic across the most-touched code in agnosys; reduces off-by-one risk; readable. Mechanical but invasive (touches every struct), so kept off the 1.0 freeze. Headline 1.1 cycle because every other 1.1.x slot interacts with the accessor surface.
+
+#### V1.1.1 — `defer { }` adoption for resource cleanup
+
+- [ ] Migrate flag-based cleanup paths in audit (netlink fd close), journald (socket close), luks/tpm (device handle release), dmverity/fuse (mount cleanup) to per-flag `defer { }` blocks.
+- [ ] Bench parity required — `defer` epilogue chain should not regress the 30-bench suite.
+- [ ] Audit any error path that currently leaks on early return — cyrius 5.8.x's per-flag `defer` semantics close the resource-double-free class.
+
+**Rationale:** exit-path safety; cyrius 5.8.x ships per-defer runtime flags so unreached defers skip cleanly. Today's flag+continue patterns are equivalent in correctness but harder to audit.
+
+#### V1.1.2 — `secret var` + `ct_eq` builtin in certpin
+
+- [ ] Replace hand-rolled `certpin_ct_streq` (src/certpin.cyr:117) with cyrius's compiler-backed `ct_eq` builtin and `secret var` annotation on pin slots.
+- [ ] Bench: `ct_streq_equal` / `ct_streq_diff` numbers should match or improve (current: ~129ns / 139ns — roughly 16-byte SPKI hash).
+- [ ] Fuzz harness `fuzz/certpin_pin.fcyr` re-run; coverage parity required.
+
+**Rationale:** the compiler-backed primitive is the canonical path post-5.8.x (sigil's PQC code uses it). Our hand-rolled version works but isn't the supported pattern.
+
+#### V1.1.3 — Exhaustive `match` coverage
+
+- [ ] Adopt `cyrius lint`'s exhaustive-match warning across every enum dispatch in src/* (audit / security / syscall / mac / pam / luks / dmverity / ima / tpm / secureboot / udev / drm / netns / bootloader / update / fuse / journald).
+- [ ] Add `_ =>` opt-out arms only where catch-all is the genuine intent (e.g. unknown-errno dispatch); explicit variants elsewhere.
+- [ ] Wire `cyrius lint` (already CI-gated) to fail on the new warning class.
+
+**Rationale:** catches new audit/syscall/security enum variants that miss handlers — exactly the class of drift that kernel-API tracking is most likely to introduce.
+
+#### V1.1.4 — Tagged-union sum types in error.cyr
+
+- [ ] Replace `lib/tagged.cyr`-backed Result/Option construction in `src/error.cyr` and the 10 modules using it (35 call sites: tagged_new / tag / payload / is_tag) with first-class `enum Result { Ok(v); Err(e); }` from cyrius 5.8.21+.
+- [ ] Public Result-returning fn signatures unchanged — internal representation only.
+- [ ] API surface snapshot: no drift expected; verify with `scripts/check-api-surface.sh`.
+
+**Rationale:** the lib/tagged.cyr API still works but is the pre-5.8.21 hand-rolled pattern. First-class sum types compile to byte-identical layout for arity-1, and exhaustive-match (1.1.3) becomes load-bearing once Result is a real enum.
+
+#### V1.1.5 — Multi-width struct fields for kernel binary protocols
+
+- [ ] Annotate kernel-protocol structs with per-field widths (`magic: i32`, `version: i16`, `flags: i8`, etc.) — audit_status, audit_rule_data, dm_verity_args, IMA measurement records, TPM cmd headers, ELF/EFI variable layouts.
+- [ ] Replace explicit `store8` / `store16` / `store32` / `load*` calls with named-field reads/writes.
+- [ ] Validate against kernel ABI: each touched struct gets a fuzz round on its parser.
+
+**Rationale:** cyrius 5.8.x ships width-correct codegen — `var x: i32 = …` does the right `mov dword [addr], eax`. Today's hand-rolled mixed-width store/load pattern is correct but loses the type system's ability to catch a `store64` where a `store32` was meant.
+
+#### V1.1.6 — Slice migration for syscall + parser buffers
+
+- [ ] Convert `var buf[N]; pass &buf, N` patterns (35 sites today) to `slice<u8>` where the buffer is consumed within a single fn scope.
+- [ ] Use `slice_set` / `s.ptr` / `s.len` / `s[i]` (bounds-checked) in netlink frame builders, /proc parsers, EFI variable readers, audit nlmsg parsers.
+- [ ] Heap-allocated large buffers stay heap-allocated — slices are layout-compatible with vec / Str so the canonical (ptr, len) primitives still apply.
+
+**Rationale:** bounds-checked indexing on the agnosys parsers (audit netlink, fuse mount entries, EFI var bytes, IMA measurement records) closes the off-by-one class without a runtime cost we can't already amortize.
+
+#### V1.1.7 — `#derive(Serialize)` for module status diagnostics
+
+- [ ] Generate JSON serializers for status structs returned by query fns (mac status, audit status, ima status, secureboot state, tpm caps, drm caps).
+- [ ] Consumer-facing benefit: kavach / sigil / argonaut can dump agnosys state to log without writing per-module formatters.
+- [ ] Public API addition; document in CHANGELOG `Added`.
+
+**Rationale:** consumer ergonomics. Today every consumer that wants to log agnosys state writes its own formatter. `#derive(Serialize)` ships the canonical one with the module.
+
+### V1.2 — Ecosystem
+
+Theme: consumer-facing wiring and platform discipline. Independent of the 1.1.x
+language-feature surface — these are durable infrastructure improvements.
+
+#### V1.2.0 — Multi-profile `cyrius distlib` (was 8.2)
 
 - [ ] Add `[lib.security]` (security + mac + audit + pam) → `dist/agnosys-security.cyr`
 - [ ] Add `[lib.storage]` (luks + dmverity + fuse) → `dist/agnosys-storage.cyr`
@@ -121,26 +197,19 @@ Open items that don't block 1.x consumer adoption but tighten the platform.
 - [ ] CI dist-staleness gate extended to all five profiles
 - [ ] Release archive ships every profile bundle alongside the full `dist/agnosys.cyr`
 
-**Rationale:** kavach pulls 314 KB today for what it actually uses (~50 KB security surface). Profile bundles cut consumer binary size and clarify the agnosys → consumer wiring.
+**Rationale:** kavach pulls 324 KB today for what it actually uses (~50 KB security surface). Profile bundles cut consumer binary size and clarify the agnosys → consumer wiring. Headline 1.2 cycle because it changes the consumer-facing distribution shape — gets its own minor cycle.
 
-### 8.3 — Platform abstraction (Linux-only declaration + portability hooks)
+#### V1.2.1 — `#ifplat` cosmetic migration (was 8.3)
 
-- [ ] Per-module `#ifplat` guards declaring Linux-only modules (audit, pam, journald, dmverity, ima, secureboot — kernel-Linux-by-definition)
-- [ ] Cross-platform candidates declared as such: `error`, `syscall` (already split via `lib/syscalls_*.cyr` in cyrius 5.5.x), `logging`, `certpin` (pure crypto, no syscalls)
-- [ ] `docs/architecture/NNN-platform-matrix.md` documenting the matrix
-- [ ] Track upstream cyrius macOS/Windows port progress; revisit when consumer demand exists
+- [ ] Migrate `#ifdef CYRIUS_ARCH_X86` / `#ifdef CYRIUS_ARCH_AARCH64` to `#ifplat x86` / `#ifplat aarch64` across `src/syscall_*_linux.cyr` and any other arch-gated blocks.
+- [ ] Per-module Linux-only declaration: audit / pam / journald / dmverity / ima / secureboot are kernel-Linux-by-definition (kernel netlink frames, PAM config, dm-verity ioctls).
+- [ ] Cross-platform candidates declared: `error`, `syscall` (already split via `lib/syscalls_*.cyr` in cyrius 5.5.x), `logging`, `certpin` (pure crypto, no syscalls).
+- [ ] `docs/architecture/NNN-platform-matrix.md` documenting the matrix.
+- [ ] Track upstream cyrius macOS/Windows port progress; revisit when consumer demand exists.
 
-**Rationale:** cyrius 5.5.16 added macOS dispatch in `lib/syscalls.cyr`; 5.x is heading cross-platform. Most agnosys modules are intrinsically Linux (audit netlink frames, PAM config, dm-verity ioctls), but declaring the matrix prevents accidental Linux-isms in the few modules that *could* be portable.
+**Rationale:** purely cosmetic syntactic uplift on the arch-gated code, plus documentation discipline so accidental Linux-isms in portable modules get caught early.
 
-### 8.4 — Consumer integration CI
-
-- [ ] Nightly GitHub Actions job per consumer: clone, vendor agnosys main, build, run consumer's tests
-- [ ] Failures open an issue tagged `consumer-break` (linked to consumer + agnosys commit)
-- [ ] 13 consumers in scope (see `state.md` consumer table); start with sigil + kavach (highest module surface), expand
-
-**Rationale:** v1.0 deferred this to "tracked on consumer crates" — i.e., manual. Automated drift detection means an agnosys patch that breaks sigil's TPM caller fails before that consumer notices.
-
-### 8.5 — Capability map per public fn (machine-checkable)
+#### V1.2.2 — Capability map per public fn (was 8.5)
 
 - [ ] `docs/development/capability-map.md` listing every public fn → set of syscalls it can invoke
 - [ ] `scripts/check-capabilities.sh` parses module source, derives the actual syscall set, diffs against the doc — fails CI on drift
@@ -148,23 +217,37 @@ Open items that don't block 1.x consumer adoption but tighten the platform.
 
 **Rationale:** `docs/SECURITY-NOTES.md` covers per-module concerns at prose level. A machine-checkable surface gives kavach/daimon a programmatic basis for seccomp policy generation.
 
-### 8.6 — Refresh `docs/development/state.md` cadence
+#### V1.2.3 — Consumer integration CI (was 8.4)
+
+- [ ] Nightly GitHub Actions job per consumer: clone, vendor agnosys main, build, run consumer's tests
+- [ ] Failures open an issue tagged `consumer-break` (linked to consumer + agnosys commit)
+- [ ] 13 consumers in scope (see `state.md` consumer table); start with sigil + kavach (highest module surface), expand
+
+**Rationale:** v1.0 deferred this to "tracked on consumer crates" — i.e., manual. Automated drift detection means an agnosys patch that breaks sigil's TPM caller fails before that consumer notices.
+
+#### V1.2.4 — `#deprecated` adoption channel
+
+- [ ] Adopt cyrius's `#deprecated("reason / migration")` attribute for any post-1.0 API drift (graceful deprecation path before removal).
+- [ ] Document the soft-removal protocol in CONTRIBUTING.md: deprecate → one-minor bake → remove with `Breaking` in CHANGELOG.
+
+**Rationale:** today every public-fn rename is either a hard break (snapshot bump) or a frozen API call. `#deprecated` adds a third channel — warning at every call site, snapshot still passes, consumers see the warning in their CI before the actual removal.
+
+### V1.3+ — Cross-repo / meta-tooling
+
+#### V1.3.0 — `state.md` release post-hook (was 8.6)
 
 - [x] state.md created at 1.0.1
 - [ ] Release post-hook auto-bumps state.md (version, binary size, test counts)
 - [ ] CI gate that fails the release if state.md `Last refresh` doesn't match the tag
 
-**Rationale:** template's "release post-hook bumps state.md. If the hook doesn't, fix the hook — don't hand-maintain state."
-
-### Audit-derived fixes — all landed in 1.0.1
-
-The 2026-04-26 P(-1) audit's actionable findings (F-1 HIGH, F-2 MEDIUM, F-3/F-4/F-5 LOW, F-6 DiD) all shipped in 1.0.1 with fuzz coverage. See [`docs/audit/2026-04-26-audit.md`](../audit/2026-04-26-audit.md) and CHANGELOG. Phase 8 below covers only items that are NOT security-blocking and were never gated on this release.
+**Rationale:** template's "release post-hook bumps state.md. If the hook doesn't, fix the hook — don't hand-maintain state." Lands when agnosticos meta-tooling supports it (cross-repo concern — hook lives in agnosticos toolchain, not this repo).
 
 ## V1.0+ Verification
 
-- [ ] Once 8.1 / 8.2 land, cut **1.1.0** (bundle profiles + derive-accessors).
-- [ ] 8.3 / 8.4 / 8.5 may ship in any order across 1.1.x / 1.2.x.
-- [ ] 8.6 lands when the agnosticos meta-tooling supports it (cross-repo concern).
+- [ ] **1.1.0** ships when V1.1.0 (`#derive(accessors)`) is complete and the closeout pass is clean. Subsequent V1.1.x slots ship as patches against 1.1.
+- [ ] **1.2.0** ships when V1.2.0 (multi-profile distlib) is complete; closeout against the consumer set.
+- [ ] V1.2.x slots may ship in any order; gate is bench parity + audit clean.
+- [ ] V1.3.0 ships when the agnosticos meta-tooling supports the release post-hook.
 
 ## Consumer Map (durable)
 
