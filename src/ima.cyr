@@ -68,38 +68,32 @@ fn ima_target_str(target) {
 }
 
 # ================================================================
-# ImaPolicyRule struct
-# Layout: action(+0) target(+8) uid(+16) fowner(+24)
-#         fsuuid(+32) obj_type(+40) mask(+48)
-# Total: 56 bytes.
+# ImaPolicyRule struct — 7 fields * 8 = 56 bytes.
 # uid/fowner: -1 means not set. fsuuid/obj_type/mask: 0 means not set.
 # ================================================================
 
-fn ima_rule_new(action, target) {
-    var r = alloc(56);
-    store64(r, action);
-    store64(r + 8, target);
-    store64(r + 16, 0 - 1);  # uid: not set
-    store64(r + 24, 0 - 1);  # fowner: not set
-    store64(r + 32, 0);      # fsuuid: not set
-    store64(r + 40, 0);      # obj_type: not set
-    store64(r + 48, 0);      # mask: not set
-    return r;
+#derive(accessors)
+struct ima_rule {
+    action;
+    target;
+    uid;
+    fowner;
+    fsuuid;
+    obj_type;
+    mask;
 }
 
-fn ima_rule_action(r) { return load64(r); }
-fn ima_rule_target(r) { return load64(r + 8); }
-fn ima_rule_uid(r) { return load64(r + 16); }
-fn ima_rule_fowner(r) { return load64(r + 24); }
-fn ima_rule_fsuuid(r) { return load64(r + 32); }
-fn ima_rule_obj_type(r) { return load64(r + 40); }
-fn ima_rule_mask(r) { return load64(r + 48); }
-
-fn ima_rule_set_uid(r, uid) { store64(r + 16, uid); return r; }
-fn ima_rule_set_fowner(r, fowner) { store64(r + 24, fowner); return r; }
-fn ima_rule_set_fsuuid(r, fsuuid) { store64(r + 32, fsuuid); return r; }
-fn ima_rule_set_obj_type(r, obj_type) { store64(r + 40, obj_type); return r; }
-fn ima_rule_set_mask(r, mask) { store64(r + 48, mask); return r; }
+fn ima_rule_new(action, target) {
+    var r = alloc(56);
+    ima_rule_set_action(r, action);
+    ima_rule_set_target(r, target);
+    ima_rule_set_uid(r, 0 - 1);
+    ima_rule_set_fowner(r, 0 - 1);
+    ima_rule_set_fsuuid(r, 0);
+    ima_rule_set_obj_type(r, 0);
+    ima_rule_set_mask(r, 0);
+    return r;
+}
 
 # ================================================================
 # ImaPolicyRule validation
@@ -236,45 +230,42 @@ fn ima_rule_to_policy_line(rule) {
 }
 
 # ================================================================
-# ImaStatus struct
-# Layout: active(+0) measurement_count(+8) policy_loaded(+16)
-# Total: 24 bytes
+# ImaStatus struct — 3 fields * 8 = 24 bytes.
 # ================================================================
+
+#derive(accessors)
+struct ima_status { active; measurement_count; policy_loaded; }
 
 fn ima_status_new(active, measurement_count, policy_loaded) {
     var s = alloc(24);
-    store64(s, active);
-    store64(s + 8, measurement_count);
-    store64(s + 16, policy_loaded);
+    ima_status_set_active(s, active);
+    ima_status_set_measurement_count(s, measurement_count);
+    ima_status_set_policy_loaded(s, policy_loaded);
     return s;
 }
 
-fn ima_status_active(s) { return load64(s); }
-fn ima_status_measurement_count(s) { return load64(s + 8); }
-fn ima_status_policy_loaded(s) { return load64(s + 16); }
+# ================================================================
+# ImaMeasurement struct — 5 fields * 8 = 40 bytes.
+# ================================================================
 
-# ================================================================
-# ImaMeasurement struct
-# Layout: pcr(+0) template_hash(+8) template_name(+16)
-#         filedata_hash(+24) filename(+32)
-# Total: 40 bytes
-# ================================================================
+#derive(accessors)
+struct ima_measurement {
+    pcr;
+    template_hash;
+    template_name;
+    filedata_hash;
+    filename;
+}
 
 fn ima_measurement_new(pcr, template_hash, template_name, filedata_hash, filename) {
     var m = alloc(40);
-    store64(m, pcr);
-    store64(m + 8, template_hash);
-    store64(m + 16, template_name);
-    store64(m + 24, filedata_hash);
-    store64(m + 32, filename);
+    ima_measurement_set_pcr(m, pcr);
+    ima_measurement_set_template_hash(m, template_hash);
+    ima_measurement_set_template_name(m, template_name);
+    ima_measurement_set_filedata_hash(m, filedata_hash);
+    ima_measurement_set_filename(m, filename);
     return m;
 }
-
-fn ima_measurement_pcr(m) { return load64(m); }
-fn ima_measurement_template_hash(m) { return load64(m + 8); }
-fn ima_measurement_template_name(m) { return load64(m + 16); }
-fn ima_measurement_filedata_hash(m) { return load64(m + 24); }
-fn ima_measurement_filename(m) { return load64(m + 32); }
 
 # ================================================================
 # Get IMA status

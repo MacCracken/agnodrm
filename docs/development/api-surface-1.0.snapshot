@@ -251,6 +251,11 @@ ima::ima_measurement_filedata_hash/1
 ima::ima_measurement_filename/1
 ima::ima_measurement_new/5
 ima::ima_measurement_pcr/1
+ima::ima_measurement_set_filedata_hash/2
+ima::ima_measurement_set_filename/2
+ima::ima_measurement_set_pcr/2
+ima::ima_measurement_set_template_hash/2
+ima::ima_measurement_set_template_name/2
 ima::ima_measurement_template_hash/1
 ima::ima_measurement_template_name/1
 ima::ima_parse_measurements/1
@@ -261,10 +266,12 @@ ima::ima_rule_fsuuid/1
 ima::ima_rule_mask/1
 ima::ima_rule_new/2
 ima::ima_rule_obj_type/1
+ima::ima_rule_set_action/2
 ima::ima_rule_set_fowner/2
 ima::ima_rule_set_fsuuid/2
 ima::ima_rule_set_mask/2
 ima::ima_rule_set_obj_type/2
+ima::ima_rule_set_target/2
 ima::ima_rule_set_uid/2
 ima::ima_rule_target/1
 ima::ima_rule_to_policy_line/1
@@ -274,6 +281,9 @@ ima::ima_status_active/1
 ima::ima_status_measurement_count/1
 ima::ima_status_new/3
 ima::ima_status_policy_loaded/1
+ima::ima_status_set_active/2
+ima::ima_status_set_measurement_count/2
+ima::ima_status_set_policy_loaded/2
 ima::ima_target_str/1
 ima::ima_verify_file_integrity/1
 ima::ima_write_policy/1
@@ -477,6 +487,8 @@ secureboot::secureboot_efi_var_data_size/1
 secureboot::secureboot_efi_var_name/1
 secureboot::secureboot_efi_var_new/2
 secureboot::secureboot_efi_var_payload_byte/2
+secureboot::secureboot_efi_var_set_data_size/2
+secureboot::secureboot_efi_var_set_name/2
 secureboot::secureboot_efi_var_size/1
 secureboot::secureboot_enroll_key/1
 secureboot::secureboot_enrolled_key_new/5
@@ -485,6 +497,11 @@ secureboot::secureboot_key_fingerprint/1
 secureboot::secureboot_key_issuer/1
 secureboot::secureboot_key_not_after/1
 secureboot::secureboot_key_not_before/1
+secureboot::secureboot_key_set_fingerprint/2
+secureboot::secureboot_key_set_issuer/2
+secureboot::secureboot_key_set_not_after/2
+secureboot::secureboot_key_set_not_before/2
+secureboot::secureboot_key_set_subject/2
 secureboot::secureboot_key_subject/1
 secureboot::secureboot_list_efi_variables/0
 secureboot::secureboot_list_enrolled_keys/0
@@ -494,6 +511,10 @@ secureboot::secureboot_sig_algorithm/1
 secureboot::secureboot_sig_has_sig/1
 secureboot::secureboot_sig_info_new/4
 secureboot::secureboot_sig_module/1
+secureboot::secureboot_sig_set_algorithm/2
+secureboot::secureboot_sig_set_has_sig/2
+secureboot::secureboot_sig_set_module/2
+secureboot::secureboot_sig_set_signer/2
 secureboot::secureboot_sig_signer/1
 secureboot::secureboot_sign_module/3
 secureboot::secureboot_state_str/1
@@ -543,6 +564,9 @@ tpm::tpm_pcr_selection/2
 tpm::tpm_pcr_value_bank/1
 tpm::tpm_pcr_value_index/1
 tpm::tpm_pcr_value_new/3
+tpm::tpm_pcr_value_set_bank/2
+tpm::tpm_pcr_value_set_index/2
+tpm::tpm_pcr_value_set_value/2
 tpm::tpm_pcr_value_value/1
 tpm::tpm_read_pcr/2
 tpm::tpm_run_capture/3
@@ -551,6 +575,8 @@ tpm::tpm_seal/5
 tpm::tpm_sealed_context/1
 tpm::tpm_sealed_new/2
 tpm::tpm_sealed_pcr_sel/1
+tpm::tpm_sealed_set_context/2
+tpm::tpm_sealed_set_pcr_sel/2
 tpm::tpm_unseal/3
 tpm::tpm_verify_measured_boot/1
 udev::udev_devinfo_devnode/1

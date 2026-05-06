@@ -61,39 +61,36 @@ fn tpm_bank_hex_len(bank) {
 }
 
 # ================================================================
-# TpmPcrValue struct
-# Layout: index(+0) bank(+8) value(+16)
-# value is a pointer to a hex string
-# Total: 24 bytes
+# TpmPcrValue struct — 3 fields * 8 = 24 bytes.
+# value is a pointer to a hex string.
 # ================================================================
+
+#derive(accessors)
+struct tpm_pcr_value { index; bank; value; }
 
 fn tpm_pcr_value_new(index, bank, value) {
     var v = alloc(24);
-    store64(v, index);
-    store64(v + 8, bank);
-    store64(v + 16, value);
+    tpm_pcr_value_set_index(v, index);
+    tpm_pcr_value_set_bank(v, bank);
+    tpm_pcr_value_set_value(v, value);
     return v;
 }
 
-fn tpm_pcr_value_index(v) { return load64(v); }
-fn tpm_pcr_value_bank(v) { return load64(v + 8); }
-fn tpm_pcr_value_value(v) { return load64(v + 16); }
+# ================================================================
+# SealedSecret struct — 2 fields * 8 = 16 bytes.
+# Field names match the 1.0 getter names (`context`/`pcr_sel`)
+# rather than the constructor arg names (`context_path`/`pcr_selection`).
+# ================================================================
 
-# ================================================================
-# SealedSecret struct
-# Layout: context_path(+0) pcr_selection(+8)
-# Total: 16 bytes
-# ================================================================
+#derive(accessors)
+struct tpm_sealed { context; pcr_sel; }
 
 fn tpm_sealed_new(context_path, pcr_selection) {
     var s = alloc(16);
-    store64(s, context_path);
-    store64(s + 8, pcr_selection);
+    tpm_sealed_set_context(s, context_path);
+    tpm_sealed_set_pcr_sel(s, pcr_selection);
     return s;
 }
-
-fn tpm_sealed_context(s) { return load64(s); }
-fn tpm_sealed_pcr_sel(s) { return load64(s + 8); }
 
 # ================================================================
 # Helper: run tpm2-tools command

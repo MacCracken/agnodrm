@@ -2,13 +2,13 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-06 (1.0.9)
+**Last refresh:** 2026-05-06 (1.0.10)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.0.9** |
+| `VERSION` | **1.0.10** |
 | `cyrius.cyml [package].cyrius` | **5.9.1** |
 | Min Cyrius (consumer) | 5.9.1 |
 | Last cyrius bump | 5.7.48 → 5.9.1 (1.0.5) |
@@ -113,7 +113,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.0.9** | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 8–10 — udev + journald + audit migrated (7 structs across 3 modules); 10 of ~13 struct-bearing modules done; learned: `syscall` is a reserved field name, asymmetric setter API needs wrappers |
+| **1.0.10** | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 11–13 — ima + tpm + secureboot migrated (8 structs across 3 modules); 13 of 13 struct-bearing modules done; one batch left (pam + netns + update) |
+| 1.0.9 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 8–10 — udev + journald + audit migrated (7 structs across 3 modules); 10 of ~13 struct-bearing modules done; learned: `syscall` is a reserved field name, asymmetric setter API needs wrappers |
 | 1.0.8 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 5–7 — dmverity + luks + certpin migrated (6 structs across 3 modules); 7 of ~13 struct-bearing modules done; multi-line struct decl convention adopted |
 | 1.0.7 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 2–4 — fuse + drm + bootloader migrated (4 structs across 3 modules); 4 of ~13 struct-bearing modules done |
 | 1.0.6 | 2026-05-06 | First V1.1.0 `#derive(accessors)` slot — `src/mac.cyr` migrated (1 of ~13 struct-bearing modules); `scripts/check-api-surface.sh` extended to count derive-generated accessors |
@@ -133,7 +134,9 @@ Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 - [x] fuse.cyr · drm.cyr · bootloader.cyr (1.0.7 — batch)
 - [x] dmverity.cyr · luks.cyr · certpin.cyr (1.0.8 — batch)
 - [x] udev.cyr · journald.cyr · audit.cyr (1.0.9 — batch)
-- [ ] ima.cyr · tpm.cyr · secureboot.cyr · security.cyr · pam.cyr · netns.cyr · update.cyr (struct-bearing TBC; survey when reached)
+- [x] ima.cyr · tpm.cyr · secureboot.cyr (1.0.10 — batch)
+- [ ] pam.cyr (3 structs) · netns.cyr (4) · update.cyr (4) — final batch (~11 structs)
+- security.cyr has no heap structs (BPF instructions are byte-packed, not heap accessors)
 - [ ] Closeout pass + cumulative bench/audit before tagging 1.1.0
 
 See [`roadmap.md`](roadmap.md) V1.1 for full backlog.

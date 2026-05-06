@@ -175,26 +175,24 @@ fn secureboot_state_str(state) {
 }
 
 # ================================================================
-# EnrolledKey struct
+# EnrolledKey struct — 5 fields * 8 = 40 bytes.
+# Struct named `secureboot_key` (matching the 1.0 getter prefix
+# `secureboot_key_*`); the constructor `secureboot_enrolled_key_new`
+# is a fn name independent of the struct name.
 # ================================================================
-# Layout: { subject, issuer, fingerprint, not_before, not_after }
-# 5 fields * 8 = 40 bytes
+
+#derive(accessors)
+struct secureboot_key { subject; issuer; fingerprint; not_before; not_after; }
 
 fn secureboot_enrolled_key_new(subject, issuer, fingerprint, not_before, not_after) {
     var k = alloc(40);
-    store64(k, subject);
-    store64(k + 8, issuer);
-    store64(k + 16, fingerprint);
-    store64(k + 24, not_before);
-    store64(k + 32, not_after);
+    secureboot_key_set_subject(k, subject);
+    secureboot_key_set_issuer(k, issuer);
+    secureboot_key_set_fingerprint(k, fingerprint);
+    secureboot_key_set_not_before(k, not_before);
+    secureboot_key_set_not_after(k, not_after);
     return k;
 }
-
-fn secureboot_key_subject(k) { return load64(k); }
-fn secureboot_key_issuer(k) { return load64(k + 8); }
-fn secureboot_key_fingerprint(k) { return load64(k + 16); }
-fn secureboot_key_not_before(k) { return load64(k + 24); }
-fn secureboot_key_not_after(k) { return load64(k + 32); }
 
 # ================================================================
 # List enrolled MOK keys
@@ -473,23 +471,22 @@ fn secureboot_sign_module(module_path, private_key, certificate) {
 # Module signature verification
 # ================================================================
 
-# ModuleSignatureInfo struct
-# Layout: { module_path, has_signature, signer, sig_algorithm }
-# 4 fields * 8 = 32 bytes
+# ModuleSignatureInfo struct — 4 fields * 8 = 32 bytes.
+# Struct named `secureboot_sig` with fields matching the existing
+# 1.0 getter names (`module`/`has_sig`/`signer`/`algorithm`),
+# not the constructor arg names (`module_path`/`sig_algorithm`).
+
+#derive(accessors)
+struct secureboot_sig { module; has_sig; signer; algorithm; }
 
 fn secureboot_sig_info_new(module_path, has_sig, signer, algo) {
     var s = alloc(32);
-    store64(s, module_path);
-    store64(s + 8, has_sig);
-    store64(s + 16, signer);
-    store64(s + 24, algo);
+    secureboot_sig_set_module(s, module_path);
+    secureboot_sig_set_has_sig(s, has_sig);
+    secureboot_sig_set_signer(s, signer);
+    secureboot_sig_set_algorithm(s, algo);
     return s;
 }
-
-fn secureboot_sig_module(s) { return load64(s); }
-fn secureboot_sig_has_sig(s) { return load64(s + 8); }
-fn secureboot_sig_signer(s) { return load64(s + 16); }
-fn secureboot_sig_algorithm(s) { return load64(s + 24); }
 
 # Verify a kernel module's signature using modinfo.
 # Returns Result: Ok(sig_info) or Err.
@@ -554,19 +551,19 @@ fn secureboot_verify_module(module_path) {
 # EFI variable listing
 # ================================================================
 
-# EfiVariable struct
-# Layout: { name, size }
-# 2 fields * 8 = 16 bytes
+# EfiVariable struct — 2 fields * 8 = 16 bytes.
+# Field name `data_size` matches the 1.0 getter (not the
+# constructor arg name `size`).
+
+#derive(accessors)
+struct secureboot_efi_var { name; data_size; }
 
 fn secureboot_efi_var_new(name, size) {
     var v = alloc(16);
-    store64(v, name);
-    store64(v + 8, size);
+    secureboot_efi_var_set_name(v, name);
+    secureboot_efi_var_set_data_size(v, size);
     return v;
 }
-
-fn secureboot_efi_var_name(v) { return load64(v); }
-fn secureboot_efi_var_data_size(v) { return load64(v + 8); }
 
 # List security-relevant EFI variables from sysfs.
 # Returns Result: Ok(vec_of_efi_vars) or Err.

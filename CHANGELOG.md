@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.10] — 2026-05-06
+
+**V1.1.0 `#derive(accessors)` slots 11–13 — ima, tpm, secureboot.**
+Three modules, eight structs migrated. Cumulative: 13 of ~13
+struct-bearing modules done (security has no heap structs). Last
+batch is the larger pam + netns + update set.
+
+### Changed
+- **`src/ima.cyr`** — three structs migrated:
+  - `ima_rule` (56 B, 7 fields: action, target, uid, fowner, fsuuid,
+    obj_type, mask). The 1.0 surface had 5 hand-written setters
+    (uid/fowner/fsuuid/obj_type/mask) that returned the rule
+    pointer; derive replaces them with same names + arity, returning
+    the standard derive value (no callers chained the return —
+    grep-verified). Action/target setters new (additive).
+  - `ima_status` (24 B, 3 fields: active, measurement_count,
+    policy_loaded). Clean swap; 3 setters new.
+  - `ima_measurement` (40 B, 5 fields: pcr, template_hash,
+    template_name, filedata_hash, filename). Clean swap; 5 setters
+    new.
+- **`src/tpm.cyr`** — two structs migrated:
+  - `tpm_pcr_value` (24 B, 3 fields: index, bank, value). Clean
+    swap; 3 setters new.
+  - `tpm_sealed` (16 B, 2 fields). Field names `context`/`pcr_sel`
+    chosen to match the 1.0 getter names rather than the constructor
+    arg names (`context_path`/`pcr_selection`). 2 setters new.
+- **`src/secureboot.cyr`** — three structs migrated, all with
+  struct-name-vs-getter-prefix mismatches resolved by naming the
+  struct after the getter prefix (constructor names are independent
+  fn names and stay as-is):
+  - `secureboot_key` (40 B, 5 fields: subject, issuer, fingerprint,
+    not_before, not_after). 1.0 getter prefix is `secureboot_key_*`
+    not `secureboot_enrolled_key_*` — struct named `secureboot_key`;
+    constructor `secureboot_enrolled_key_new/5` keeps its name.
+    5 setters new.
+  - `secureboot_sig` (32 B, 4 fields: module, has_sig, signer,
+    algorithm). 1.0 getter prefix is `secureboot_sig_*` not
+    `secureboot_sig_info_*`, and field-name shortenings:
+    `module_path → module`, `sig_algorithm → algorithm`.
+    Constructor `secureboot_sig_info_new/4` keeps its name.
+    4 setters new.
+  - `secureboot_efi_var` (16 B, 2 fields: name, data_size). 1.0
+    getter is `_data_size` (not `_size`) — field named `data_size`
+    to match. 2 setters new.
+- **`docs/development/api-surface-1.0.snapshot`** — additive bump:
+  26 new entries (10 ima, 5 tpm, 11 secureboot). 1.0 surface
+  preserved exactly; no removals. Snapshot total: 659 fns.
+- **`dist/agnosys.cyr`** regenerated. 9,909 (1.0.9) → 9,894 lines.
+
+### Verified
+- All 10 audit gates pass.
+- 234 / 234 integration tests pass.
+- Bench parity: 30 benchmarks across 11 groups; no regressions.
+
 ## [1.0.9] — 2026-05-06
 
 **V1.1.0 `#derive(accessors)` slots 8–10 — udev, journald, audit.**
