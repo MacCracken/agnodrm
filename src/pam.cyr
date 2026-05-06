@@ -103,30 +103,43 @@ fn pam_parse_control(s) {
 }
 
 # ================================================================
-# PamRule struct: { rule_type, control, module (Str), args (vec of Str) }
-# Layout: +0 rule_type, +8 control, +16 module, +24 args. Total: 32 bytes.
+# PamRule struct — 4 fields * 8 = 32 bytes.
+# Field name `type` matches the 1.0 getter `pam_rule_type/1`
+# (not the constructor arg name `rule_type`).
 # ================================================================
+
+#derive(accessors)
+struct pam_rule { type; control; module; args; }
 
 fn pam_rule_new(rule_type, control, module, args) {
     var r = alloc(32);
-    store64(r, rule_type);
-    store64(r + 8, control);
-    store64(r + 16, module);
-    store64(r + 24, args);
+    pam_rule_set_type(r, rule_type);
+    pam_rule_set_control(r, control);
+    pam_rule_set_module(r, module);
+    pam_rule_set_args(r, args);
     return r;
 }
 
-fn pam_rule_type(r) { return load64(r); }
-fn pam_rule_control(r) { return load64(r + 8); }
-fn pam_rule_module(r) { return load64(r + 16); }
-fn pam_rule_args(r) { return load64(r + 24); }
+# ================================================================
+# UserInfo struct — 7 fields * 8 = 56 bytes.
+# Field `home` matches the 1.0 getter (not the constructor arg
+# `home_dir`). Field `groups_arr` dodges the 3-arg
+# `pam_user_set_groups(u, groups, is_system)/3` collision; the
+# 1.0 `pam_user_groups/1` getter and 3-arg setter stay as thin
+# wrappers. The 6-arg multi-field setter `pam_user_set/6` keeps
+# its name and delegates through the derive setters.
+# ================================================================
 
-# ================================================================
-# UserInfo struct: { username (Str), uid, gid, home_dir (Str),
-#                    shell (Str), groups (vec of Str), is_system_user }
-# Layout: +0 username, +8 uid, +16 gid, +24 home_dir,
-#         +32 shell, +40 groups, +48 is_system_user. Total: 56 bytes.
-# ================================================================
+#derive(accessors)
+struct pam_user {
+    username;
+    uid;
+    gid;
+    home;
+    shell;
+    groups_arr;
+    is_system;
+}
 
 fn pam_user_alloc() {
     var u = alloc(56);
@@ -135,52 +148,42 @@ fn pam_user_alloc() {
 }
 
 fn pam_user_set(u, username, uid, gid, home_dir, shell) {
-    store64(u, username);
-    store64(u + 8, uid);
-    store64(u + 16, gid);
-    store64(u + 24, home_dir);
-    store64(u + 32, shell);
+    pam_user_set_username(u, username);
+    pam_user_set_uid(u, uid);
+    pam_user_set_gid(u, gid);
+    pam_user_set_home(u, home_dir);
+    pam_user_set_shell(u, shell);
     return u;
 }
 
+# 1.0 API preservation — `groups` getter + 3-arg `set_groups`
+# delegate through the derive accessors.
+fn pam_user_groups(u) { return pam_user_groups_arr(u); }
 fn pam_user_set_groups(u, groups, is_system) {
-    store64(u + 40, groups);
-    store64(u + 48, is_system);
+    pam_user_set_groups_arr(u, groups);
+    pam_user_set_is_system(u, is_system);
     return u;
 }
 
-fn pam_user_username(u) { return load64(u); }
-fn pam_user_uid(u) { return load64(u + 8); }
-fn pam_user_gid(u) { return load64(u + 16); }
-fn pam_user_home(u) { return load64(u + 24); }
-fn pam_user_shell(u) { return load64(u + 32); }
-fn pam_user_groups(u) { return load64(u + 40); }
-fn pam_user_is_system(u) { return load64(u + 48); }
+# ================================================================
+# SessionInfo struct — 6 fields * 8 = 48 bytes.
+# Field `id` matches the 1.0 getter `pam_session_id/1`
+# (not the constructor arg `session_id`).
+# ================================================================
 
-# ================================================================
-# SessionInfo struct: { session_id (Str), user (Str), login_time (Str),
-#                       tty (Str or 0), remote_host (Str or 0), pid }
-# Layout: +0 session_id, +8 user, +16 login_time, +24 tty,
-#         +32 remote_host, +40 pid. Total: 48 bytes.
-# ================================================================
+#derive(accessors)
+struct pam_session { id; user; login_time; tty; remote_host; pid; }
 
 fn pam_session_new(session_id, user, login_time, tty, remote_host, pid) {
     var s = alloc(48);
-    store64(s, session_id);
-    store64(s + 8, user);
-    store64(s + 16, login_time);
-    store64(s + 24, tty);
-    store64(s + 32, remote_host);
-    store64(s + 40, pid);
+    pam_session_set_id(s, session_id);
+    pam_session_set_user(s, user);
+    pam_session_set_login_time(s, login_time);
+    pam_session_set_tty(s, tty);
+    pam_session_set_remote_host(s, remote_host);
+    pam_session_set_pid(s, pid);
     return s;
 }
-
-fn pam_session_id(s) { return load64(s); }
-fn pam_session_user(s) { return load64(s + 8); }
-fn pam_session_login_time(s) { return load64(s + 16); }
-fn pam_session_tty(s) { return load64(s + 24); }
-fn pam_session_remote_host(s) { return load64(s + 32); }
-fn pam_session_pid(s) { return load64(s + 40); }
 
 # ================================================================
 # Username validation

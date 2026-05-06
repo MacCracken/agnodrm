@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.11] — 2026-05-06
+
+**V1.1.0 `#derive(accessors)` migration complete — final batch
+(pam + netns + update) + cyrius toolchain bump to 5.9.7.**
+All 16 struct-bearing modules migrated; 11 structs in this slot.
+Cumulative: 16 of 16. Ready for V1.1.0 closeout pass next.
+
+### Changed
+- **`cyrius.cyml [package].cyrius`** pinned `5.9.1` → `5.9.7`.
+  cyrius 5.9.7 fixes the derive-accessors 32-struct cap bug
+  documented in
+  [`docs/development/issues/2026-05-06-cyrius-derive-accessors-32-struct-cap.md`](docs/development/issues/2026-05-06-cyrius-derive-accessors-32-struct-cap.md).
+  Verified under both modes of the local reproducer at
+  `/tmp/cyrius-derive-truncation/` — Mode 1 sweep (N=28..36) is
+  clean across the range; Mode 2 agnosys-flavor 37-struct case
+  resolves all derive-emitted accessors and runs to exit 0.
+- **`src/pam.cyr`** — three structs migrated to `#derive(accessors)`:
+  - `pam_rule` (32 B, 4 fields). Field name `type` matches the
+    1.0 getter `pam_rule_type/1` (not the constructor arg
+    `rule_type`). Adds 4 setters (additive).
+  - `pam_user` (56 B, 7 fields). Field `home` matches the 1.0
+    getter (not constructor arg `home_dir`). Field `groups_arr`
+    dodges the 3-arg `pam_user_set_groups(u, groups, is_system)/3`
+    collision; the 1.0 `pam_user_groups/1` getter and 3-arg setter
+    stay as thin wrappers. The 6-arg multi-field setter
+    `pam_user_set/6` keeps its name and delegates through derive
+    setters. Adds 7 setters + 1 getter (`groups_arr`) additive.
+  - `pam_session` (48 B, 6 fields). Field `id` matches the 1.0
+    getter (not constructor arg `session_id`). Adds 6 setters.
+- **`src/netns.cyr`** — four structs migrated:
+  - `netns_config` (56 B, 7 fields). 3-arg
+    `netns_config_set_dns(c, dns_arr, dns_count)/3` keeps its
+    name and delegates through derive setters. Adds 7 setters +
+    2 getters (`dns_arr`, `dns_count`) additive.
+  - `netns_handle` (32 B, 4 fields). Clean swap; 4 setters added.
+  - `netns_fw_rule` (48 B, 6 fields). Clean swap; 6 setters added.
+  - `netns_fw_policy` (32 B, 4 fields). Field names match 1.0
+    getters: `default_in`/`default_out` (not `default_inbound`/
+    `default_outbound`). Field `rules_arr` dodges the 3-arg
+    `set_rules/3` collision; 1.0 `rules`/`set_rules` stay as
+    wrappers. Adds 4 setters + 1 getter (`rules_arr`) additive.
+- **`src/update.cyr`** — four structs migrated:
+  - `update_state` (40 B, 5 fields). Field names match 1.0
+    getters (`slot`/`version`/`pending`/`rollback_available`/
+    `boot_count`), not the doc-comment names. The 1.0 `set_rollback/2`
+    setter (asymmetric — getter is `rollback_available`) stays as
+    a thin wrapper delegating through `set_rollback_available/2`.
+    Adds 5 setters new for the field names + 1 (`set_rollback_available`)
+    additive.
+  - `update_config` (56 B, 7 fields). Field-name shortenings to
+    match 1.0 getters: `url`/`slot_a`/`slot_b` (not `update_url`/
+    `slot_a_device`/`slot_b_device`); `verify` (not
+    `verify_after_apply`). Adds 7 setters additive.
+    `update_config_device_for_slot/2` body rewired to call derive
+    accessors instead of raw `load64`.
+  - `update_manifest` (48 B, 6 fields). Field `files` matches 1.0
+    getter (not doc `files_vec`). Adds 6 setters additive.
+  - `update_file` (40 B, 5 fields). Field `size` matches 1.0
+    getter (not `size_bytes`). Adds 5 setters additive.
+- **`docs/development/api-surface-1.0.snapshot`** — additive bump:
+  62 new entries across the three modules (15 pam, 22 netns, 25
+  update). 1.0 surface preserved exactly; no removals. Snapshot
+  total: 721 fns.
+- **`dist/agnosys.cyr`** regenerated. 9,894 (1.0.10) → 9,886 lines.
+
+### Verified
+- All 10 audit gates pass under cyrius 5.9.7.
+- 234 / 234 integration tests pass (the previously-failing
+  `tests/tcyr/test_integration.tcyr` now resolves all
+  derive-emitted accessors cleanly).
+- 30 benchmarks across 11 groups; no regressions.
+- 6 fuzz harnesses pass.
+- Local reproducer at `/tmp/cyrius-derive-truncation/` confirms
+  the upstream cyrius 5.9.7 fix:
+  - Mode 1 threshold sweep (N=28..36): 0 undefined-fn warnings
+    at any N (cap lifted).
+  - Mode 2 agnosys-flavor 37-struct repro: 0 undefined-fn
+    warnings; binary runs to exit 0.
+
 ## [1.0.10] — 2026-05-06
 
 **V1.1.0 `#derive(accessors)` slots 11–13 — ima, tpm, secureboot.**

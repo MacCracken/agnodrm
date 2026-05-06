@@ -28,106 +28,101 @@ enum FwAction {
 }
 
 # ================================================================
-# NetNamespaceConfig struct
+# NetNamespaceConfig struct — 7 fields * 8 = 56 bytes.
+# 3-arg `set_dns(c, dns_arr, dns_count)/3` keeps its name (different
+# from derive's auto-generated `set_dns_arr/2` and `set_dns_count/2`)
+# and delegates through the derive setters.
 # ================================================================
 
-# Layout: { name, agent_ip, host_ip, prefix_len, enable_nat, dns_arr, dns_count }
-# 7 fields * 8 = 56 bytes
+#derive(accessors)
+struct netns_config {
+    name;
+    agent_ip;
+    host_ip;
+    prefix_len;
+    enable_nat;
+    dns_arr;
+    dns_count;
+}
 
 fn netns_config_new(name, agent_ip, host_ip, prefix_len, enable_nat) {
     var c = alloc(56);
-    store64(c, name);
-    store64(c + 8, agent_ip);
-    store64(c + 16, host_ip);
-    store64(c + 24, prefix_len);
-    store64(c + 32, enable_nat);
-    store64(c + 40, 0);  # dns_arr
-    store64(c + 48, 0);  # dns_count
+    netns_config_set_name(c, name);
+    netns_config_set_agent_ip(c, agent_ip);
+    netns_config_set_host_ip(c, host_ip);
+    netns_config_set_prefix_len(c, prefix_len);
+    netns_config_set_enable_nat(c, enable_nat);
+    netns_config_set_dns_arr(c, 0);
+    netns_config_set_dns_count(c, 0);
     return c;
 }
 
-fn netns_config_name(c) { return load64(c); }
-fn netns_config_agent_ip(c) { return load64(c + 8); }
-fn netns_config_host_ip(c) { return load64(c + 16); }
-fn netns_config_prefix_len(c) { return load64(c + 24); }
-fn netns_config_enable_nat(c) { return load64(c + 32); }
-
 fn netns_config_set_dns(c, dns_arr, dns_count) {
-    store64(c + 40, dns_arr);
-    store64(c + 48, dns_count);
+    netns_config_set_dns_arr(c, dns_arr);
+    netns_config_set_dns_count(c, dns_count);
     return 0;
 }
 
 # ================================================================
-# NetNamespaceHandle struct
+# NetNamespaceHandle struct — 4 fields * 8 = 32 bytes.
 # ================================================================
 
-# Layout: { name, veth_host, veth_agent, netns_path }
-# 4 fields * 8 = 32 bytes
+#derive(accessors)
+struct netns_handle { name; veth_host; veth_agent; netns_path; }
 
 fn netns_handle_new(name, veth_host, veth_agent, netns_path) {
     var h = alloc(32);
-    store64(h, name);
-    store64(h + 8, veth_host);
-    store64(h + 16, veth_agent);
-    store64(h + 24, netns_path);
+    netns_handle_set_name(h, name);
+    netns_handle_set_veth_host(h, veth_host);
+    netns_handle_set_veth_agent(h, veth_agent);
+    netns_handle_set_netns_path(h, netns_path);
     return h;
 }
 
-fn netns_handle_name(h) { return load64(h); }
-fn netns_handle_veth_host(h) { return load64(h + 8); }
-fn netns_handle_veth_agent(h) { return load64(h + 16); }
-fn netns_handle_netns_path(h) { return load64(h + 24); }
-
 # ================================================================
-# FirewallRule struct
+# FirewallRule struct — 6 fields * 8 = 48 bytes.
 # ================================================================
 
-# Layout: { direction, protocol, port, remote_addr, action, comment }
-# 6 fields * 8 = 48 bytes
+#derive(accessors)
+struct netns_fw_rule { direction; protocol; port; remote_addr; action; comment; }
 
 fn netns_fw_rule_new(direction, protocol, port, remote_addr, action, comment) {
     var r = alloc(48);
-    store64(r, direction);
-    store64(r + 8, protocol);
-    store64(r + 16, port);
-    store64(r + 24, remote_addr);
-    store64(r + 32, action);
-    store64(r + 40, comment);
+    netns_fw_rule_set_direction(r, direction);
+    netns_fw_rule_set_protocol(r, protocol);
+    netns_fw_rule_set_port(r, port);
+    netns_fw_rule_set_remote_addr(r, remote_addr);
+    netns_fw_rule_set_action(r, action);
+    netns_fw_rule_set_comment(r, comment);
     return r;
 }
 
-fn netns_fw_rule_direction(r) { return load64(r); }
-fn netns_fw_rule_protocol(r) { return load64(r + 8); }
-fn netns_fw_rule_port(r) { return load64(r + 16); }
-fn netns_fw_rule_remote_addr(r) { return load64(r + 24); }
-fn netns_fw_rule_action(r) { return load64(r + 32); }
-fn netns_fw_rule_comment(r) { return load64(r + 40); }
-
 # ================================================================
-# FirewallPolicy struct
+# FirewallPolicy struct — 4 fields * 8 = 32 bytes.
+# Field names match 1.0 getters: `default_in`/`default_out` (not
+# `default_inbound`/`default_outbound`). Field `rules_arr` dodges
+# the 3-arg `netns_fw_policy_set_rules(p, rules_arr, count)/3`
+# collision; the 1.0 `rules` getter and 3-arg setter stay as
+# thin wrappers.
 # ================================================================
 
-# Layout: { default_inbound, default_outbound, rules_arr, rule_count }
-# 4 fields * 8 = 32 bytes
+#derive(accessors)
+struct netns_fw_policy { default_in; default_out; rules_arr; rule_count; }
 
 fn netns_fw_policy_new(default_in, default_out) {
     var p = alloc(32);
-    store64(p, default_in);
-    store64(p + 8, default_out);
-    store64(p + 16, 0);
-    store64(p + 24, 0);
+    netns_fw_policy_set_default_in(p, default_in);
+    netns_fw_policy_set_default_out(p, default_out);
+    netns_fw_policy_set_rules_arr(p, 0);
+    netns_fw_policy_set_rule_count(p, 0);
     return p;
 }
 
-fn netns_fw_policy_default_in(p) { return load64(p); }
-fn netns_fw_policy_default_out(p) { return load64(p + 8); }
-fn netns_fw_policy_rules(p) { return load64(p + 16); }
-fn netns_fw_policy_rule_count(p) { return load64(p + 24); }
-
+# 1.0 API preservation
+fn netns_fw_policy_rules(p) { return netns_fw_policy_rules_arr(p); }
 fn netns_fw_policy_set_rules(p, rules_arr, count) {
-    store64(p + 16, rules_arr);
-    store64(p + 24, count);
+    netns_fw_policy_set_rules_arr(p, rules_arr);
+    netns_fw_policy_set_rule_count(p, count);
     return 0;
 }
 
