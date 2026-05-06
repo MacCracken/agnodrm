@@ -24,12 +24,24 @@ enum DeviceSubsystem {
 
 # ================================================================
 # DeviceInfo struct
+# 9 fields * 8 = 72 bytes. prop_keys and prop_vals are arrays of
+# string pointers. Per-field accessors auto-generated; the named
+# multi-field setter `set_props(d, keys, vals, count)/4` keeps its
+# public signature and delegates through the per-field setters.
 # ================================================================
 
-# DeviceInfo: { syspath, devpath, subsystem, devtype, driver,
-#   devnode, prop_keys, prop_vals, prop_count }
-# Layout: 9 * 8 = 72 bytes
-# prop_keys and prop_vals are arrays of string pointers
+#derive(accessors)
+struct udev_devinfo {
+    syspath;
+    devpath;
+    subsystem;
+    devtype;
+    driver;
+    devnode;
+    prop_keys;
+    prop_vals;
+    prop_count;
+}
 
 fn udev_devinfo_new() {
     var d = alloc(72);
@@ -37,26 +49,10 @@ fn udev_devinfo_new() {
     return d;
 }
 
-fn udev_devinfo_syspath(d)    { return load64(d); }
-fn udev_devinfo_devpath(d)    { return load64(d + 8); }
-fn udev_devinfo_subsystem(d)  { return load64(d + 16); }
-fn udev_devinfo_devtype(d)    { return load64(d + 24); }
-fn udev_devinfo_driver(d)     { return load64(d + 32); }
-fn udev_devinfo_devnode(d)    { return load64(d + 40); }
-fn udev_devinfo_prop_keys(d)  { return load64(d + 48); }
-fn udev_devinfo_prop_vals(d)  { return load64(d + 56); }
-fn udev_devinfo_prop_count(d) { return load64(d + 64); }
-
-fn udev_devinfo_set_syspath(d, v)    { store64(d, v); return 0; }
-fn udev_devinfo_set_devpath(d, v)    { store64(d + 8, v); return 0; }
-fn udev_devinfo_set_subsystem(d, v)  { store64(d + 16, v); return 0; }
-fn udev_devinfo_set_devtype(d, v)    { store64(d + 24, v); return 0; }
-fn udev_devinfo_set_driver(d, v)     { store64(d + 32, v); return 0; }
-fn udev_devinfo_set_devnode(d, v)    { store64(d + 40, v); return 0; }
 fn udev_devinfo_set_props(d, keys, vals, count) {
-    store64(d + 48, keys);
-    store64(d + 56, vals);
-    store64(d + 64, count);
+    udev_devinfo_set_prop_keys(d, keys);
+    udev_devinfo_set_prop_vals(d, vals);
+    udev_devinfo_set_prop_count(d, count);
     return 0;
 }
 

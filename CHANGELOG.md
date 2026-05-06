@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.9] — 2026-05-06
+
+**V1.1.0 `#derive(accessors)` slots 8–10 — udev, journald, audit.**
+Three modules, seven structs migrated. Cumulative: 10 of ~13
+struct-bearing modules done.
+
+### Changed
+- **`src/udev.cyr`** — `udev_devinfo` (72 B, 9 fields: syspath,
+  devpath, subsystem, devtype, driver, devnode, prop_keys, prop_vals,
+  prop_count) migrated to `#derive(accessors)`. The 9 hand-written
+  getters and 6 hand-written single-field setters replaced by 18
+  generated accessors (6 setters identical, 9 getters identical,
+  3 setters new for the prop_* trio). The 4-arg
+  `udev_devinfo_set_props(d, keys, vals, count)/4` keeps its public
+  signature; body now delegates through the per-field derive setters.
+- **`src/journald.cyr`** — two structs migrated:
+  - `journald_entry` (56 B, 7 fields: timestamp, unit, priority,
+    message, pid, field_keys, field_vals). 7 hand-written getters
+    replaced by 14 generated accessors (7 getters identical, 7
+    setters new). `journald_entry_new` rewired through derive
+    setters; the `add_field` helper (different name, different
+    semantics — appends to the field_keys/field_vals vecs)
+    keeps its body.
+  - `journald_filter` (56 B, 7 fields: unit, since, until, priority,
+    grep, lines, boot). Full hand-written get/set parallel; clean
+    swap, byte-identical layout, identical names — no API surface
+    change for this struct.
+- **`src/audit.cyr`** — four structs migrated:
+  - `audit_config` (24 B, 3 fields: use_netlink, use_proc, proc_path).
+    The 1.0 surface uses **asymmetric setter names** — getters keep
+    the `use_` prefix (`audit_config_use_netlink/use_proc`), but
+    setters drop it (`audit_config_set_netlink/set_proc`). Field
+    names match the getters; derive generates `set_use_netlink/2`
+    and `set_use_proc/2` (additive). The 1.0 `set_netlink/2` and
+    `set_proc/2` setters stay as thin wrappers delegating through
+    the derive setters.
+  - `audit_handle` (16 B, 2 fields: fd, config). Clean swap; 2
+    setters added (additive).
+  - `audit_status` (48 B, 6 fields: enabled, failure_action, pid,
+    backlog_limit, lost, backlog). Clean swap; 6 setters added
+    (additive). `audit_status_new()` rewired through derive setters.
+  - `audit_rule` (32 B, 4 fields: type, path, syscall_nr, key).
+    The 1.0 surface ships `audit_rule_syscall(r)/1` as the getter,
+    but `syscall` is a cyrius builtin and can't be a struct field
+    name (lib/syscalls_x86_64_linux.cyr line 614 — "expected
+    identifier, got unknown"). Field is named `syscall_nr` (matches
+    the constructor arg name); derive generates `audit_rule_syscall_nr/1`
+    + `set_syscall_nr/2`. The 1.0 `audit_rule_syscall(r)/1` getter
+    stays as a thin wrapper. `audit_rule_new/4` rewired through
+    derive setters.
+- **`docs/development/api-surface-1.0.snapshot`** — additive bump:
+  25 new entries (15 audit, 7 journald, 3 udev). 1.0 surface
+  preserved exactly; no removals. Snapshot total: 633 fns.
+  Cumulative additions since 1.0 freeze: 72.
+- **`dist/agnosys.cyr`** regenerated. 9,923 (1.0.8) → 9,909 lines.
+
+### Verified
+- All 10 audit gates pass.
+- 234 / 234 integration tests pass.
+- Bench parity: 30 benchmarks across 11 groups; no regressions vs.
+  1.0.8 baseline.
+
 ## [1.0.8] — 2026-05-06
 
 **V1.1.0 `#derive(accessors)` slots 5–7 — dmverity, luks, certpin.**

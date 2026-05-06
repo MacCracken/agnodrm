@@ -7,6 +7,8 @@ audit::audit_config_proc_path/1
 audit::audit_config_set_netlink/2
 audit::audit_config_set_proc/2
 audit::audit_config_set_proc_path/2
+audit::audit_config_set_use_netlink/2
+audit::audit_config_set_use_proc/2
 audit::audit_config_use_netlink/1
 audit::audit_config_use_proc/1
 audit::audit_delete_rule/2
@@ -14,6 +16,8 @@ audit::audit_get_status/1
 audit::audit_handle_config/1
 audit::audit_handle_fd/1
 audit::audit_handle_new/2
+audit::audit_handle_set_config/2
+audit::audit_handle_set_fd/2
 audit::audit_nlmsg_len/1
 audit::audit_open/1
 audit::audit_read_proc_events/1
@@ -22,7 +26,12 @@ audit::audit_rule_file_watch/2
 audit::audit_rule_key/1
 audit::audit_rule_new/4
 audit::audit_rule_path/1
+audit::audit_rule_set_key/2
+audit::audit_rule_set_path/2
+audit::audit_rule_set_syscall_nr/2
+audit::audit_rule_set_type/2
 audit::audit_rule_syscall/1
+audit::audit_rule_syscall_nr/1
 audit::audit_rule_syscall_watch/2
 audit::audit_rule_type/1
 audit::audit_rule_validate/1
@@ -38,6 +47,12 @@ audit::audit_status_failure_action/1
 audit::audit_status_lost/1
 audit::audit_status_new/0
 audit::audit_status_pid/1
+audit::audit_status_set_backlog/2
+audit::audit_status_set_backlog_limit/2
+audit::audit_status_set_enabled/2
+audit::audit_status_set_failure_action/2
+audit::audit_status_set_lost/2
+audit::audit_status_set_pid/2
 bootloader::bootloader_config_default_id/1
 bootloader::bootloader_config_entries/1
 bootloader::bootloader_config_entries_arr/1
@@ -270,6 +285,13 @@ journald::journald_entry_message/1
 journald::journald_entry_new/5
 journald::journald_entry_pid/1
 journald::journald_entry_priority/1
+journald::journald_entry_set_field_keys/2
+journald::journald_entry_set_field_vals/2
+journald::journald_entry_set_message/2
+journald::journald_entry_set_pid/2
+journald::journald_entry_set_priority/2
+journald::journald_entry_set_timestamp/2
+journald::journald_entry_set_unit/2
 journald::journald_entry_timestamp/1
 journald::journald_entry_unit/1
 journald::journald_error/1
@@ -543,6 +565,9 @@ udev::udev_devinfo_set_devnode/2
 udev::udev_devinfo_set_devpath/2
 udev::udev_devinfo_set_devtype/2
 udev::udev_devinfo_set_driver/2
+udev::udev_devinfo_set_prop_count/2
+udev::udev_devinfo_set_prop_keys/2
+udev::udev_devinfo_set_prop_vals/2
 udev::udev_devinfo_set_props/4
 udev::udev_devinfo_set_subsystem/2
 udev::udev_devinfo_set_syspath/2

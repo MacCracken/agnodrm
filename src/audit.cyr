@@ -62,86 +62,83 @@ enum AuditRuleType {
 }
 
 # ================================================================
-# Audit config struct
-# Layout: { use_netlink, use_agnos_proc, proc_path_ptr }
-# Offsets: use_netlink=0, use_agnos_proc=8, proc_path=16. Size: 24 bytes.
+# Audit config struct — 3 fields * 8 = 24 bytes.
+# 1.0 surface uses asymmetric setter names: getters keep the `use_`
+# prefix (`audit_config_use_netlink/use_proc`) but setters drop it
+# (`audit_config_set_netlink/set_proc`). Field names match the
+# getters; the asymmetric setters stay as thin hand-written wrappers
+# delegating through the derive-generated `set_use_*`.
 # ================================================================
+
+#derive(accessors)
+struct audit_config { use_netlink; use_proc; proc_path; }
 
 fn audit_config_new() {
     var c = alloc(24);
-    store64(c, 1);   # use_netlink = true
-    store64(c + 8, 0);  # use_agnos_proc = false
-    store64(c + 16, "/proc/agnos/audit");
+    audit_config_set_use_netlink(c, 1);
+    audit_config_set_use_proc(c, 0);
+    audit_config_set_proc_path(c, "/proc/agnos/audit");
     return c;
 }
 
-fn audit_config_use_netlink(c) { return load64(c); }
-fn audit_config_use_proc(c) { return load64(c + 8); }
-fn audit_config_proc_path(c) { return load64(c + 16); }
-
-fn audit_config_set_netlink(c, val) { store64(c, val); return 0; }
-fn audit_config_set_proc(c, val) { store64(c + 8, val); return 0; }
-fn audit_config_set_proc_path(c, path) { store64(c + 16, path); return 0; }
+# 1.0 API preservation — asymmetric setter names delegate to derive.
+fn audit_config_set_netlink(c, val) { return audit_config_set_use_netlink(c, val); }
+fn audit_config_set_proc(c, val) { return audit_config_set_use_proc(c, val); }
 
 # ================================================================
-# Audit handle struct
-# Layout: { fd, config_ptr }
-# Offsets: fd=0, config=8. Size: 16 bytes.
+# Audit handle struct — 2 fields * 8 = 16 bytes.
 # ================================================================
+
+#derive(accessors)
+struct audit_handle { fd; config; }
 
 fn audit_handle_new(fd, config) {
     var h = alloc(16);
-    store64(h, fd);
-    store64(h + 8, config);
+    audit_handle_set_fd(h, fd);
+    audit_handle_set_config(h, config);
     return h;
 }
 
-fn audit_handle_fd(h) { return load64(h); }
-fn audit_handle_config(h) { return load64(h + 8); }
+# ================================================================
+# Audit status struct — 6 i64 fields * 8 = 48 bytes.
+# ================================================================
 
-# ================================================================
-# Audit status struct
-# Layout: { enabled, failure_action, pid, backlog_limit, lost, backlog }
-# All i64. Offsets: 0, 8, 16, 24, 32, 40. Size: 48 bytes.
-# ================================================================
+#derive(accessors)
+struct audit_status { enabled; failure_action; pid; backlog_limit; lost; backlog; }
 
 fn audit_status_new() {
     var s = alloc(48);
-    store64(s, 0);       # enabled = 0
-    store64(s + 8, 1);   # failure_action = 1 (printk)
-    store64(s + 16, 0);  # pid = 0
-    store64(s + 24, 8192); # backlog_limit = 8192
-    store64(s + 32, 0);  # lost = 0
-    store64(s + 40, 0);  # backlog = 0
+    audit_status_set_enabled(s, 0);
+    audit_status_set_failure_action(s, 1);    # printk
+    audit_status_set_pid(s, 0);
+    audit_status_set_backlog_limit(s, 8192);
+    audit_status_set_lost(s, 0);
+    audit_status_set_backlog(s, 0);
     return s;
 }
 
-fn audit_status_enabled(s) { return load64(s); }
-fn audit_status_failure_action(s) { return load64(s + 8); }
-fn audit_status_pid(s) { return load64(s + 16); }
-fn audit_status_backlog_limit(s) { return load64(s + 24); }
-fn audit_status_lost(s) { return load64(s + 32); }
-fn audit_status_backlog(s) { return load64(s + 40); }
+# ================================================================
+# Audit rule struct — 4 fields * 8 = 32 bytes.
+# 1.0 surface uses `audit_rule_syscall(r)` as the getter, but
+# `syscall` is a cyrius builtin so it can't be a struct field name.
+# Field is named `syscall_nr` (matches the constructor arg);
+# the 1.0 `audit_rule_syscall(r)` getter stays as a thin wrapper.
+# ================================================================
 
-# ================================================================
-# Audit rule struct
-# Layout: { rule_type, path_ptr, syscall_nr, key_ptr }
-# Offsets: rule_type=0, path=8, syscall_nr=16, key=24. Size: 32 bytes.
-# ================================================================
+#derive(accessors)
+struct audit_rule { type; path; syscall_nr; key; }
 
 fn audit_rule_new(rule_type, path, syscall_nr, key) {
     var r = alloc(32);
-    store64(r, rule_type);
-    store64(r + 8, path);
-    store64(r + 16, syscall_nr);
-    store64(r + 24, key);
+    audit_rule_set_type(r, rule_type);
+    audit_rule_set_path(r, path);
+    audit_rule_set_syscall_nr(r, syscall_nr);
+    audit_rule_set_key(r, key);
     return r;
 }
 
-fn audit_rule_type(r) { return load64(r); }
-fn audit_rule_path(r) { return load64(r + 8); }
-fn audit_rule_syscall(r) { return load64(r + 16); }
-fn audit_rule_key(r) { return load64(r + 24); }
+# 1.0 API preservation — `syscall` getter delegates to `syscall_nr`.
+fn audit_rule_syscall(r) { return audit_rule_syscall_nr(r); }
 
 # Create a file watch rule
 fn audit_rule_file_watch(path, key) {

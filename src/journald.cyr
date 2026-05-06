@@ -41,76 +41,69 @@ enum JournalPriority {
 }
 
 # ================================================================
-# JournalEntry struct
-# { timestamp, unit (Str), priority, message (Str), pid, fields (vec) }
-# Layout: +0 timestamp, +8 unit, +16 priority, +24 message,
-#         +32 pid, +40 fields_keys (vec), +48 fields_vals (vec).
-# Total: 56 bytes.
+# JournalEntry struct — 7 fields * 8 = 56 bytes.
+# field_keys/field_vals are vec pointers; appended via the
+# `add_field` helper (different name from derive's setters,
+# no collision).
 # ================================================================
+
+#derive(accessors)
+struct journald_entry {
+    timestamp;
+    unit;
+    priority;
+    message;
+    pid;
+    field_keys;
+    field_vals;
+}
 
 fn journald_entry_new(timestamp, unit, priority, message, pid) {
     var e = alloc(56);
-    store64(e, timestamp);
-    store64(e + 8, unit);
-    store64(e + 16, priority);
-    store64(e + 24, message);
-    store64(e + 32, pid);
-    store64(e + 40, vec_new());   # fields keys
-    store64(e + 48, vec_new());   # fields values
+    journald_entry_set_timestamp(e, timestamp);
+    journald_entry_set_unit(e, unit);
+    journald_entry_set_priority(e, priority);
+    journald_entry_set_message(e, message);
+    journald_entry_set_pid(e, pid);
+    journald_entry_set_field_keys(e, vec_new());
+    journald_entry_set_field_vals(e, vec_new());
     return e;
 }
 
-fn journald_entry_timestamp(e) { return load64(e); }
-fn journald_entry_unit(e) { return load64(e + 8); }
-fn journald_entry_priority(e) { return load64(e + 16); }
-fn journald_entry_message(e) { return load64(e + 24); }
-fn journald_entry_pid(e) { return load64(e + 32); }
-fn journald_entry_field_keys(e) { return load64(e + 40); }
-fn journald_entry_field_vals(e) { return load64(e + 48); }
-
 # Add an extra field (key-value pair) to a journal entry
 fn journald_entry_add_field(e, key, val) {
-    vec_push(load64(e + 40), key);
-    vec_push(load64(e + 48), val);
+    vec_push(journald_entry_field_keys(e), key);
+    vec_push(journald_entry_field_vals(e), val);
     return 0;
 }
 
 # ================================================================
-# JournalFilter struct
-# { unit (Str or 0), since (Str or 0), until (Str or 0),
-#   priority (-1 = unset), grep (Str or 0), lines (-1 = unset),
-#   boot (Str or 0) }
-# Layout: +0 unit, +8 since, +16 until, +24 priority,
-#         +32 grep, +40 lines, +48 boot. Total: 56 bytes.
+# JournalFilter struct — 7 fields * 8 = 56 bytes.
+# priority and lines use -1 as the unset sentinel.
 # ================================================================
+
+#derive(accessors)
+struct journald_filter {
+    unit;
+    since;
+    until;
+    priority;
+    grep;
+    lines;
+    boot;
+}
 
 fn journald_filter_new() {
     var f = alloc(56);
-    store64(f, 0);          # unit
-    store64(f + 8, 0);      # since
-    store64(f + 16, 0);     # until
-    store64(f + 24, 0 - 1); # priority (unset)
-    store64(f + 32, 0);     # grep
-    store64(f + 40, 0 - 1); # lines (unset)
-    store64(f + 48, 0);     # boot
+    journald_filter_set_unit(f, 0);
+    journald_filter_set_since(f, 0);
+    journald_filter_set_until(f, 0);
+    journald_filter_set_priority(f, 0 - 1);   # unset
+    journald_filter_set_grep(f, 0);
+    journald_filter_set_lines(f, 0 - 1);      # unset
+    journald_filter_set_boot(f, 0);
     return f;
 }
-
-fn journald_filter_set_unit(f, unit) { store64(f, unit); return 0; }
-fn journald_filter_set_since(f, since) { store64(f + 8, since); return 0; }
-fn journald_filter_set_until(f, until) { store64(f + 16, until); return 0; }
-fn journald_filter_set_priority(f, prio) { store64(f + 24, prio); return 0; }
-fn journald_filter_set_grep(f, grep) { store64(f + 32, grep); return 0; }
-fn journald_filter_set_lines(f, lines) { store64(f + 40, lines); return 0; }
-fn journald_filter_set_boot(f, boot) { store64(f + 48, boot); return 0; }
-
-fn journald_filter_unit(f) { return load64(f); }
-fn journald_filter_since(f) { return load64(f + 8); }
-fn journald_filter_until(f) { return load64(f + 16); }
-fn journald_filter_priority(f) { return load64(f + 24); }
-fn journald_filter_grep(f) { return load64(f + 32); }
-fn journald_filter_lines(f) { return load64(f + 40); }
-fn journald_filter_boot(f) { return load64(f + 48); }
 
 # ================================================================
 # Build journalctl argv vec
