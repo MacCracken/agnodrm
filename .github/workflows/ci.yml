@@ -62,13 +62,15 @@ jobs:
           fi
 
       - name: Format check
-        # cyrius fmt --check emits the formatted source; diff against the
-        # committed file to enforce no drift.
+        # cyrius fmt <file> emits the formatted source to stdout; diff
+        # against the committed file to enforce no drift. (The --check
+        # flag became a no-op in cyrius 5.9.x — emits nothing, exits 0
+        # regardless of drift — so we rely on diff for the gate.)
         run: |
           fail=0
           for f in src/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do
             [ -f "$f" ] || continue
-            if ! diff -q <(cyrius fmt "$f" --check 2>/dev/null) "$f" > /dev/null; then
+            if ! diff -q <(cyrius fmt "$f" 2>/dev/null) "$f" > /dev/null; then
               echo "needs fmt: $f"
               fail=1
             fi

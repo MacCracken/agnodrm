@@ -195,7 +195,7 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 - **Dead code elimination**: every `cyrius build` in CI and release runs with `CYRIUS_DCE=1`. Binary size is a release metric — track it in `docs/development/state.md`.
 - **Tag filter**: release workflow accepts both `vX.Y.Z` and `X.Y.Z` tag shapes; the version-verify step strips a leading `v` and asserts `VERSION == tag`.
 - **Lockfile**: `cyrius.lock` (when present) gates dep hashes via `cyrius deps --verify`. Skip-if-absent on first-push.
-- **fmt drift gate**: `cyrius fmt --check` per file; CI fails on any diff against the committed file.
+- **fmt drift gate**: `cyrius fmt <file>` per file (no `--check` — that flag is a no-op in cyrius 5.9.x); CI fails on any diff against the committed file.
 - **lint warn-fail**: `cyrius lint` per file; any `warn ` line fails CI.
 - **dist staleness gate**: CI runs `cyrius distlib` and fails if `dist/agnosys.cyr` differs from the committed copy.
 - **Workflow layout**:

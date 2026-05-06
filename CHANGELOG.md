@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`dist/agnosys.cyr`** regenerated — header version stamp only;
   bundle body unchanged from 1.0.4.
 
+### Fixed
+- **`.github/workflows/ci.yml`** — fmt drift gate now invokes
+  `cyrius fmt "$f"` instead of `cyrius fmt "$f" --check`. The
+  `--check` flag became a no-op in cyrius 5.9.x (emits nothing,
+  exits 0 regardless of drift), which made CI's
+  `diff <(cyrius fmt … --check) "$f"` report every file as
+  drifted on the 5.9.1 bump even though the committed sources
+  were already correctly formatted. The diff-against-committed-
+  source approach is the actual drift check; `--check` was
+  redundant from the start. CLAUDE.md updated to match.
+
 ## [1.0.4] — 2026-04-30
 
 **aarch64 portability sweep — full agnosys-side fix per the
