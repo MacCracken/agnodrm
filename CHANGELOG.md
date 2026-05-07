@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.10] — 2026-05-07
+
+**V1.1.8 reopens — cyrius 5.9.27 implements aarch64 sub-8-byte
+struct field loads.** The 1.1.9 revert is now reverted; the
+V1.1.8 source changes (typed kernel-ABI structs + pointer-to-
+struct dot syntax) are back in place and now build clean on both
+x86_64 and aarch64.
+
+### Changed
+- **`cyrius.cyml [package].cyrius`** pinned `5.9.25` → `5.9.27`.
+- **`src/audit.cyr`** + **`src/security.cyr`** — V1.1.8's typed
+  struct decls (`sockaddr_nl`, `nlmsghdr`, `audit_kstatus`,
+  `bpf_insn`) and pointer-to-struct dot-syntax write/read sites
+  restored from the original V1.1.8 commit. 14 explicit
+  `store{8,16,32}` calls + 3 width-load reads are once again
+  delegated to width-correct codegen via typed fields.
+- **`docs/development/issues/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md`**
+  → moved to `archive/`; status header updated to RESOLVED with
+  cyrius 5.9.27 verification trail.
+- **`dist/agnosys.cyr`** regenerated. 9,886 → 9,912 lines (back
+  to the V1.1.8 size — typed struct decls are textual additions).
+
+### Verified
+- All 10 audit gates pass under cyrius 5.9.27, including the
+  aarch64 cross-build gate added in 1.1.9 (which is now clean
+  on the same source that broke it on 5.9.25/5.9.26).
+- 234 / 234 integration tests pass.
+- Bench parity: 30 benchmarks across 11 groups; no regressions
+  vs the pre-revert 1.1.8 baseline.
+- API surface clean: 721 fns, no drift.
+- Issues directory empty again (6 archived, 0 open).
+
+### V1.1.8 closure
+
+V1.1.8 (multi-width struct fields for kernel binary protocols)
+is now durably shipped:
+
+| Struct | Size | Sites | Status |
+|---|---|---|---|
+| `sockaddr_nl` | 12 B | `audit_sockaddr_nl` | ✅ both arches |
+| `nlmsghdr` | 16 B | `audit_build_nlmsg` write + `audit_recv_raw` read | ✅ both arches |
+| `audit_kstatus` | 32 B | `audit_get_status` read + `audit_set_enabled` write | ✅ both arches |
+| `bpf_insn` | 8 B | `security_bpf_write_insn` | ✅ both arches |
+
+Stack-local kernel-ABI writes (LandlockRulesetAttr, sock_fprog
+at security.cyr:106 and 195) remain on the explicit
+`var buf[N]` + `store{N}` pattern — stack locals use 8-byte
+slots regardless of declared width per vidya `multi_width_types`,
+which is unchanged in 5.9.27.
+
 ## [1.1.9] — 2026-05-07
 
 **V1.1.8 reverted — cyrius aarch64 backend doesn't support

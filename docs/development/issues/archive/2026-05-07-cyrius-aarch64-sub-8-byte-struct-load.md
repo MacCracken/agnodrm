@@ -1,15 +1,25 @@
 # cyrius aarch64 backend doesn't support sub-8-byte struct field loads
 
+**Status:** RESOLVED in cyrius 5.9.27 — the aarch64 backend's
+`EFLLOAD_W` codegen for sub-32-bit struct field loads landed.
+Verified by re-running the reproducer at
+`/tmp/cyrius-aarch64-sub-8-byte-struct-load/` against 5.9.27:
+aarch64 cross-build now reports `OK` (was `error:1610` on
+5.9.25 and 5.9.26). agnosys 1.1.10 reopened V1.1.8's source
+changes; the audit-gate-4 aarch64 cross-build introduced in
+1.1.9 confirms clean.
 **Filed:** 2026-05-07
+**Resolved:** 2026-05-07
 **Reporter:** agnosys 1.1.9 (V1.1.8 multi-width struct field
 migration shipped clean on x86_64 but broke aarch64 cross-build
 in CI; reverted in 1.1.9).
-**agnosys version observed:** 1.1.8 (reverted in 1.1.9)
-**cyrius version active:** 5.9.25
-**Severity:** MEDIUM — gates the V1.1.8 deliverable for any
-project that cross-compiles to aarch64. Affects `i16`/`i8`
-field loads via pointer-to-struct dot syntax (write side and
-`i32` loads work fine).
+**agnosys version observed at filing:** 1.1.8 (reverted in 1.1.9)
+**cyrius version active at filing:** 5.9.25 (also reproduced under 5.9.26)
+**cyrius version with fix:** 5.9.27
+**Severity at filing:** MEDIUM — gated the V1.1.8 deliverable
+for any project that cross-compiles to aarch64. Affected `i16`/
+`i8` field loads via pointer-to-struct dot syntax (write side
+and `i32` loads worked fine).
 
 **Local reproducer:** [`/tmp/cyrius-aarch64-sub-8-byte-struct-load/`](/tmp/cyrius-aarch64-sub-8-byte-struct-load/)
 — self-contained, ~1 KB. Contains:

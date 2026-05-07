@@ -260,7 +260,18 @@ then the if/payload chain stays as the canonical idiom.
 
 **Rationale:** the lib/tagged.cyr API still works but is the pre-5.8.21 hand-rolled pattern. First-class sum types compile to byte-identical layout for arity-1, and exhaustive-match (V1.1.5) becomes load-bearing once Result is a real enum.
 
-#### V1.1.8 — Multi-width struct fields for kernel binary protocols ✅ SHIPPED 2026-05-07
+#### V1.1.8 — Multi-width struct fields for kernel binary protocols ✅ SHIPPED 2026-05-07 (across 1.1.8 ship + 1.1.9 revert + 1.1.10 reopen)
+
+Initial 1.1.8 shipped clean on x86_64 but broke aarch64
+cross-build (sub-8-byte struct field load codegen unimplemented
+in cyrius 5.9.25 aarch64 backend; `error:1610`). 1.1.9 reverted
+the source changes and added an aarch64 cross-build gate to
+local audit so the regression class wouldn't slip past local
+validation again. Upstream issue filed at
+[`docs/development/issues/archive/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md`](../issues/archive/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md);
+fix landed in cyrius 5.9.27. agnosys 1.1.10 reopened V1.1.8 by
+restoring the source changes and bumping the cyrius pin —
+both arches clean.
 
 Four kernel-ABI structs migrated to typed `struct` decls +
 pointer-to-struct dot syntax:
