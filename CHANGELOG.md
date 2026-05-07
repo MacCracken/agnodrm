@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.12] — 2026-05-06
+
+**Tooling cleanup — `cyrius api-surface` adoption + cyrius pin
+bump to 5.9.13.** All three blockers tracked in the api-surface
+issue resolved upstream; `scripts/check-api-surface.sh` reduced
+from a 70-line awk walker to a four-line wrapper around the
+official command. Snapshot byte-identical (721 fns); no API
+change for consumers.
+
+### Changed
+- **`cyrius.cyml [package].cyrius`** pinned `5.9.7` → `5.9.13`.
+  cyrius 5.9.13 closes the last open item from
+  [`docs/development/issues/archive/2026-05-06-cyrius-api-surface-derive-blind.md`](docs/development/issues/archive/2026-05-06-cyrius-api-surface-derive-blind.md):
+  `--snapshot=PATH` is now honored. Combined with 5.9.9
+  (derive-aware scanner) and 5.9.12 (`--scope=project`), the
+  official command produces output byte-identical to agnosys's
+  previous in-script awk walker.
+- **`scripts/check-api-surface.sh`** — replaced with a thin
+  wrapper. The previous awk-based walker (with the
+  `#derive(accessors)` extension added in 1.0.6) is gone in
+  favor of `exec cyrius api-surface "$@" --scope=project
+  --snapshot=docs/development/api-surface-1.0.snapshot`.
+  Both diff-mode and `--update`-mode UX preserved. The
+  hand-written derive-walker that 1.0.6 added is no longer
+  needed since cyrius 5.9.9's derive-aware scanner; the stdlib
+  filter is no longer needed since cyrius 5.9.12's
+  `--scope=project`; the snapshot path no longer needs
+  redirection now that cyrius 5.9.13 honors `--snapshot=PATH`.
+- **`docs/development/issues/2026-05-06-cyrius-api-surface-derive-blind.md`**
+  → moved to `archive/`; status header updated to RESOLVED
+  with the 5.9.9/5.9.12/5.9.13 version trail.
+- **`docs/development/issues/2026-05-06-cyrius-derive-accessors-32-struct-cap.md`**
+  → already moved to `archive/` in 1.0.11; status header noting
+  cyrius 5.9.7 as the fix is unchanged.
+- **`dist/agnosys.cyr`** regenerated.
+
+### Verified
+- All 10 audit gates pass under cyrius 5.9.13.
+- `scripts/check-api-surface.sh` (four-line wrapper) reports
+  "ok: 721 public fns, surface matches snapshot exactly".
+- `scripts/check-api-surface.sh --update` regenerates the
+  snapshot in place at `docs/development/api-surface-1.0.snapshot`;
+  byte-identical content to the previous awk-walker output.
+
 ## [1.0.11] — 2026-05-06
 
 **V1.1.0 `#derive(accessors)` migration complete — final batch

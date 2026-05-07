@@ -1,13 +1,19 @@
 # cyrius `#derive(accessors)` silently breaks past 32 structs in a single compilation unit
 
+**Status:** RESOLVED in cyrius 5.9.7 (verified by agnosys 1.0.11 —
+the local reproducer at `/tmp/cyrius-derive-truncation/` passes
+both modes cleanly under 5.9.7; agnosys completed the V1.1.0
+final batch of 11 structs that this bug had blocked).
 **Filed:** 2026-05-06
+**Resolved:** 2026-05-06
 **Reporter:** agnosys 1.0.10 V1.1.0 migration (slot 14 — pam/netns/update batch)
 **agnosys version observed:** 1.0.10 + in-flight 1.0.11 patch attempt
-**cyrius version active:** 5.9.3 (also reproduced under 5.9.1)
-**Severity:** HIGH — silent breakage of derive-emitted public API
-at a fixed cumulative-struct threshold; downstream binaries SIGILL
-at runtime when the missing accessor is reached. Build still
-succeeds with only a `warning:` line.
+**cyrius version active at filing:** 5.9.3 (also reproduced under 5.9.1)
+**cyrius version with fix:** 5.9.7
+**Severity (at filing):** HIGH — silent breakage of derive-emitted
+public API at a fixed cumulative-struct threshold; downstream
+binaries SIGILL at runtime when the missing accessor is reached.
+Build still succeeded with only a `warning:` line.
 
 **Local reproducer:** [`/tmp/cyrius-derive-truncation/`](/tmp/cyrius-derive-truncation/)
 — self-contained, ~5 KB. Contains:

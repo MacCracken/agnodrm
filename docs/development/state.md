@@ -2,16 +2,16 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-06 (1.0.11)
+**Last refresh:** 2026-05-06 (1.0.12)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.0.11** |
-| `cyrius.cyml [package].cyrius` | **5.9.7** |
-| Min Cyrius (consumer) | 5.9.7 |
-| Last cyrius bump | 5.9.1 → 5.9.7 (1.0.11; pulls in derive 32-struct cap fix) |
+| `VERSION` | **1.0.12** |
+| `cyrius.cyml [package].cyrius` | **5.9.13** |
+| Min Cyrius (consumer) | 5.9.13 |
+| Last cyrius bump | 5.9.7 → 5.9.13 (1.0.12; pulls in api-surface `--scope=project` and `--snapshot=PATH` fixes; lets `scripts/check-api-surface.sh` shrink to a four-line wrapper) |
 
 ## Build Metrics
 
@@ -113,7 +113,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.0.11** | 2026-05-06 | V1.1.0 `#derive(accessors)` migration complete — pam + netns + update migrated (11 structs across 3 modules); cyrius pin 5.9.1 → 5.9.7 lifts the derive 32-struct cap; 16 of 16 struct-bearing modules done; ready for V1.1.0 closeout |
+| **1.0.12** | 2026-05-06 | Tooling cleanup — `cyrius api-surface` adoption (5.9.13 ships `--scope=project` + `--snapshot=PATH`); `scripts/check-api-surface.sh` reduced from 70-line awk walker to a four-line wrapper; resolved api-surface issue archived |
+| 1.0.11 | 2026-05-06 | V1.1.0 `#derive(accessors)` migration complete — pam + netns + update migrated (11 structs across 3 modules); cyrius pin 5.9.1 → 5.9.7 lifts the derive 32-struct cap; 16 of 16 struct-bearing modules done; ready for V1.1.0 closeout |
 | 1.0.10 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 11–13 — ima + tpm + secureboot migrated (8 structs across 3 modules); 13 of 13 struct-bearing modules done; one batch left (pam + netns + update) |
 | 1.0.9 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 8–10 — udev + journald + audit migrated (7 structs across 3 modules); 10 of ~13 struct-bearing modules done; learned: `syscall` is a reserved field name, asymmetric setter API needs wrappers |
 | 1.0.8 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 5–7 — dmverity + luks + certpin migrated (6 structs across 3 modules); 7 of ~13 struct-bearing modules done; multi-line struct decl convention adopted |
