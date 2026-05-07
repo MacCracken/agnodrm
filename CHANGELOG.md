@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-05-06
+
+**V1.1.1 — `defer { }` adoption / resource-cleanup audit.**
+The roadmap slot anticipated migrating flag-based cleanup paths
+to per-flag `defer { }` blocks. The audit found that the work was
+largely already done during the original Rust → Cyrius port:
+24 `defer { sys_close(...) }` sites were already in place across
+mac, fuse, drm, audit, journald, luks, dmverity, ima, tpm,
+secureboot, pam, netns, update, security, and logging. This slot
+ships as the **verification + audit pass** with the findings
+documented; no source changes were needed.
+
+### Audit scope
+
+- Every `sys_open`, `sys_socket`, `syscall(SYS_LANDLOCK_*)`, and
+  other fd-returning syscall site walked end-to-end against its
+  cleanup path.
+- For each fn that opens an fd, verified that all return paths
+  either close it (manually or via defer) or pass ownership to
+  the caller.
+- For each existing `defer { }` site, verified that the defer
+  registration sits immediately after the fd-validity check —
+  before any other fallible call — so all subsequent error
+  returns hit the cleanup.
+- Surveyed every `sys_close` call that's not inside a `defer { }`
+  block (9 sites) and classified each as deliberate vs. needs-fix.
+
+### Findings — no leaks
+
+The 9 non-defer `sys_close` sites are all deliberate:
+
+| Site | Pattern | Why explicit close |
+|---|---|---|
+| `audit.cyr` `audit_open` | close-on-error before returning fd to caller | defer would close the fd we want to return on success path |
+| `bootloader.cyr` `bootloader_detect` (×2) | existence-probe (open, close, return immediately) | structure simpler than defer; close-before-return is one line |
+| `drm.cyr` `drm_close` | the close API itself | this IS the consumer cleanup fn, not a candidate |
+| `netns.cyr` ruleset-write | close before subprocess that reads the file | defer at fn-end closes too late; nft would see unflushed data |
+| `secureboot.cyr` `secureboot_detect_state` / `secureboot_list_efi_variables` | existence-probe (open, close, continue) | fd is just used for existence check; close ASAP |
+| `update.cyr` `update_get_current_slot` (×2) | open-read-close-then-parse | parse uses the buffer, not the fd; explicit close is more memory-efficient than holding fd open until fn end |
+
+`security.cyr` `security_apply_landlock` opens `path_fd` inside a
+loop and explicitly closes after each iteration's
+`SYS_LANDLOCK_ADD_RULE`. defer would not fit here — cyrius's defer
+registration is fn-level, not iteration-level (per
+vidya `features.cyml` `defer_statement`: 8 defer blocks per
+function, registered once when first reached). The current
+explicit-close pattern is the correct shape for resource
+acquisition inside a loop.
+
+### Bench parity
+
+Audit gate 10 (benchmarks) passes; 30 benchmarks across 11 groups
+unchanged from 1.1.0 baseline. No defer-epilogue overhead was
+added because no new defer sites were introduced.
+
+### Items deliberately scoped out
+
+- The roadmap's "Migrate flag-based cleanup paths in audit /
+  journald / luks / tpm / dmverity / fuse" was already complete
+  in the inherited port; no flag-based cleanup remains.
+- `update_atomic_write` and `update_atomic_copy` already use
+  defer for both source and destination fds (1.0 baseline).
+
+### Changed
+- **`VERSION`** 1.1.0 → 1.1.1.
+- **`dist/agnosys.cyr`** regenerated (header v1.1.1 — no body
+  changes).
+
+### Verified
+- All 10 audit gates pass.
+- 234 / 234 integration tests pass.
+- 30 benchmarks across 11 groups; bench parity unchanged from 1.1.0.
+- API surface clean: 721 fns, no drift vs 1.0 snapshot.
+
 ## [1.1.0] — 2026-05-06
 
 > **agnosys 1.1.0 — `#derive(accessors)` adoption.** First minor

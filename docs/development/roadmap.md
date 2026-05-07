@@ -126,11 +126,13 @@ and optimizations only, not new features).
 
 **Rationale:** removes hand-written offset arithmetic across the most-touched code in agnosys; reduces off-by-one risk; readable. Mechanical but invasive (touches every struct), so kept off the 1.0 freeze. Headline 1.1 cycle because every other 1.1.x slot interacts with the accessor surface.
 
-#### V1.1.1 — `defer { }` adoption for resource cleanup
+#### V1.1.1 — `defer { }` adoption for resource cleanup ✅ SHIPPED 2026-05-06
 
-- [ ] Migrate flag-based cleanup paths in audit (netlink fd close), journald (socket close), luks/tpm (device handle release), dmverity/fuse (mount cleanup) to per-flag `defer { }` blocks.
-- [ ] Bench parity required — `defer` epilogue chain should not regress the 30-bench suite.
-- [ ] Audit any error path that currently leaks on early return — cyrius 5.8.x's per-flag `defer` semantics close the resource-double-free class.
+- [x] Audit found that the work was already done during the original port — 24 `defer { sys_close(...) }` sites in place across mac/fuse/drm/audit/journald/luks/dmverity/ima/tpm/secureboot/pam/netns/update/security/logging.
+- [x] Bench parity verified — no defer-epilogue overhead since no new defer sites added.
+- [x] Leak audit — no early-return leaks found. The 9 non-defer `sys_close` sites (audit_open conditional close, drm_close API, bootloader/secureboot existence probes, netns close-before-subprocess, update_get_current_slot read-then-close, security_apply_landlock in-loop close) are all deliberate.
+
+Slot shipped as a verification + audit pass; CHANGELOG `[1.1.1]` documents the findings and the deliberate non-defer cases. No source changes were required.
 
 **Rationale:** exit-path safety; cyrius 5.8.x ships per-defer runtime flags so unreached defers skip cleanly. Today's flag+continue patterns are equivalent in correctness but harder to audit.
 

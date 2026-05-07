@@ -2,13 +2,13 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-06 (1.1.0 tag)
+**Last refresh:** 2026-05-06 (1.1.1)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.1.0** |
+| `VERSION` | **1.1.1** |
 | `cyrius.cyml [package].cyrius` | **5.9.14** |
 | Min Cyrius (consumer) | 5.9.14 |
 | Last cyrius bump | 5.9.7 → 5.9.14 (1.0.12) |
@@ -113,7 +113,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.1.0** | 2026-05-06 | First minor release after 1.0 freeze. `#derive(accessors)` migration complete across 16 struct-bearing modules (37 derive structs). Pure refactor; drop-in upgrade from 1.0.x; 160 additive public fns (no removals/drift). cyrius pin 5.9.14 |
+| **1.1.1** | 2026-05-06 | V1.1.1 `defer { }` adoption — audit pass; no leaks found, no source changes needed. The 24 existing `defer { sys_close(...) }` sites (already in place from the port) are correctly placed; the 9 non-defer `sys_close` sites are all deliberate (existence probes, return-fd APIs, in-loop closes, close-before-subprocess) |
+| 1.1.0 | 2026-05-06 | First minor release after 1.0 freeze. `#derive(accessors)` migration complete across 16 struct-bearing modules (37 derive structs). Pure refactor; drop-in upgrade from 1.0.x; 160 additive public fns (no removals/drift). cyrius pin 5.9.14 |
 | 1.0.13 | 2026-05-06 | V1.1.0 closeout patch — final 1.0.x slot before 1.1.0 tag. Cumulative baseline recorded: 16/16 modules migrated, 37 derive structs, 721 public fns (+160 additive), 85,592 B binary unchanged, 234 tests pass, 30 benches flat (one bench-locality drift in update_compare_versions noted) |
 | 1.0.12 | 2026-05-06 | Tooling cleanup — `cyrius api-surface` adoption (5.9.14 ships `--scope=project`, `--snapshot=PATH`, and the `cyrius_api_surface` helper binary); `scripts/check-api-surface.sh` reduced from 70-line awk walker to a four-line wrapper; resolved api-surface issue archived |
 | 1.0.11 | 2026-05-06 | V1.1.0 `#derive(accessors)` migration complete — pam + netns + update migrated (11 structs across 3 modules); cyrius pin 5.9.1 → 5.9.7 lifts the derive 32-struct cap; 16 of 16 struct-bearing modules done; ready for V1.1.0 closeout |
@@ -138,7 +139,7 @@ Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 37 derive structs across 16 modules; 721 public fns (561 at 1.0 freeze + 160 additive across V1.1). All slots and the closeout patch shipped in the 1.0.6 → 1.0.13 patch line; tagged as 1.1.0. See [CHANGELOG `[1.1.0]`](../../CHANGELOG.md) for the consumer-facing summary, [`[1.0.13]`](../../CHANGELOG.md) for the cumulative baseline, [`roadmap.md`](roadmap.md) V1.1 for the full slot list.
 
 **V1.1.x — language-feature adoption (queued)**
-- [ ] 1.1.1 — `defer { }` for resource-cleanup paths
+- [x] 1.1.1 — `defer { }` audit pass — no leaks; 24 defer sites already correct from the port; 9 non-defer cases all deliberate
 - [ ] 1.1.2 — `secret var` + `ct_eq` builtin in certpin
 - [ ] 1.1.3 — exhaustive `match` coverage adoption
 - [ ] 1.1.4 — first-class tagged-union `Result` replacing lib/tagged.cyr
