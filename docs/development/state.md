@@ -2,13 +2,13 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-07 (1.1.10)
+**Last refresh:** 2026-05-07 (1.1.11)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.1.10** |
+| `VERSION` | **1.1.11** |
 | `cyrius.cyml [package].cyrius` | **5.9.27** |
 | Min Cyrius (consumer) | 5.9.27 |
 | Last cyrius bump | 5.9.25 → 5.9.27 (1.1.10; aarch64 backend now implements sub-8-byte struct field loads — unblocks V1.1.8 reopen) |
@@ -77,7 +77,7 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 ## Dependencies
 
 - **Runtime**: 0
-- **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `fmt`, `vec`, `str`, `io`, `ct` (8 — `ct` added 1.1.3 for `ct_eq_bytes`)
+- **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `fmt`, `vec`, `str`, `io`, `ct`, `slice` (9 — `ct` added 1.1.3 for `ct_eq_bytes`; `slice` added 1.1.11 for `slice<u8>` indexing)
 - **Git-pinned**: 0 (no `[deps.<name>]` stanzas; no `cyrius.lock` needed today)
 - **Vendored stdlib refresh** (last): 2026-04-26 to cyrius 5.7.6 snapshot (`alloc.cyr`, `io.cyr`, `string.cyr`, `syscalls.cyr` — 5.5.x split into per-OS dispatch). 5.7.7 through 5.9.1 introduced no stdlib changes affecting agnosys's `[deps] stdlib = [syscalls, string, alloc, fmt, vec, str, io]` set; `cyrius deps` is a no-op against the existing vendor.
 
@@ -113,7 +113,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.1.10** | 2026-05-07 | V1.1.8 reopens — cyrius 5.9.27 implements aarch64 sub-8-byte struct field load codegen; the 1.1.9 revert is now itself reverted. Typed kernel-ABI structs + pointer-to-struct dot syntax build clean on both arches; resolved issue archived |
+| **1.1.11** | 2026-05-07 | V1.1.11 slice migration — survey shows most `var buf[N]` sites aren't real slice candidates (tiny fmt bufs, kernel-ABI stack structs, one-shot syscall args, length-bounded `memeq`/`memcpy` walks). One representative site (`ima_get_status` rbuf newline counter) migrated to `slice<u8>` with bounds-checked indexing as the canonical pattern for future scalar-subscript parsers |
+| 1.1.10 | 2026-05-07 | V1.1.8 reopens — cyrius 5.9.27 implements aarch64 sub-8-byte struct field load codegen; the 1.1.9 revert is now itself reverted. Typed kernel-ABI structs + pointer-to-struct dot syntax build clean on both arches; resolved issue archived |
 | 1.1.9 | 2026-05-07 | V1.1.8 reverted — cyrius aarch64 backend rejected sub-8-byte struct field loads (`error:1610`). x86_64 build clean; aarch64 CI broke. `scripts/audit.sh` gate 4 extended to also cross-build aarch64 so regression class is caught locally. Upstream issue filed; V1.1.8 re-entered queue |
 | 1.1.8 | 2026-05-07 | V1.1.8 multi-width struct fields — 4 kernel-ABI structs (`sockaddr_nl`, `nlmsghdr`, `audit_kstatus`, `bpf_insn`) migrated to typed `struct` decls + pointer-to-struct dot syntax; 14 explicit `store{8,16,32}` calls eliminated. **Note:** reverted in 1.1.9 due to aarch64 sub-8-byte struct-field-load gap |
 | 1.1.7 | 2026-05-07 | V1.1.7 tagged-union `Result` adoption — verification slot. agnosys uses only high-level `Ok`/`Err`/`is_ok`/`payload` API; cyrius v5.8.28 already migrated `lib/result.cyr` to first-class `enum Result<T, E>`. agnosys is on first-class tagged unions transparently; no source changes needed |
@@ -155,14 +156,16 @@ Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 - [x] V1.1.5 — exhaustive `match` coverage — `syserr_print` converted; audit gate 4 enforces non-exhaustive warnings; 14 enum-to-string serializers kept as if/elif chains (catch-all defaults are correct)
 - [x] V1.1.6 — match-coverage corrigendum + cyrius 5.9.25 pin — fixed 5.9.20–5.9.21 fn-name-dependent dispatch (hash-bucket bug); `--version` trailing-byte cleanup
 - [x] V1.1.7 — tagged-union `Result` adoption — verification slot. agnosys's high-level `Ok`/`Err`/`is_ok`/`payload` API already routes through cyrius's first-class `enum Result<T, E>` (v5.8.28 stdlib migration); zero direct `tagged_new`/`tag`/`is_tag` calls in src/*. Pattern-payload destructuring (`match res { Ok(v) => ... }`) waits for cyrius — not yet shipped.
-- [x] V1.1.8 — multi-width struct fields — shipped in 1.1.8, reverted in 1.1.9 due to aarch64 sub-8-byte struct field load gap, **reopened and durably shipped in 1.1.10** once cyrius 5.9.27 landed the aarch64 backend's `EFLLOAD_W` codegen. 4 kernel-ABI structs migrated; both arches clean.
-- [ ] V1.1.9 — slice migration for syscall + parser buffers
-- [ ] V1.1.10 — `#derive(Serialize)` for diagnostic JSON output
+- [x] V1.1.8 — multi-width struct fields — `sockaddr_nl`/`nlmsghdr`/`audit_kstatus`/`bpf_insn` migrated to typed struct decls + pointer-to-struct dot syntax; 14 explicit width-store calls + 3 width-load reads converted
+- [x] V1.1.9 — V1.1.8 revert (aarch64 sub-8-byte struct field load gap); upstream issue filed; `scripts/audit.sh` gate 4 extended with permanent `cyrius build --aarch64` cross-build
+- [x] V1.1.10 — V1.1.8 reopen (cyrius pin 5.9.25 → 5.9.27); both arches clean
+- [x] V1.1.11 — slice migration — most agnosys `var buf[N]` sites aren't real slice candidates (verification finding); one representative site migrated as the canonical pattern (`ima_get_status` rbuf newline counter)
+- [ ] V1.1.12 — `#derive(Serialize)` for diagnostic JSON output (NEXT)
 
-Slot # = agnosys VERSION # for this minor cycle. The 1.1.2-1.1.4
-trio reflects how the ct_eq_bytes work spanned three patches as
-upstream landed `ct_eq_bytes`, then `ct_eq_bytes_lens`, plus the
-parallel `sys_stat` fix.
+Slot # = agnosys VERSION # for this minor cycle. Multi-version
+shipping arcs (1.1.2-1.1.4 ct_eq_bytes; 1.1.5-1.1.6 exhaustive
+match; 1.1.8-1.1.10 multi-width struct fields) get one slot per
+shipped patch.
 - [ ] 1.1.4 — first-class tagged-union `Result` replacing lib/tagged.cyr
 - [ ] 1.1.5 — multi-width struct fields for kernel binary protocols
 - [ ] 1.1.6 — slice migration for syscall + parser buffers

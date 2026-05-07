@@ -260,18 +260,7 @@ then the if/payload chain stays as the canonical idiom.
 
 **Rationale:** the lib/tagged.cyr API still works but is the pre-5.8.21 hand-rolled pattern. First-class sum types compile to byte-identical layout for arity-1, and exhaustive-match (V1.1.5) becomes load-bearing once Result is a real enum.
 
-#### V1.1.8 — Multi-width struct fields for kernel binary protocols ✅ SHIPPED 2026-05-07 (across 1.1.8 ship + 1.1.9 revert + 1.1.10 reopen)
-
-Initial 1.1.8 shipped clean on x86_64 but broke aarch64
-cross-build (sub-8-byte struct field load codegen unimplemented
-in cyrius 5.9.25 aarch64 backend; `error:1610`). 1.1.9 reverted
-the source changes and added an aarch64 cross-build gate to
-local audit so the regression class wouldn't slip past local
-validation again. Upstream issue filed at
-[`docs/development/issues/archive/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md`](../issues/archive/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md);
-fix landed in cyrius 5.9.27. agnosys 1.1.10 reopened V1.1.8 by
-restoring the source changes and bumping the cyrius pin —
-both arches clean.
+#### V1.1.8 — Multi-width struct fields for kernel binary protocols ✅ SHIPPED 2026-05-07
 
 Four kernel-ABI structs migrated to typed `struct` decls +
 pointer-to-struct dot syntax:
@@ -308,15 +297,55 @@ correct for those sites.
 
 **Rationale:** cyrius 5.8.x ships width-correct codegen — `var x: i32 = …` does the right `mov dword [addr], eax`. Today's hand-rolled mixed-width store/load pattern is correct but loses the type system's ability to catch a `store64` where a `store32` was meant.
 
-#### V1.1.9 — Slice migration for syscall + parser buffers
+#### V1.1.9 — V1.1.8 revert (aarch64 sub-8-byte struct field load gap) ✅ SHIPPED 2026-05-07
 
-- [ ] Convert `var buf[N]; pass &buf, N` patterns (35 sites today) to `slice<u8>` where the buffer is consumed within a single fn scope.
-- [ ] Use `slice_set` / `s.ptr` / `s.len` / `s[i]` (bounds-checked) in netlink frame builders, /proc parsers, EFI variable readers, audit nlmsg parsers.
-- [ ] Heap-allocated large buffers stay heap-allocated — slices are layout-compatible with vec / Str so the canonical (ptr, len) primitives still apply.
+V1.1.8 shipped clean on x86_64 but broke aarch64 cross-build
+(`error:1610: sub-8-byte struct field load is x86-only for
+v5.6.0; aarch64 + cx pending`). Reverted source-side back to
+the explicit `store{8,16,32}` pattern. Filed
+[`docs/development/issues/archive/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md`](../issues/archive/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md)
+and added a permanent `cyrius build --aarch64` gate to
+`scripts/audit.sh` step 4 so the regression class is caught
+in local audit, not just CI.
+
+#### V1.1.10 — V1.1.8 reopen (cyrius 5.9.27 pin) ✅ SHIPPED 2026-05-07
+
+cyrius 5.9.27 implemented the aarch64 backend's `EFLLOAD_W`
+codegen for sub-32-bit struct field loads. agnosys reopened
+V1.1.8 by restoring the typed kernel-ABI struct decls + dot
+syntax and bumping the cyrius pin `5.9.25` → `5.9.27`. Both
+arches clean; aarch64 cross-build gate confirms.
+
+#### V1.1.11 — Slice migration for syscall + parser buffers ✅ SHIPPED 2026-05-07
+
+Survey of the 35 `var buf[N]` sites in src/* showed most aren't
+real slice candidates: ~10 tiny fmt buffers (no indexed access),
+~6 kernel-ABI stack structs (different pattern), ~7 one-shot
+syscall arg buffers (no indexed access), ~12 large parser
+buffers using `memeq`/`memcpy` with explicit `pos < outlen`
+walks (length-bounded by construction; slice subscript would
+re-validate already-validated bounds).
+
+- [x] One representative site migrated as the canonical pattern:
+  `src/ima.cyr fn ima_get_status`'s newline-counting loop over
+  the 4 KB rbuf converted from `load8(&rbuf + ri)` with explicit
+  `ri < n` to `slice_set(&s, &rbuf, n)` + `s[ri]` with
+  `ri < s.len`. Bounds-checked indexing replaces the manual
+  bound and protects against future drift.
+- [x] `cyrius.cyml [deps].stdlib += "slice"`; explicit
+  `include "lib/slice.cyr"` added to entry-point sources and
+  to `src/ima.cyr` (required for `cyrius check` standalone-mode
+  syntax resolution of slice subscript helpers).
+- [x] Both arches clean (cyrius 5.9.27 has slice support on
+  aarch64).
+
+Future scalar-subscript parser loops should adopt the slice
+form from the start; the existing `memeq`/`memcpy`-based parsers
+stay as-is since their bounds are already explicit.
 
 **Rationale:** bounds-checked indexing on the agnosys parsers (audit netlink, fuse mount entries, EFI var bytes, IMA measurement records) closes the off-by-one class without a runtime cost we can't already amortize.
 
-#### V1.1.10 — `#derive(Serialize)` for module status diagnostics
+#### V1.1.12 — `#derive(Serialize)` for module status diagnostics
 
 - [ ] Generate JSON serializers for status structs returned by query fns (mac status, audit status, ima status, secureboot state, tpm caps, drm caps).
 - [ ] Consumer-facing benefit: kavach / sigil / argonaut can dump agnosys state to log without writing per-module formatters.

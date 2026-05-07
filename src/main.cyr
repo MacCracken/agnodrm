@@ -23,6 +23,7 @@ include "lib/hashmap.cyr"
 include "lib/process.cyr"
 include "lib/fs.cyr"
 include "lib/ct.cyr"
+include "lib/slice.cyr"
 
 # ================================================================
 # Agnosys core modules

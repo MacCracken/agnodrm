@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.11] — 2026-05-07
+
+**V1.1.11 — slice migration for syscall + parser buffers.**
+The roadmap slot scoped "35 sites" of `var buf[N]; pass &buf, N`
+patterns for conversion to bounds-checked `slice<u8>`. Survey
+shows most aren't real slice candidates:
+
+- ~10 tiny fmt buffers (24 B; one-shot `fmt_int_buf` →
+  `sys_write`) — no indexed access, no slicing benefit.
+- ~6 stack-local kernel-ABI structs (8–16 B; LandlockRulesetAttr,
+  sock_fprog, BPF program prog) — different pattern; per
+  vidya `multi_width_types` stack locals use 8-byte slots
+  regardless of width. Stays as `var buf[N]; store{N}` per
+  V1.1.8's deferred items.
+- ~7 build-and-pass-to-syscall buffers (utsname 392 B, sysinfo
+  120 B, etc.) — one-shot use, no indexed access.
+- ~12 large parser buffers with explicit `pos < outlen` walks
+  using `memeq`/`memcpy` (length-bounded by construction) —
+  slice subscript would re-validate already-validated bounds.
+
+**One representative site migrated** to demonstrate the pattern:
+`src/ima.cyr fn ima_get_status`'s newline-counting loop over
+the 4 KB `rbuf` after each `sys_read`. The loop now uses
+`slice_set` + `s[ri]` bounds-checked indexing instead of
+`load8(&rbuf + ri)`. Bounds against `s.len` (set per read
+length) replace the explicit `ri < n` check. Net: 2 added
+lines (slice declaration + slice_set call); the inner loop
+gains compile-time-protected bounds against future drift.
+
+### Changed
+- **`cyrius.cyml [deps].stdlib`** += `"slice"` (auto-prepend for
+  `cyrius build/test/bench/fuzz/check/soak/smoke`).
+- **`src/main.cyr`** + **`tests/tcyr/test_integration.tcyr`** —
+  added `include "lib/slice.cyr"` to the explicit include
+  manifests.
+- **`src/ima.cyr`** — added `include "lib/slice.cyr"` (required
+  for `cyrius check` standalone-mode resolution of slice
+  subscript helpers; auto-prepend doesn't apply to the audit
+  gate-1 syntax check). `ima_get_status`'s rbuf newline counter
+  converted to `slice<u8>` form.
+- **`dist/agnosys.cyr`** regenerated. 9,912 → 9,914 lines.
+
+### Verified
+- All 10 audit gates pass under cyrius 5.9.27, including the
+  aarch64 cross-build gate (slice support is on both arches in
+  5.9.27).
+- 234 / 234 integration tests pass; `ima_get_status` behavior
+  unchanged.
+- 30 benchmarks across 11 groups; bench parity unchanged.
+- API surface clean: 721 fns, no drift.
+
+### Items deliberately scoped out
+
+The remaining 34 `var buf[N]` sites stay on their existing
+patterns. The roadmap's "bounds-checked indexing closes the
+off-by-one class" rationale doesn't apply to most of agnosys's
+buffer use, where bounds are already explicit and the access
+patterns are `memeq`/`memcpy` calls rather than scalar
+subscripts. When future code adds new scalar-subscript parser
+loops, prefer the slice form from the start (per the ima
+example).
+
 ## [1.1.10] — 2026-05-07
 
 **V1.1.8 reopens — cyrius 5.9.27 implements aarch64 sub-8-byte
