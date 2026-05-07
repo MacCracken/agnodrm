@@ -36,7 +36,14 @@ pass "all tables under 85%"
 
 stage 4/10 "build"
 mkdir -p build
-cyrius build src/main.cyr build/agnosys > /dev/null 2>&1 || fail "build"
+cyrius build src/main.cyr build/agnosys > /tmp/audit_build.log 2>&1 || { cat /tmp/audit_build.log; fail "build"; }
+# cyrius's match-coverage check fires as a build-time warning (5.8.22+).
+# Promote it to a hard gate here so missing enum-handler additions
+# can't slip through CI silently.
+grep -q "non-exhaustive" /tmp/audit_build.log && {
+    grep "non-exhaustive" /tmp/audit_build.log
+    fail "non-exhaustive match"
+}
 xxd -l 4 build/agnosys | grep -q "7f45 4c46" || fail "ELF magic"
 pass "build/agnosys ($(wc -c < build/agnosys) bytes)"
 

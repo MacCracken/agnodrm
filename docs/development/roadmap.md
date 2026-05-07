@@ -174,7 +174,29 @@ slot version numbers may drift from slot numbers as deferrals get
 reopened. Slot numbers here are conceptual labels, not version
 tags. Refer to CHANGELOG for the operational version history.)
 
-#### V1.1.3 — Exhaustive `match` coverage
+#### V1.1.3 — Exhaustive `match` coverage ✅ SHIPPED 2026-05-06 (1.1.5)
+
+agnosys's first `match` block — `src/error.cyr fn syserr_print`
+converted from a 7-elif + else chain to a `match kind { ... }` over
+all 8 SysErrorKind variants, with no `_ =>` opt-out so future
+SysErrorKind additions trigger a build-time warning until handled.
+`scripts/audit.sh` gate 4 now greps the build log for
+`non-exhaustive` and fails the gate; verified by regression test
+(deliberately removed an arm; gate fired with the expected message).
+
+The other 14 enum-to-string fns surveyed
+(`update_phase_str`, `pam_service_name`, `tpm_bank_str`, etc.) kept
+as if/elif chains — their catch-all defaults are correct for
+wire-format / debug serializers where missing-variant should
+degrade gracefully rather than fall through silently.
+
+Compilation-side discovery worth recording: cyrius's exhaustive-
+match check requires the fn to be CALLED (DCE eliminates dead fns
+before the check runs). All enum forms — explicit-value `= N`,
+bare-name auto-incremented, paren'd-variant sum types — trigger
+the check correctly when there's a live caller.
+
+(was the original V1.1.3 entry below; superseded by the above.)
 
 - [ ] Adopt `cyrius lint`'s exhaustive-match warning across every enum dispatch in src/* (audit / security / syscall / mac / pam / luks / dmverity / ima / tpm / secureboot / udev / drm / netns / bootloader / update / fuse / journald).
 - [ ] Add `_ =>` opt-out arms only where catch-all is the genuine intent (e.g. unknown-errno dispatch); explicit variants elsewhere.

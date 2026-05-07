@@ -2,13 +2,13 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-06 (1.1.4)
+**Last refresh:** 2026-05-06 (1.1.5)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.1.4** |
+| `VERSION` | **1.1.5** |
 | `cyrius.cyml [package].cyrius` | **5.9.20** |
 | Min Cyrius (consumer) | 5.9.20 |
 | Last cyrius bump | 5.9.18 → 5.9.20 (1.1.4; pulls in `ct_eq_bytes_lens` dual-length variant + `sys_stat` for x86_64 — closes the 2026-05-01 sys-stat-x86 issue and completes V1.1.2's stdlib delegation) |
@@ -113,7 +113,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.1.4** | 2026-05-06 | cyrius pin 5.9.18 → 5.9.20 — `ct_eq_bytes_lens` dual-length variant lets `certpin_ct_streq` collapse to a one-liner full stdlib delegation; `sys_stat` now in both arch peer files closes the 2026-05-01 portability issue (filed by sigil 3.0 against 1.0.4). Issues directory now empty |
+| **1.1.5** | 2026-05-06 | V1.1.3 exhaustive `match` coverage adoption — `syserr_print` converted to match (8 SysErrorKind variants explicit, no `_ =>`); audit gate 4 now greps build output for `non-exhaustive` warnings as a CI failure. Other 14 enum-to-string fns intentionally kept as if/elif chains (catch-all defaults are correct for wire-format serializers) |
+| 1.1.4 | 2026-05-06 | cyrius pin 5.9.18 → 5.9.20 — `ct_eq_bytes_lens` dual-length variant lets `certpin_ct_streq` collapse to a one-liner full stdlib delegation; `sys_stat` now in both arch peer files closes the 2026-05-01 portability issue (filed by sigil 3.0 against 1.0.4). Issues directory now empty |
 | 1.1.3 | 2026-05-06 | V1.1.2 reopens — cyrius 5.9.18 ships `ct_eq_bytes` in `lib/ct.cyr`. `certpin_ct_streq` body shrinks to a length-check + delegation into stdlib; bench parity confirmed; resolved issue archived. cyrius pin 5.9.14 → 5.9.18 |
 | 1.1.2 | 2026-05-06 | V1.1.2 `secret var` + `ct_eq` in certpin — DEFERRED, upstream premise incomplete. `ct_eq` not a builtin; `lib/ct.cyr` lacks `ct_eq_bytes`; `secret var` requires array form, doesn't fit cstring-pointer pin storage. Existing hand-rolled `certpin_ct_streq` is correct as-is. Filed upstream issue `cyrius-ct-eq-bytes-stdlib`; slot re-opens when the helper lands |
 | 1.1.1 | 2026-05-06 | V1.1.1 `defer { }` adoption — audit pass; no leaks found, no source changes needed. The 24 existing `defer { sys_close(...) }` sites (already in place from the port) are correctly placed; the 9 non-defer `sys_close` sites are all deliberate (existence probes, return-fd APIs, in-loop closes, close-before-subprocess) |
@@ -144,7 +145,7 @@ Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 **V1.1.x — language-feature adoption (queued)**
 - [x] V1.1.1 — `defer { }` audit pass — no leaks; 24 defer sites already correct from the port; 9 non-defer cases all deliberate (shipped 1.1.1)
 - [x] V1.1.2 — `ct_eq_bytes` in certpin — initially deferred at 1.1.2 (upstream premise incomplete); reopened and shipped at 1.1.3 once cyrius 5.9.18 added `ct_eq_bytes` to `lib/ct.cyr`. `certpin_ct_streq` body shrunk to length-check + stdlib delegation
-- [ ] V1.1.3 — exhaustive `match` coverage adoption
+- [x] V1.1.3 — exhaustive `match` coverage — `syserr_print` converted to match with all 8 SysErrorKind variants; audit gate 4 enforces non-exhaustive warnings as CI failure (shipped 1.1.5). The 14 enum-to-string serializers kept as if/elif chains (their catch-all defaults are correct).
 - [ ] V1.1.4 — first-class tagged-union `Result` replacing lib/tagged.cyr
 - [ ] V1.1.5 — multi-width struct fields for kernel binary protocols
 - [ ] V1.1.6 — slice migration for syscall + parser buffers

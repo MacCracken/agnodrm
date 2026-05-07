@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.5] — 2026-05-06
+
+**V1.1.3 — exhaustive `match` coverage adoption.** First match
+block in agnosys; first audit-gate enforcement of the
+exhaustiveness check.
+
+The roadmap slot anticipated wiring cyrius lint's exhaustive-match
+warning across every enum dispatch in src/*. Verification on
+cyrius 5.9.20:
+
+- The check fires for ALL enum forms (explicit-value `= N`,
+  bare-name auto-incremented, paren'd-variant sum types) — earlier
+  testing missed this because dead-code-eliminated fns are skipped
+  before the check runs. Adding a caller surfaces the warning
+  reliably.
+- The warning fires from `cyrius build`, NOT `cyrius lint`. The
+  audit's existing lint gate (step 7) does not catch it; the
+  build gate (step 4) needs to grep build output to enforce the
+  check as a CI failure.
+- Most agnosys enum dispatches are already correct as
+  if/elif/else chains with explicit catch-all `else` arms (which
+  serve as wire-format / debug-output safety nets). Converting
+  these to match wholesale would change runtime behavior for
+  malformed inputs without gaining exhaustiveness (the catch-all
+  → `_ =>` opt-out suppresses the check). Only one fn —
+  `syserr_print` — has the right shape for exhaustive-match
+  conversion: state-machine error printing where missing a new
+  variant should fail loud, not degrade silently.
+
+### Changed
+- **`src/error.cyr fn syserr_print`** — converted from a
+  7-elif + else chain into a `match kind { ... }` block with all
+  8 `SysErrorKind` variants explicit and **no `_ =>` opt-out**.
+  This is agnosys's first `match` use. Behavior change: missing
+  enum variants (impossible today; potential after future enum
+  additions) fall through to the trailing newline + return
+  rather than printing "unknown error: ". The compile-time
+  warning catches the missing handler before that runtime
+  behavior is reachable.
+- **`scripts/audit.sh` gate 4 (build)** — now greps the build
+  log for `non-exhaustive` and fails the gate with the offending
+  warning surfaced. Verified by removing the `ERR_IO` arm
+  temporarily; gate fires with the expected message and exits
+  non-zero.
+- **`dist/agnosys.cyr`** regenerated.
+
+### Verified
+- All 10 audit gates pass under cyrius 5.9.20.
+- 234 / 234 integration tests pass.
+- 30 benchmarks across 11 groups; bench parity unchanged.
+- API surface clean: 721 fns, no drift.
+- Regression-test verified: deliberately removing a match arm
+  triggers the new audit gate failure (not silent).
+
+### Items deliberately scoped out
+
+The 14 enum-to-string fns surveyed earlier (e.g. `update_phase_str`,
+`pam_service_name`, `tpm_bank_str`, `update_state_*`) are wire-
+format / debug-output serializers that intentionally fall back
+to `"unknown"` for malformed input. Converting them to match
+without `_ =>` would replace graceful degradation with
+fall-through-to-zero (a worse failure mode for non-enum input).
+Converting them WITH `_ =>` would suppress the exhaustiveness
+check (no protection gained). Their existing if/return chains
+are correct as-is.
+
+If a future enum-to-string fn is added where missing-variant-
+should-fail-loud IS the right semantic (like `syserr_print`),
+prefer match without `_ =>` from the start.
+
 ## [1.1.4] — 2026-05-06
 
 **cyrius pin 5.9.18 → 5.9.20 — closes the long-open
