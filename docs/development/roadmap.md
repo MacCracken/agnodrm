@@ -118,11 +118,11 @@ port. Min-cyrius pin stays at 5.9.x for the duration unless a specific bug fix
 in a later 5.9.y matters (cyrius 5.9.x is the maintenance line — improvements
 and optimizations only, not new features).
 
-#### V1.1.0 — `#derive(accessors)` migration (was 8.1)
+#### V1.1.0 — `#derive(accessors)` migration ✅ SHIPPED 2026-05-06
 
-- [ ] Migrate all 20 modules' struct accessors from `store64`/`load64` at fixed offsets to `#derive(accessors)` syntax (~635 raw offset-arithmetic sites today).
-- [ ] Update `docs/development/api-surface-1.0.snapshot` — additive (accessor fns added; no removals/arity changes), so `--update` after each module migrates.
-- [ ] Each module's struct migration ships as a 1.1.0-rcN per-module patch with bench parity proof; 1.1.0 ships as the bundled closeout.
+- [x] Migrated all 16 struct-bearing modules' accessors from `store64`/`load64` at fixed offsets to `#derive(accessors)` syntax. 37 derive structs total. (3 modules — error/audit/security — have legitimate non-derive cases documented inline; remaining modules had no heap structs to migrate.)
+- [x] Snapshot updated additively — 561 → 721 public fns; no removals or arity changes.
+- [x] Slot-by-slot patches: 1.0.6 (mac) → 1.0.7 (fuse/drm/bootloader) → 1.0.8 (dmverity/luks/certpin) → 1.0.9 (udev/journald/audit) → 1.0.10 (ima/tpm/secureboot) → 1.0.11 (pam/netns/update + cyrius 5.9.7) → 1.0.12 (tooling cleanup + cyrius 5.9.14) → 1.0.13 (closeout) → tagged as 1.1.0.
 
 **Rationale:** removes hand-written offset arithmetic across the most-touched code in agnosys; reduces off-by-one risk; readable. Mechanical but invasive (touches every struct), so kept off the 1.0 freeze. Headline 1.1 cycle because every other 1.1.x slot interacts with the accessor surface.
 
@@ -244,7 +244,8 @@ language-feature surface — these are durable infrastructure improvements.
 
 ## V1.0+ Verification
 
-- [ ] **1.1.0** ships when V1.1.0 (`#derive(accessors)`) is complete and the closeout pass is clean. Subsequent V1.1.x slots ship as patches against 1.1.
+- [x] **1.1.0** shipped 2026-05-06 — V1.1.0 (`#derive(accessors)`) complete; closeout patch (1.0.13) clean; 16 of 16 struct-bearing modules migrated. See CHANGELOG `[1.1.0]` for the consumer banner and `[1.0.13]` for the cumulative baseline.
+- [ ] Subsequent V1.1.x slots (1.1.1 through 1.1.7) ship as patches against 1.1.
 - [ ] **1.2.0** ships when V1.2.0 (multi-profile distlib) is complete; closeout against the consumer set.
 - [ ] V1.2.x slots may ship in any order; gate is bench parity + audit clean.
 - [ ] V1.3.0 ships when the agnosticos meta-tooling supports the release post-hook.

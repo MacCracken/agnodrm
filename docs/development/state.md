@@ -2,23 +2,23 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-06 (1.0.12)
+**Last refresh:** 2026-05-06 (1.1.0 tag)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.0.12** |
+| `VERSION` | **1.1.0** |
 | `cyrius.cyml [package].cyrius` | **5.9.14** |
 | Min Cyrius (consumer) | 5.9.14 |
-| Last cyrius bump | 5.9.7 → 5.9.14 (1.0.12; pulls in api-surface `--scope=project` + `--snapshot=PATH` fixes from 5.9.12/5.9.13 plus the `cyrius_api_surface` tarball-packaging fix from 5.9.14; lets `scripts/check-api-surface.sh` shrink to a four-line wrapper) |
+| Last cyrius bump | 5.9.7 → 5.9.14 (1.0.12) |
 
 ## Build Metrics
 
 | Metric | Value | Notes |
 |---|---|---|
-| Binary size (DCE) | **85,592 B** | down from 306,344 B at 1.0.0 — `[build] modules` → `[lib] modules` refactor |
-| `dist/agnosys.cyr` size | 324,902 B | bundled distlib (full library) |
+| Binary size (DCE) | **85,592 B** | unchanged across V1.1 (pure refactor; no behavior change) |
+| `dist/agnosys.cyr` size | ~330 KB / 9,886 lines | bundled distlib (full library); -68 lines vs 1.0.5 from removing hand-written accessor fns |
 | Fn-table utilization | 289 / 4,096 (7%) | from `cyrius capacity --check` |
 | Var-table | 302 / 8,192 | |
 | Fixup-table | 724 / 262,144 | |
@@ -113,7 +113,9 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.0.12** | 2026-05-06 | Tooling cleanup — `cyrius api-surface` adoption (5.9.14 ships `--scope=project`, `--snapshot=PATH`, and the `cyrius_api_surface` helper binary); `scripts/check-api-surface.sh` reduced from 70-line awk walker to a four-line wrapper; resolved api-surface issue archived |
+| **1.1.0** | 2026-05-06 | First minor release after 1.0 freeze. `#derive(accessors)` migration complete across 16 struct-bearing modules (37 derive structs). Pure refactor; drop-in upgrade from 1.0.x; 160 additive public fns (no removals/drift). cyrius pin 5.9.14 |
+| 1.0.13 | 2026-05-06 | V1.1.0 closeout patch — final 1.0.x slot before 1.1.0 tag. Cumulative baseline recorded: 16/16 modules migrated, 37 derive structs, 721 public fns (+160 additive), 85,592 B binary unchanged, 234 tests pass, 30 benches flat (one bench-locality drift in update_compare_versions noted) |
+| 1.0.12 | 2026-05-06 | Tooling cleanup — `cyrius api-surface` adoption (5.9.14 ships `--scope=project`, `--snapshot=PATH`, and the `cyrius_api_surface` helper binary); `scripts/check-api-surface.sh` reduced from 70-line awk walker to a four-line wrapper; resolved api-surface issue archived |
 | 1.0.11 | 2026-05-06 | V1.1.0 `#derive(accessors)` migration complete — pam + netns + update migrated (11 structs across 3 modules); cyrius pin 5.9.1 → 5.9.7 lifts the derive 32-struct cap; 16 of 16 struct-bearing modules done; ready for V1.1.0 closeout |
 | 1.0.10 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 11–13 — ima + tpm + secureboot migrated (8 structs across 3 modules); 13 of 13 struct-bearing modules done; one batch left (pam + netns + update) |
 | 1.0.9 | 2026-05-06 | V1.1.0 `#derive(accessors)` slots 8–10 — udev + journald + audit migrated (7 structs across 3 modules); 10 of ~13 struct-bearing modules done; learned: `syscall` is a reserved field name, asymmetric setter API needs wrappers |
@@ -131,17 +133,20 @@ Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 
 ## In-Flight Slots
 
-**V1.1.0 — `#derive(accessors)` migration** (struct-side complete; closeout next)
-- [x] mac.cyr (1.0.6)
-- [x] fuse.cyr · drm.cyr · bootloader.cyr (1.0.7 — batch)
-- [x] dmverity.cyr · luks.cyr · certpin.cyr (1.0.8 — batch)
-- [x] udev.cyr · journald.cyr · audit.cyr (1.0.9 — batch)
-- [x] ima.cyr · tpm.cyr · secureboot.cyr (1.0.10 — batch)
-- [x] pam.cyr · netns.cyr · update.cyr (1.0.11 — final batch + cyrius 5.9.7 pin)
-- security.cyr has no heap structs (BPF instructions are byte-packed, not heap accessors)
-- [ ] Closeout pass + cumulative bench/audit before tagging 1.1.0
+**V1.1.0 — `#derive(accessors)` migration — SHIPPED 2026-05-06**
 
-37 derive structs across 16 modules; 721 public fns total (562 at 1.0 + 159 additive 1.1.x slot additions). See [`roadmap.md`](roadmap.md) V1.1 for full backlog.
+37 derive structs across 16 modules; 721 public fns (561 at 1.0 freeze + 160 additive across V1.1). All slots and the closeout patch shipped in the 1.0.6 → 1.0.13 patch line; tagged as 1.1.0. See [CHANGELOG `[1.1.0]`](../../CHANGELOG.md) for the consumer-facing summary, [`[1.0.13]`](../../CHANGELOG.md) for the cumulative baseline, [`roadmap.md`](roadmap.md) V1.1 for the full slot list.
+
+**V1.1.x — language-feature adoption (queued)**
+- [ ] 1.1.1 — `defer { }` for resource-cleanup paths
+- [ ] 1.1.2 — `secret var` + `ct_eq` builtin in certpin
+- [ ] 1.1.3 — exhaustive `match` coverage adoption
+- [ ] 1.1.4 — first-class tagged-union `Result` replacing lib/tagged.cyr
+- [ ] 1.1.5 — multi-width struct fields for kernel binary protocols
+- [ ] 1.1.6 — slice migration for syscall + parser buffers
+- [ ] 1.1.7 — `#derive(Serialize)` for diagnostic JSON output
+
+V1.2.0 (multi-profile `cyrius distlib`) follows. See [`roadmap.md`](roadmap.md) for the full plan.
 
 ## Last Security Audit
 

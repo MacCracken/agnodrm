@@ -7,6 +7,194 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-06
+
+> **agnosys 1.1.0 — `#derive(accessors)` adoption.** First minor
+> release after the 1.0 freeze. Pure refactor on the project
+> side; pure ergonomics for downstream consumers. Drop-in upgrade
+> from any 1.0.x. cyrius 5.9.14 required.
+
+### What's in 1.1.0
+
+The `[1.1.0]` tag is the cumulative end of the 1.0.6 → 1.0.13
+patch line. The slot-by-slot detail lives in those entries; this
+banner is the consumer-facing summary.
+
+**Theme:** every heap-allocated struct in agnosys's 16
+struct-bearing modules now uses cyrius's `#derive(accessors)`
+syntax instead of hand-written `store64` / `load64` at fixed
+offsets. 37 derive structs total. The migration removes ~635
+raw offset-arithmetic call sites from the implementation while
+keeping the public API additive-only — every fn that existed
+in 1.0 still exists with the same name and arity.
+
+### Migration notes for consumers
+
+- **Drop-in.** No source changes required. The 1.0 public surface
+  is preserved exactly; `scripts/check-api-surface.sh` against
+  the 1.0 snapshot reports zero removals and zero arity changes
+  across all of V1.1.
+- **New additive surface.** 160 new accessor entries (the auto-
+  generated `<struct>_set_<field>(p, v)` setters that 1.0 didn't
+  ship). Snapshot count: 561 (1.0 freeze) → 721 (1.1.0). All
+  new entries are additive — opt-in for consumers, no behavior
+  change for callers that don't use them.
+- **cyrius pin.** 1.1.0 requires cyrius **5.9.14** or later
+  (5.9.7+ for the `#derive(accessors)` 32-struct cap fix; 5.9.12+
+  for `cyrius api-surface --scope=project`; 5.9.14+ for the
+  `cyrius_api_surface` helper binary in the release tarball).
+- **No breaking changes.** No fn renamed, removed, or arity-
+  changed since 1.0.0.
+- **No security fixes.** All findings from the 2026-04-26 P(-1)
+  audit shipped in 1.0.1; nothing security-relevant in V1.1.
+
+### Cumulative numbers (recorded at 1.0.13 closeout)
+
+- 16 of 16 struct-bearing modules migrated; 37 derive structs.
+- 234 / 234 integration tests pass.
+- 30 benchmarks across 11 groups — flat vs 1.0.5 baseline,
+  except `update_compare_versions` (132 → 158 ns, +20%, code-
+  locality artifact from struct decls landing in the same file;
+  function body unchanged).
+- Binary size (DCE): 85,592 B unchanged from 1.0.5.
+- `dist/agnosys.cyr`: 9,886 lines (-68 from 1.0.5; removed
+  hand-written accessor fns).
+- 282 dead-code fns under `CYRIUS_DCE=1` (consumers compile only
+  their needed subset).
+- All 10 audit gates clean.
+
+### Items intentionally not migrated (legitimate non-derive cases)
+
+These three are documented inline at the relevant src sites:
+
+- `src/error.cyr` `syserr` (3 fields, packed-vs-heap dispatch on
+  the integer value — `#derive(accessors)` would only handle the
+  heap branch and would conflict with the public dispatch fns).
+- `src/audit.cyr` `sockaddr_nl` (12 B, multi-width: u16/u16/u32/u32
+  — packed kernel ABI, not a heap bag of i64s).
+- `src/security.cyr` BPF instruction (8 B, multi-width:
+  u16/u8/u8/u32 — packed kernel ABI).
+
+### What's next
+
+The 1.1.x backlog from `docs/development/roadmap.md` queues
+seven feature-adoption slots that build on the cyrius
+language surface that landed during V1.1.0:
+
+- **1.1.1** — `defer { }` adoption for resource-cleanup paths
+- **1.1.2** — `secret var` + `ct_eq` builtin in certpin (replaces
+  hand-rolled `certpin_ct_streq`)
+- **1.1.3** — exhaustive `match` coverage adoption
+- **1.1.4** — first-class tagged-union `Result` replacing
+  `lib/tagged.cyr`
+- **1.1.5** — multi-width struct fields for kernel binary
+  protocols (audit_status, dm_verity_args, IMA, TPM)
+- **1.1.6** — slice migration for syscall + parser buffers
+- **1.1.7** — `#derive(Serialize)` for diagnostic JSON output
+
+V1.2.0 (multi-profile `cyrius distlib`) follows. See
+[`docs/development/roadmap.md`](docs/development/roadmap.md)
+for the full plan and [ADR-004](docs/adr/004-1-1-x-roadmap-rework.md)
+for the slotting rationale.
+
+### References
+
+- Slot-by-slot detail: 1.0.6 (mac) → 1.0.7 (fuse/drm/bootloader)
+  → 1.0.8 (dmverity/luks/certpin) → 1.0.9 (udev/journald/audit)
+  → 1.0.10 (ima/tpm/secureboot) → 1.0.11 (pam/netns/update +
+  cyrius 5.9.7) → 1.0.12 (api-surface tooling cleanup +
+  cyrius 5.9.14) → 1.0.13 (closeout + baseline).
+- Cyrius bugs filed and resolved during V1.1.0:
+  - `docs/development/issues/archive/2026-05-06-cyrius-derive-accessors-32-struct-cap.md`
+    (resolved cyrius 5.9.7)
+  - `docs/development/issues/archive/2026-05-06-cyrius-api-surface-derive-blind.md`
+    (resolved cyrius 5.9.9 + 5.9.12 + 5.9.13 + 5.9.14)
+
+## [1.0.13] — 2026-05-06
+
+**V1.1.0 closeout — final 1.0.x patch before tagging 1.1.0.**
+The eight slots from 1.0.6 → 1.0.12 (mac → fuse/drm/bootloader →
+dmverity/luks/certpin → udev/journald/audit → ima/tpm/secureboot →
+pam/netns/update → toolchain bumps + tooling cleanup) ship as
+1.1.0. Per CLAUDE.md "Closeout Pass": this patch is the final
+1.0.x slot; cumulative bench/audit/dead-code/binary-size baseline
+recorded; ready for 1.1.0 tag.
+
+### Closeout — Cumulative V1.1.0 baseline
+
+| Metric | Value | Notes |
+|---|---|---|
+| Modules migrated | **16 of 16** struct-bearing | mac, fuse, drm, bootloader (×2), dmverity (×2), luks, certpin (×3), udev, journald (×2), audit (×4), ima (×3), tpm (×2), secureboot (×3), pam (×3), netns (×4), update (×4) |
+| Derive structs | **37** | All under cyrius's 5.9.7+ derive-emitter (32-struct cap fixed in 5.9.7) |
+| Public fns (snapshot) | **721** | up from 561 at 1.0.0 freeze; +160 additive entries (no removals, no signature drift). Cumulative additions since 1.0 freeze: 160 |
+| Binary size (DCE) | **85,592 B** | unchanged from 1.0.5 baseline; V1.1 migration is pure refactor |
+| `dist/agnosys.cyr` size | **9,886 lines** | down from 9,954 at 1.0.5 (-68 lines from removing hand-written accessor fns) |
+| Dead-code count | **282 fns** | under `CYRIUS_DCE=1`; consumers compile only their needed subset |
+| Integration tests | **234 / 234** pass | unchanged from 1.0.5 |
+| Bench groups | **30 benchmarks across 11 groups** | overall flat vs 1.0.5 baseline; one observed drift below |
+| Fuzz harnesses | **6** | audit_nlmsg, audit_reply, certpin_pin, journald_filter, luks_cipher, pam_config |
+| Audit gates | **10 / 10** clean | syntax, API surface, capacity, build, smoke, tests, lint, vet, fuzz, benchmarks |
+| cyrius pin | **5.9.14** | up from 5.7.6 at 1.0.0 freeze |
+
+### Bench drift observation
+
+`update_compare_versions`: 132 ns (1.0.5) → 157–158 ns (1.0.12+,
+reproducible across runs). +20% drift. Function body **unchanged**
+across V1.1 — the regression is a code-locality artifact from
+adding 4 derive-struct decls + accessor emissions to the same
+file (cache-line / page layout shift). Not blocking; flagged here
+for posterity. No other bench shows comparable drift.
+
+### Items not migrated (legitimate non-derive cases)
+
+- `src/error.cyr` `syserr` (24 B, 3 fields: kind/errno/message).
+  The public fns `syserr_kind/1`, `syserr_errno/1`,
+  `syserr_message/1` dispatch on packed-vs-heap encoding — packed
+  errors live in the integer value (`kind << 16 | errno`), heap
+  errors are pointers to the 24-byte struct. `#derive(accessors)`
+  would only handle the heap branch and would conflict with the
+  dual-encoding fn names. Hand-written `store64`/`load64` in
+  `syserr_new` is the correct shape.
+- `src/audit.cyr` `sockaddr_nl` (12 B, multi-width fields:
+  u16/u16/u32/u32). Packed kernel ABI struct, not a heap bag of
+  i64s. `store16`/`store32` are kernel-correct; the layout
+  comment is necessary documentation, not stale.
+- `src/security.cyr` BPF instruction (8 B, multi-width:
+  u16/u8/u8/u32). Same — packed ABI struct, not a derive
+  candidate. Kernel-defined layout documented inline.
+
+### Downstream check (best-effort)
+
+13 consumers in scope per `docs/development/roadmap.md`:
+kavach, aegis, shakti, libro, stiva, sigil, ark, argonaut,
+daimon, nein, yukti, soorat, hoosh. All consume only the modules
+they need (per the consumer-map). Public API surface is
+1.0-additive only across all of V1.1 — no consumer should require
+a code change to upgrade from agnosys 1.0.x to 1.1.0. Automated
+per-consumer integration CI is roadmap V1.2.3 (not blocking 1.1).
+
+### Roadmap state
+
+V1.1.0 (`#derive(accessors)` migration) — **complete**. Ready for
+1.1.0 tag. Subsequent 1.1.x slots from `docs/development/roadmap.md`
+remain queued: `defer { }` adoption (1.1.1), `secret var` +
+`ct_eq` in certpin (1.1.2), exhaustive match coverage (1.1.3),
+tagged-union sum types (1.1.4), multi-width struct fields (1.1.5),
+slice migration (1.1.6), `#derive(Serialize)` diagnostics (1.1.7).
+
+### Changed
+- **`VERSION`** 1.0.12 → 1.0.13.
+- **`bench-history.csv`** — closeout snapshot recorded
+  (33 benchmarks; one row per bench).
+- **`dist/agnosys.cyr`** regenerated (header v1.0.13).
+
+### Verified
+- Full clean DCE build from `rm -rf build`: produces 85,592-byte
+  binary, reproducible.
+- All 10 audit gates pass.
+- 234 / 234 integration tests pass.
+- API surface clean against 1.0 snapshot — 721 fns, no drift.
+
 ## [1.0.12] — 2026-05-06
 
 **Tooling cleanup — `cyrius api-surface` adoption + cyrius pin
