@@ -15,6 +15,7 @@ include "lib/io.cyr"
 include "lib/hashmap.cyr"
 include "lib/process.cyr"
 include "lib/fs.cyr"
+include "lib/ct.cyr"
 include "lib/assert.cyr"
 
 include "src/error.cyr"

@@ -136,13 +136,43 @@ Slot shipped as a verification + audit pass; CHANGELOG `[1.1.1]` documents the f
 
 **Rationale:** exit-path safety; cyrius 5.8.x ships per-defer runtime flags so unreached defers skip cleanly. Today's flag+continue patterns are equivalent in correctness but harder to audit.
 
-#### V1.1.2 — `secret var` + `ct_eq` builtin in certpin
+#### V1.1.2 — `ct_eq_bytes` in certpin ✅ SHIPPED 2026-05-06 (across 1.1.2 deferral + 1.1.3 reopen)
 
-- [ ] Replace hand-rolled `certpin_ct_streq` (src/certpin.cyr:117) with cyrius's compiler-backed `ct_eq` builtin and `secret var` annotation on pin slots.
-- [ ] Bench: `ct_streq_equal` / `ct_streq_diff` numbers should match or improve (current: ~129ns / 139ns — roughly 16-byte SPKI hash).
-- [ ] Fuzz harness `fuzz/certpin_pin.fcyr` re-run; coverage parity required.
+Initial filing at 1.1.2 deferred: `ct_eq` was not a builtin,
+`lib/ct.cyr` shipped only `ct_select`, and `secret var` rejected
+scalar declarations (didn't fit cstring-pointer pin storage).
+Filed [`docs/development/issues/archive/2026-05-06-cyrius-ct-eq-bytes-stdlib.md`](../issues/archive/2026-05-06-cyrius-ct-eq-bytes-stdlib.md)
+proposing `ct_eq_bytes(a, b, n)` for `lib/ct.cyr`.
+
+Upstream resolved in cyrius 5.9.18; agnosys 1.1.3 reopened and
+shipped the actual swap:
+
+- [x] cyrius 5.9.18 added `ct_eq_bytes(a, b, n)` to `lib/ct.cyr`
+  (canonical XOR-accumulate; doc-comment credits the agnosys
+  filing).
+- [x] `cyrius.cyml [deps].stdlib` += `"ct"` (auto-prepend).
+- [x] `src/certpin.cyr fn certpin_ct_streq(a, b)` body shrunk
+  from a 16-line hand-roll to a 5-line cstring wrapper that
+  delegates the byte loop into `ct_eq_bytes(a, b, alen)`.
+  Length-mismatch early-return preserved (pin length is
+  non-secret in agnosys — 44-char base64 SHA-256, fixed by
+  spec).
+- [x] Bench parity verified: `ct_streq_equal` 125→129ns,
+  `ct_streq_diff` 135→140ns (within run-to-run noise; no
+  fn-call overhead measurable over the 16+ byte XOR loop).
+
+`secret var` annotation deferred indefinitely — pin storage in
+certpin flows through cstring pointers across struct boundaries,
+which doesn't fit cyrius's array-only `secret var` contract.
+Revisit if/when `secret var` gains a pointer-form or a separate
+`secret_str` annotation.
 
 **Rationale:** the compiler-backed primitive is the canonical path post-5.8.x (sigil's PQC code uses it). Our hand-rolled version works but isn't the supported pattern.
+
+(Note: agnosys VERSION 1.1.3 shipped the V1.1.2 reopen; subsequent
+slot version numbers may drift from slot numbers as deferrals get
+reopened. Slot numbers here are conceptual labels, not version
+tags. Refer to CHANGELOG for the operational version history.)
 
 #### V1.1.3 — Exhaustive `match` coverage
 

@@ -115,21 +115,15 @@ fn certpin_validate_pin_format(pin) {
 # Pin verification (pure function)
 # ================================================================
 
-# Constant-time string comparison to prevent timing side-channels.
+# Constant-time cstring comparison to prevent timing side-channels.
 # Returns 1 if equal, 0 otherwise.
+# Body delegates to `lib/ct.cyr`'s `ct_eq_bytes_lens` (cyrius 5.9.20+) —
+# the dual-length variant handles the strlen-and-compare in one call.
+# This fn stays as the cstring wrapper because pin storage flows
+# through cstring pointers; pin length is non-secret in agnosys
+# (44-char base64 SHA-256, fixed by spec).
 fn certpin_ct_streq(a, b) {
-    var alen = strlen(a);
-    var blen = strlen(b);
-    if (alen != blen) { return 0; }
-    var acc = 0;
-    var i = 0;
-    while (i < alen) {
-        var ca = load8(a + i);
-        var cb = load8(b + i);
-        acc = acc | (ca ^ cb);
-        i = i + 1;
-    }
-    return acc == 0;
+    return ct_eq_bytes_lens(a, strlen(a), b, strlen(b));
 }
 
 # Find the pin entry for a given host in the pin set.

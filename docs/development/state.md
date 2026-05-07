@@ -2,16 +2,16 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-06 (1.1.1)
+**Last refresh:** 2026-05-06 (1.1.4)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.1.1** |
-| `cyrius.cyml [package].cyrius` | **5.9.14** |
-| Min Cyrius (consumer) | 5.9.14 |
-| Last cyrius bump | 5.9.7 → 5.9.14 (1.0.12) |
+| `VERSION` | **1.1.4** |
+| `cyrius.cyml [package].cyrius` | **5.9.20** |
+| Min Cyrius (consumer) | 5.9.20 |
+| Last cyrius bump | 5.9.18 → 5.9.20 (1.1.4; pulls in `ct_eq_bytes_lens` dual-length variant + `sys_stat` for x86_64 — closes the 2026-05-01 sys-stat-x86 issue and completes V1.1.2's stdlib delegation) |
 
 ## Build Metrics
 
@@ -77,7 +77,7 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 ## Dependencies
 
 - **Runtime**: 0
-- **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `fmt`, `vec`, `str`, `io` (7)
+- **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `fmt`, `vec`, `str`, `io`, `ct` (8 — `ct` added 1.1.3 for `ct_eq_bytes`)
 - **Git-pinned**: 0 (no `[deps.<name>]` stanzas; no `cyrius.lock` needed today)
 - **Vendored stdlib refresh** (last): 2026-04-26 to cyrius 5.7.6 snapshot (`alloc.cyr`, `io.cyr`, `string.cyr`, `syscalls.cyr` — 5.5.x split into per-OS dispatch). 5.7.7 through 5.9.1 introduced no stdlib changes affecting agnosys's `[deps] stdlib = [syscalls, string, alloc, fmt, vec, str, io]` set; `cyrius deps` is a no-op against the existing vendor.
 
@@ -113,7 +113,10 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.1.1** | 2026-05-06 | V1.1.1 `defer { }` adoption — audit pass; no leaks found, no source changes needed. The 24 existing `defer { sys_close(...) }` sites (already in place from the port) are correctly placed; the 9 non-defer `sys_close` sites are all deliberate (existence probes, return-fd APIs, in-loop closes, close-before-subprocess) |
+| **1.1.4** | 2026-05-06 | cyrius pin 5.9.18 → 5.9.20 — `ct_eq_bytes_lens` dual-length variant lets `certpin_ct_streq` collapse to a one-liner full stdlib delegation; `sys_stat` now in both arch peer files closes the 2026-05-01 portability issue (filed by sigil 3.0 against 1.0.4). Issues directory now empty |
+| 1.1.3 | 2026-05-06 | V1.1.2 reopens — cyrius 5.9.18 ships `ct_eq_bytes` in `lib/ct.cyr`. `certpin_ct_streq` body shrinks to a length-check + delegation into stdlib; bench parity confirmed; resolved issue archived. cyrius pin 5.9.14 → 5.9.18 |
+| 1.1.2 | 2026-05-06 | V1.1.2 `secret var` + `ct_eq` in certpin — DEFERRED, upstream premise incomplete. `ct_eq` not a builtin; `lib/ct.cyr` lacks `ct_eq_bytes`; `secret var` requires array form, doesn't fit cstring-pointer pin storage. Existing hand-rolled `certpin_ct_streq` is correct as-is. Filed upstream issue `cyrius-ct-eq-bytes-stdlib`; slot re-opens when the helper lands |
+| 1.1.1 | 2026-05-06 | V1.1.1 `defer { }` adoption — audit pass; no leaks found, no source changes needed. The 24 existing `defer { sys_close(...) }` sites (already in place from the port) are correctly placed; the 9 non-defer `sys_close` sites are all deliberate (existence probes, return-fd APIs, in-loop closes, close-before-subprocess) |
 | 1.1.0 | 2026-05-06 | First minor release after 1.0 freeze. `#derive(accessors)` migration complete across 16 struct-bearing modules (37 derive structs). Pure refactor; drop-in upgrade from 1.0.x; 160 additive public fns (no removals/drift). cyrius pin 5.9.14 |
 | 1.0.13 | 2026-05-06 | V1.1.0 closeout patch — final 1.0.x slot before 1.1.0 tag. Cumulative baseline recorded: 16/16 modules migrated, 37 derive structs, 721 public fns (+160 additive), 85,592 B binary unchanged, 234 tests pass, 30 benches flat (one bench-locality drift in update_compare_versions noted) |
 | 1.0.12 | 2026-05-06 | Tooling cleanup — `cyrius api-surface` adoption (5.9.14 ships `--scope=project`, `--snapshot=PATH`, and the `cyrius_api_surface` helper binary); `scripts/check-api-surface.sh` reduced from 70-line awk walker to a four-line wrapper; resolved api-surface issue archived |
@@ -139,9 +142,17 @@ Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 37 derive structs across 16 modules; 721 public fns (561 at 1.0 freeze + 160 additive across V1.1). All slots and the closeout patch shipped in the 1.0.6 → 1.0.13 patch line; tagged as 1.1.0. See [CHANGELOG `[1.1.0]`](../../CHANGELOG.md) for the consumer-facing summary, [`[1.0.13]`](../../CHANGELOG.md) for the cumulative baseline, [`roadmap.md`](roadmap.md) V1.1 for the full slot list.
 
 **V1.1.x — language-feature adoption (queued)**
-- [x] 1.1.1 — `defer { }` audit pass — no leaks; 24 defer sites already correct from the port; 9 non-defer cases all deliberate
-- [ ] 1.1.2 — `secret var` + `ct_eq` builtin in certpin
-- [ ] 1.1.3 — exhaustive `match` coverage adoption
+- [x] V1.1.1 — `defer { }` audit pass — no leaks; 24 defer sites already correct from the port; 9 non-defer cases all deliberate (shipped 1.1.1)
+- [x] V1.1.2 — `ct_eq_bytes` in certpin — initially deferred at 1.1.2 (upstream premise incomplete); reopened and shipped at 1.1.3 once cyrius 5.9.18 added `ct_eq_bytes` to `lib/ct.cyr`. `certpin_ct_streq` body shrunk to length-check + stdlib delegation
+- [ ] V1.1.3 — exhaustive `match` coverage adoption
+- [ ] V1.1.4 — first-class tagged-union `Result` replacing lib/tagged.cyr
+- [ ] V1.1.5 — multi-width struct fields for kernel binary protocols
+- [ ] V1.1.6 — slice migration for syscall + parser buffers
+- [ ] V1.1.7 — `#derive(Serialize)` for diagnostic JSON output
+
+(Slot numbers are conceptual labels; agnosys version numbers may
+drift from slot numbers as deferrals get reopened — see roadmap
+note in V1.1.2.)
 - [ ] 1.1.4 — first-class tagged-union `Result` replacing lib/tagged.cyr
 - [ ] 1.1.5 — multi-width struct fields for kernel binary protocols
 - [ ] 1.1.6 — slice migration for syscall + parser buffers

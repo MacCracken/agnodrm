@@ -7,6 +7,150 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.4] — 2026-05-06
+
+**cyrius pin 5.9.18 → 5.9.20 — closes the long-open
+sys-stat-x86 issue, completes V1.1.2's stdlib delegation, and
+clears the issues directory.**
+
+### Changed
+- **`cyrius.cyml [package].cyrius`** pinned `5.9.18` → `5.9.20`.
+- **`src/certpin.cyr`** — `certpin_ct_streq(a, b)` body shrunk
+  from a 5-line length-check + delegate to a 1-line full
+  delegation: `return ct_eq_bytes_lens(a, strlen(a), b, strlen(b));`.
+  cyrius 5.9.20 added the dual-length variant `ct_eq_bytes_lens`
+  to `lib/ct.cyr` (sigil-paired consolidation; sigil 3.0.2
+  retired its own hand-rolled `ct_eq` at the same time). Length
+  check is now inside stdlib; cstring wrapper preserved (pin
+  storage flows as cstring pointers; length is non-secret).
+- **`docs/development/issues/2026-05-01-sys-stat-x86-portability.md`**
+  → moved to `archive/`; status header updated to RESOLVED with
+  the cyrius 5.9.20 verification trail. The 2026-05-01 issue —
+  filed by sigil 3.0 against agnosys 1.0.4 — has been latent
+  through the entire 1.0.x and early 1.1.x line because no
+  production consumer reached `fuse_validate_mountpoint`. cyrius
+  5.9.20 now ships `sys_stat` in both arch peer files
+  (`lib/syscalls_x86_64_linux.cyr:309` +
+  `lib/syscalls_aarch64_linux.cyr:346`); no agnosys-side shim
+  needed.
+- **`dist/agnosys.cyr`** regenerated. 9,883 → 9,880 lines (-3
+  from the certpin one-liner).
+
+### Verified
+- All 10 audit gates pass under cyrius 5.9.20.
+- 234 / 234 integration tests pass.
+- Bench parity (certpin hot paths, 1.1.3 → 1.1.4):
+  - `validate_pin_valid` 234ns → 227ns
+  - `validate_pin_invalid` 14ns → 14ns
+  - `ct_streq_equal` 129ns → 130ns
+  - `ct_streq_diff` 140ns → 139ns
+  All within run-to-run noise.
+- Issues directory now empty (all 4 V1.x-era issues archived;
+  none open).
+
+### Note on sigil 3.1.0
+
+sigil 3.1.0 ships against agnosys 1.1.x as a downstream
+confirmation point. sigil's `lib/sigil.cyr:1316 ct_eq` and
+`:1332 ct_eq_32` hand-rolls were retired in sigil 3.0.2 (paired
+with cyrius 5.9.18 + 5.9.20 stdlib additions). agnosys's public
+API has been additive-only across all of V1.1, so the upgrade
+is drop-in for sigil and the other 12 consumers.
+
+## [1.1.3] — 2026-05-06
+
+**V1.1.2 reopens — `certpin_ct_streq` now delegates to stdlib's
+`ct_eq_bytes`. cyrius pin 5.9.14 → 5.9.18.**
+The 1.1.2 deferral landed upstream: cyrius 5.9.18 ships
+`ct_eq_bytes(a, b, n)` in `lib/ct.cyr` with the exact body
+proposed in the now-archived
+[`docs/development/issues/archive/2026-05-06-cyrius-ct-eq-bytes-stdlib.md`](docs/development/issues/archive/2026-05-06-cyrius-ct-eq-bytes-stdlib.md).
+agnosys's hand-rolled body shrinks from 16 lines to a 5-line
+cstring wrapper that delegates the byte-loop to stdlib.
+
+### Changed
+- **`cyrius.cyml [package].cyrius`** pinned `5.9.14` → `5.9.18`.
+- **`cyrius.cyml [deps].stdlib`** — added `"ct"` so `lib/ct.cyr`
+  is auto-prepended for `cyrius build/test/bench/fuzz/check/soak/smoke`.
+- **`src/main.cyr`** — added explicit `include "lib/ct.cyr"`.
+- **`tests/tcyr/test_integration.tcyr`** — added explicit
+  `include "lib/ct.cyr"`.
+- **`src/certpin.cyr`** — `certpin_ct_streq(a, b)` body
+  rewritten. Length-mismatch early-return preserved (cstring
+  wrapper concern; pin length is non-secret in agnosys — 44-char
+  base64 SHA-256, fixed by spec). Byte loop replaced with a call
+  into `ct_eq_bytes(a, b, alen)`. Public signature unchanged;
+  semantics unchanged.
+- **`docs/development/issues/2026-05-06-cyrius-ct-eq-bytes-stdlib.md`**
+  → moved to `archive/`; status header updated to RESOLVED with
+  the cyrius 5.9.18 verification trail.
+- **`dist/agnosys.cyr`** regenerated.
+
+### Verified
+- All 10 audit gates pass under cyrius 5.9.18.
+- 234 / 234 integration tests pass.
+- `fuzz/certpin_pin.fcyr` unchanged behavior.
+- Bench parity (certpin hot paths, comparing 1.1.2 → 1.1.3):
+  - `validate_pin_valid` 224ns → 234ns (within run-to-run noise)
+  - `validate_pin_invalid` 14ns → 14ns (unchanged)
+  - `ct_streq_equal` 125ns → 129ns (within noise; no fn-call
+    overhead measurable over the 16+ byte XOR loop)
+  - `ct_streq_diff` 135ns → 140ns (within noise)
+- API surface clean: 721 fns, no drift.
+
+## [1.1.2] — 2026-05-06
+
+**V1.1.2 — `secret var` + `ct_eq` builtin in certpin —
+DEFERRED, slot's upstream premise incomplete.**
+The roadmap slot anticipated swapping
+`src/certpin.cyr:120 fn certpin_ct_streq(a, b)` to a cyrius
+compiler-backed `ct_eq` primitive plus `secret var` annotation
+on pin storage. Verification on cyrius 5.9.14 shows the
+prerequisites aren't shipped:
+
+- `ct_eq` is not a compiler builtin (build warns "undefined
+  function 'ct_eq'", binary SIGILLs at runtime).
+- `lib/ct.cyr` ships only `ct_select`; no `ct_eq*` helper.
+- `secret var` requires array form (`secret var buf[N]`); scalar
+  declaration rejected. Pin storage flows as cstring pointers
+  through struct boundaries — doesn't fit the array-only
+  contract.
+
+The hand-rolled `certpin_ct_streq` in `src/certpin.cyr:120` is
+correct (canonical XOR-accumulate; no data-dependent branches);
+nothing in the existing implementation needs fixing for
+correctness.
+
+Filed upstream issue
+[`docs/development/issues/2026-05-06-cyrius-ct-eq-bytes-stdlib.md`](docs/development/issues/2026-05-06-cyrius-ct-eq-bytes-stdlib.md)
+proposing `ct_eq_bytes(a, b, n)` for `lib/ct.cyr`. Local
+reproducer at `/tmp/cyrius-ct-eq-stdlib/`. When the helper lands,
+the V1.1.2 slot reopens as a one-line swap (replace certpin's
+hand-roll body with a call into stdlib).
+
+### Bench parity
+
+Audit gate 10 (benchmarks) passes; certpin hot paths unchanged
+from 1.1.1 baseline (`ct_streq_equal` ~125ns, `ct_streq_diff`
+~135ns).
+
+### Changed
+- **`docs/development/issues/2026-05-06-cyrius-ct-eq-bytes-stdlib.md`**
+  — new upstream issue: `ct_eq_bytes` should be added to
+  `lib/ct.cyr` to deduplicate hand-rolled CT-equality across
+  agnosys's `certpin_ct_streq` and sigil's `lib/sigil.cyr:1316
+  ct_eq`.
+- **`VERSION`** 1.1.1 → 1.1.2.
+- **`dist/agnosys.cyr`** regenerated (header v1.1.2 — no body
+  changes).
+
+### Verified
+- All 10 audit gates pass.
+- 234 / 234 integration tests pass; `fuzz/certpin_pin.fcyr`
+  unchanged behavior.
+- 30 benchmarks across 11 groups; bench parity unchanged.
+- API surface clean: 721 fns, no drift.
+
 ## [1.1.1] — 2026-05-06
 
 **V1.1.1 — `defer { }` adoption / resource-cleanup audit.**

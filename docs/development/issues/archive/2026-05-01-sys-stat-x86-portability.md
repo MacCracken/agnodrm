@@ -1,11 +1,19 @@
 # agnosys: `sys_stat` x86_64 portability gap in `fuse_validate_mountpoint`
 
+**Status:** RESOLVED upstream in cyrius 5.9.20 — `lib/syscalls_x86_64_linux.cyr:309`
+now ships `fn sys_stat(path, buf)` (the aarch64 peer already had
+it at `lib/syscalls_aarch64_linux.cyr:346`). Both arches now
+provide the wrapper; consumers building under cyrius 5.9.20 +
+agnosys 1.1.4 no longer see the link-time warning. agnosys-side
+no shim needed.
 **Filed:** 2026-05-01
+**Resolved:** 2026-05-06 (cyrius 5.9.20)
 **Reporter:** sigil 3.0 (downstream consumer of agnosys 1.0.4)
-**agnosys version observed:** 1.0.4
-**cyrius version active:** 5.7.48
-**Severity:** LOW (latent runtime crash; benign for current
-consumers because no production caller hits the function)
+**agnosys version observed at filing:** 1.0.4
+**cyrius version active at filing:** 5.7.48
+**cyrius version with fix:** 5.9.20
+**Severity at filing:** LOW (latent runtime crash; benign for current
+consumers because no production caller hit the function)
 
 ## Summary
 
