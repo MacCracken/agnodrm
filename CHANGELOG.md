@@ -7,6 +7,101 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.14] — 2026-05-09
+
+**P(-1) hardening pass — security audit findings landed.**
+
+Completes the P(-1) hardening pass kicked off in 1.1.13.
+Steps 4-8 of CLAUDE.md's P(-1) discipline produced three
+new audit/review docs and four small source changes
+(F-7 / F-8 / F-9 + H-2 smoke). 0 critical / 0 high / 0
+medium severity findings; 3 LOW + 1 informational, all
+addressed in this release.
+
+### Added
+- `docs/audit/2026-05-09-cve-landscape.md` — P(-1) step 4.
+  Maps the 17 module-bound kernel interfaces to issue
+  classes and historical CVE shapes (audit netlink,
+  dm-verity, IMA, FUSE, LUKS, TPM, Landlock, seccomp,
+  secureboot, PAM, etc.). Source citations included
+  (kernel headers, UEFI Spec §8.2, TCG TPM 2.0 §27, etc.).
+- `docs/audit/2026-05-09-audit.md` — P(-1) step 5.
+  Security audit drilling into the 8 carry-forward items
+  from step 4. Findings F-7 through F-10 documented.
+- `docs/development/reviews/2026-05-09-internal-review.md`
+  — P(-1) step 3 (filed in 1.1.13; cross-referenced here).
+- `fuzz/fuse_parse.fcyr` — new fuzz harness for
+  `fuse_extract_field` covering octal-escape edge cases,
+  empty / one-field / multi-whitespace lines, adversarial
+  backslash density, 8 KB synthetic input, 500-iteration
+  stress (audit gate 9 now 7 harnesses, was 6).
+- `test_security` integration block extended with H-2
+  smoke: exercises `security_fs_rule_new` →
+  `security_fs_rule_path` round-trip and
+  `security_syscall_map_reset` rebuild path. Closes the
+  internal-review observation that 10 `security_*` fns
+  were DCE'd in agnosys's own self-test.
+- `test_fuse` extended with 3 F-7 escape assertions
+  (`\040` → space, `\134` → backslash, no-escape
+  passthrough).
+
+### Changed
+- **F-7** — `src/fuse.cyr` `fuse_extract_field`: now
+  unescapes 3-digit octal escapes (`\NNN`) per fstab(5)
+  conventions. Mounts whose fields contain spaces, tabs,
+  or backslashes (e.g. `mount.nfs //host/share with space
+  /mnt`) parse correctly instead of field-shifting.
+- **F-8** — `src/bootloader.cyr`
+  `_bootloader_danger_init`: extended the kernel-cmdline
+  danger-flag set with kernel-lockdown / module-signing
+  downgrades (`lockdown=none`, `lockdown=integrity`,
+  `module.sig_enforce=0`), LSM disable
+  (`selinux=0`, `apparmor=0`, `enforcing=0`, `audit=0`),
+  heap-hardening downgrades (`init_on_alloc=0`,
+  `init_on_free=0`, `slab_nomerge=0`), and
+  `efi=disable_early_pci_dma`.
+- **F-9** — `src/dmverity.cyr` `dmverity_format` and
+  `dmverity_status`: explicit
+  `store8(&outbuf + 4095, 0)` after each
+  `dmverity_run_capture` / `exec_capture` call.
+  Defense-in-depth — the `4095`-max contract on the
+  capture fn already reserved the trailing byte; this
+  makes the null-terminator explicit so a future
+  refactor of capture fns can't quietly invalidate the
+  `strlen(&outbuf)` reads downstream.
+- **`docs/development/api-surface-1.0.md`** — Summary
+  block refreshed to clarify the 1.0 baseline (556 fns)
+  vs current shipping (730 fns at 1.1.13). Per-fn prose
+  for the V1.1.x additions deferred pending a
+  `cyrius api-surface --update --prose` style generator
+  (Phase 8 doc-tooling slot).
+
+### Verified
+- All 10 audit gates pass under cyrius 5.10.19.
+- 247 / 247 integration tests pass (+5 vs 1.1.13:
+  3 fuse escape + 2 security smoke).
+- 30 benchmarks across 11 groups; bench parity unchanged
+  vs 1.1.13 baseline (33 timings re-recorded for
+  commit `c157062` post-source-change).
+- 7 fuzz harnesses (was 6: +`fuse_parse`).
+- API surface: ~733 public fns (+3 vs 1.1.13:
+  H-2 smoke exercises `security_fs_rule_new` and
+  `security_fs_rule_path`); all additive, no removals.
+- F-9 verification: byte-identical output of
+  `dmverity_format` / `dmverity_status` paths under
+  smoke; the explicit terminator is harmless when the
+  capture fn already terminated and definitive when
+  it doesn't.
+
+### Audit findings (P(-1) step 5)
+
+| ID | Severity | Status |
+|---|---|---|
+| F-7 | INFO | Closed in this release. |
+| F-8 | LOW | Closed in this release. |
+| F-9 | LOW | Closed in this release. |
+| F-10 | LOW (verified clean) | No code change required; recorded for audit traceability. |
+
 ## [1.1.13] — 2026-05-09
 
 **Doc reconciliation post-1.1.12 ship + P(-1) hardening

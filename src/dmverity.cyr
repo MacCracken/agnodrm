@@ -294,6 +294,10 @@ fn dmverity_format(data_device, hash_device, algorithm, salt) {
     memset(&outbuf, 0, 4096);
     var cap_res = dmverity_run_capture(args, &outbuf, 4095);
     if (is_err_result(cap_res) == 1) { return cap_res; }
+    # F-9: defense-in-depth null-terminator (4095 max bytes from
+    # capture, byte 4095 reserved as terminator for the strlen()
+    # below — explicit to defend against future capture-fn refactors).
+    store8(&outbuf + 4095, 0);
 
     # Parse root hash from output: look for "Root hash:" line
     var pos = 0;
@@ -397,6 +401,9 @@ fn dmverity_status(name) {
     var outbuf[4096];
     memset(&outbuf, 0, 4096);
     var n = exec_capture(args, &outbuf, 4095);
+    # F-9: defense-in-depth null-terminator (matches the
+    # dmverity_format pattern; reserves byte 4095 for terminator).
+    store8(&outbuf + 4095, 0);
 
     if (n <= 0) {
         # Not active

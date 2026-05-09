@@ -77,9 +77,47 @@ fn fuse_extract_field(line, linelen, field_idx) {
     var flen = pos - start;
     if (flen == 0) { return 0; }
 
+    # F-7 (1.1.14): /proc/mounts encodes embedded whitespace and control
+    # chars as 3-digit octal escapes (`\040` space, `\011` tab, `\012` LF,
+    # `\134` backslash) per fstab(5). The field-split loop above reads raw
+    # space/tab as separators, so unescaped values are already split into
+    # multiple fields by the kernel — but a quoted-style mount source can
+    # legitimately contain `\040` and similar that we want to render
+    # back as the literal byte in the heap-copied output.
     var out = alloc(flen + 1);
-    memcpy(out, line + start, flen);
-    store8(out + flen, 0);
+    var src_i = 0;
+    var dst_i = 0;
+    while (src_i < flen) {
+        var c0 = load8(line + start + src_i);
+        if (c0 == 92) {
+            if (src_i + 3 < flen) {
+                var d1 = load8(line + start + src_i + 1);
+                var d2 = load8(line + start + src_i + 2);
+                var d3 = load8(line + start + src_i + 3);
+                if (d1 >= 48) {
+                    if (d1 <= 55) {
+                        if (d2 >= 48) {
+                            if (d2 <= 55) {
+                                if (d3 >= 48) {
+                                    if (d3 <= 55) {
+                                        var v = (d1 - 48) * 64 + (d2 - 48) * 8 + (d3 - 48);
+                                        store8(out + dst_i, v);
+                                        dst_i = dst_i + 1;
+                                        src_i = src_i + 4;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        store8(out + dst_i, c0);
+        dst_i = dst_i + 1;
+        src_i = src_i + 1;
+    }
+    store8(out + dst_i, 0);
     return out;
 }
 

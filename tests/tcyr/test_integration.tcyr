@@ -141,6 +141,12 @@ fn test_security() {
     assert_eq(security_syscall_name_to_nr("xxx"), 0 - 1, "nr_miss");
     assert_eq(security_fs_rule_access(security_fs_rule_read_only("/t")), FS_READ_ONLY, "fs_ro");
     assert_eq(security_fs_rule_access(security_fs_rule_read_write("/t")), FS_READ_WRITE, "fs_rw");
+    # H-2 (1.1.14): exercise construct paths so the surface is integration-tested
+    # even when the runtime doesn't apply the policies (kavach's job).
+    var rule = security_fs_rule_new("/etc", FS_READ_ONLY);
+    assert(streq(security_fs_rule_path(rule), "/etc") == 1, "fs_path");
+    security_syscall_map_reset();
+    assert_eq(security_syscall_name_to_nr("read"), 0, "map_reset_rebuild");
     return 0;
 }
 
@@ -444,6 +450,16 @@ fn test_fuse() {
     var m = fuse_mount_new("/dev/fuse", "/mnt/data", "fuse.sshfs", "rw");
     assert(streq(fuse_mount_device(m), "/dev/fuse") == 1, "fm_d");
     assert(streq(fuse_mount_mountpoint(m), "/mnt/data") == 1, "fm_m");
+    # F-7 (1.1.14): /proc/mounts octal-escape unescape (\040 → space, etc.)
+    var line1 = "device /mnt/with\\040space type rw 0 0";
+    var f1 = fuse_extract_field(line1, strlen(line1), 1);
+    assert(streq(f1, "/mnt/with space") == 1, "esc_space");
+    var line2 = "src /mnt/path\\134escape ext4 rw 0 0";
+    var f2 = fuse_extract_field(line2, strlen(line2), 1);
+    assert(streq(f2, "/mnt/path\\escape") == 1, "esc_backslash");
+    var line3 = "src /no/escape ext4 rw 0 0";
+    var f3 = fuse_extract_field(line3, strlen(line3), 1);
+    assert(streq(f3, "/no/escape") == 1, "esc_none");
     return 0;
 }
 

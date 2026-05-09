@@ -2,13 +2,13 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-05-09 (1.1.13)
+**Last refresh:** 2026-05-09 (1.1.14)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.1.13** |
+| `VERSION` | **1.1.14** |
 | `cyrius.cyml [package].cyrius` | **5.10.19** |
 | Min Cyrius (consumer) | 5.10.19 |
 | Last cyrius bump | 5.10.18 → 5.10.19 (2026-05-09; closes the lib/process.cyr O_WRONLY syntax-check blocker that survived 5.10.18). Multi-step bump arc 5.9.27 → 5.10.19 covered: 5.10.6→.9 lib version-pinning + RFC 8259 §7 escaping; 5.10.14 stacked `#derive` fix; 5.10.16 api-surface scanner desync fix; 5.10.18 + 5.10.19 lib/process.cyr O_WRONLY fix. |
@@ -59,15 +59,15 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 
 | Category | Count | Where |
 |---|---|---|
-| Integration tests passed | **242 / 242** | `cyrius test` |
-| Integration assertions | 265 | `tests/tcyr/test_integration.tcyr` (audit-regression block added 1.0.2; 1.1.12 added 8 to_json round-trip assertions) |
-| Fuzz harnesses | 6 | `fuzz/audit_nlmsg.fcyr`, `fuzz/audit_reply.fcyr`, `fuzz/certpin_pin.fcyr`, `fuzz/journald_filter.fcyr`, `fuzz/luks_cipher.fcyr`, `fuzz/pam_config.fcyr` |
+| Integration tests passed | **247 / 247** | `cyrius test` |
+| Integration assertions | 270 | `tests/tcyr/test_integration.tcyr` (audit-regression block added 1.0.2; 1.1.12 added 8 to_json round-trip assertions; 1.1.14 added 5 — 3 fuse escape + 2 security smoke) |
+| Fuzz harnesses | 7 | `fuzz/audit_nlmsg.fcyr`, `fuzz/audit_reply.fcyr`, `fuzz/certpin_pin.fcyr`, `fuzz/fuse_parse.fcyr` (1.1.14), `fuzz/journald_filter.fcyr`, `fuzz/luks_cipher.fcyr`, `fuzz/pam_config.fcyr` |
 | Benchmarks | 30 (11 groups) | `tests/bcyr/bench_all.bcyr` |
 | Bench file (compare) | 1 | `tests/bcyr/bench_compare.bcyr` (Cyrius vs Rust port baseline) |
 
 ## Local Audit Gates (`scripts/audit.sh`)
 
-10 gates, all green at 1.1.12: syntax → API surface → capacity → build → smoke → tests → lint → vet → fuzz → benchmarks. Mirrors CI.
+10 gates, all green at 1.1.14: syntax → API surface → capacity → build → smoke → tests → lint → vet → fuzz → benchmarks. Mirrors CI.
 
 ## CI Workflow Status
 
@@ -113,7 +113,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
-| **1.1.13** | 2026-05-09 | Doc reconciliation post-1.1.12 ship + P(-1) hardening pass kicked off (audit clean baseline + bench-history baseline at commit `9ec6063`). CHANGELOG/state.md/roadmap.md cleaned up of stray 1.1.13-placeholder refs that never tagged; the actual 1.1.12 ship narrative folded back into `[1.1.12]`. No source changes since 1.1.12; tests + API surface unchanged. |
+| **1.1.14** | 2026-05-09 | P(-1) hardening pass — security audit findings landed. 0 critical / 0 high / 0 medium severity; 3 LOW + 1 informational, all closed. F-7 (`fuse_extract_field` octal-escape unescape), F-8 (bootloader cmdline danger-flag list extended with lockdown/sig_enforce/LSM-disable/heap-hardening flags), F-9 (`dmverity` outbuf explicit null-terminator). H-2 smoke + new `fuse_parse` fuzz harness. 247 tests (+5), 7 fuzz harnesses (+1). Adds `docs/audit/2026-05-09-cve-landscape.md` + `docs/audit/2026-05-09-audit.md` + `docs/development/reviews/2026-05-09-internal-review.md`. |
+| 1.1.13 | 2026-05-09 | Doc reconciliation post-1.1.12 ship + P(-1) hardening pass kicked off (audit clean baseline + bench-history baseline at commit `9ec6063`). CHANGELOG/state.md/roadmap.md cleaned up of stray 1.1.13-placeholder refs that never tagged; the actual 1.1.12 ship narrative folded back into `[1.1.12]`. No source changes since 1.1.12; tests + API surface unchanged. |
 | 1.1.12 | 2026-05-09 | V1.1.12 `#derive(Serialize)` — SHIPPED. Two derived serializers (`audit_status_to_json`, `ima_status_to_json` — all-numeric structs) using stacked `#derive(accessors)` + `#derive(Serialize)`. Five hand-rolled `_to_json` shims for cstring-bearing diagnostic structs (`mac_profile`, `dmverity_status`, `update_state`, `certpin_info`, `drm_verinfo`) — pattern: per-module `_<mod>_emit_cstr_or_null` helper handles null-or-quoted, mixed with `str_builder_add_int` for numerics. Closes a two-week investigation arc: original SIGILL was agnosys-side `./lib/` shadow (resolved 2026-05-08); three cyrius bugs filed and fixed during the arc — multi-derive (5.10.14), api-surface scanner (5.10.16), lib/process.cyr O_WRONLY (5.10.18 + 5.10.19). cyrius pin arc: 5.9.27 → 5.10.19. `./lib/` gitignored + `cyrius deps` moved before syntax check in CI (matches yukti/patra). Hand-rolls unwind cleanly when cyrius adds cstring `#derive(Serialize)` support |
 | 1.1.11 | 2026-05-07 | V1.1.11 slice migration — survey shows most `var buf[N]` sites aren't real slice candidates (tiny fmt bufs, kernel-ABI stack structs, one-shot syscall args, length-bounded `memeq`/`memcpy` walks). One representative site (`ima_get_status` rbuf newline counter) migrated to `slice<u8>` with bounds-checked indexing as the canonical pattern for future scalar-subscript parsers |
 | 1.1.10 | 2026-05-07 | V1.1.8 reopens — cyrius 5.9.27 implements aarch64 sub-8-byte struct field load codegen; the 1.1.9 revert is now itself reverted. Typed kernel-ABI structs + pointer-to-struct dot syntax build clean on both arches; resolved issue archived |
@@ -163,7 +164,8 @@ Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 - [x] V1.1.10 — V1.1.8 reopen (cyrius pin 5.9.25 → 5.9.27); both arches clean
 - [x] V1.1.11 — slice migration — most agnosys `var buf[N]` sites aren't real slice candidates (verification finding); one representative site migrated as the canonical pattern (`ima_get_status` rbuf newline counter)
 - [x] V1.1.12 — `#derive(Serialize)`. 2 derived serializers (`audit_status`, `ima_status` — both all-numeric) using stacked `#derive(accessors)` + `#derive(Serialize)` (cyrius 5.10.14+). 5 hand-rolled `_to_json` shims for cstring-bearing structs (`mac_profile`, `dmverity_status`, `update_state`, `certpin_info`, `drm_verinfo`) — pattern: per-module `_<mod>_emit_cstr_or_null` helper handles null-or-quoted, mixed with `str_builder_add_int` for numeric fields. Slot ran from 2026-05-07 deferral through 2026-05-09 ship; three cyrius issues filed and resolved during the arc: `2026-05-08-cyrius-derive-multi-stacking` (fixed 5.10.14), `2026-05-09-cyrius-api-surface-putc-brace-desync` (fixed 5.10.16), `lib/process.cyr O_WRONLY blocker` (fixed 5.10.18 + 5.10.19); plus the agnosys-side `./lib/` shadow root cause for the original SIGILL (resolved 2026-05-08). Pin arc: 5.9.27 → 5.10.19. `./lib/` gitignored, `cyrius deps` moved before syntax check in CI (matches yukti/patra). Issues directory empty; 9 issues in archive. Hand-rolls unwind cleanly when cyrius adds cstring `#derive(Serialize)` support.
-- [x] V1.1.13 — Doc reconciliation + P(-1) hardening kicked off. CHANGELOG/state.md/roadmap.md cleaned up of stray 1.1.13-placeholder refs that never tagged (folded back into the actual `[1.1.12]` ship narrative). P(-1) steps 1+2 done: audit clean baseline (10/10 gates, 242 tests, 152,880 B build) + bench-history baseline at commit `9ec6063` (33 timings recorded via `scripts/bench-history.sh`). Steps 3-9 (internal deep review, CVE landscape, security audit, additional tests/fuzz, post-review bench, doc audit) tracked as separate slot patches.
+- [x] V1.1.13 — Doc reconciliation + P(-1) hardening kicked off. CHANGELOG/state.md/roadmap.md cleaned up of stray 1.1.13-placeholder refs that never tagged (folded back into the actual `[1.1.12]` ship narrative). P(-1) steps 1+2 done: audit clean baseline (10/10 gates, 242 tests, 152,880 B build) + bench-history baseline at commit `9ec6063` (33 timings recorded via `scripts/bench-history.sh`).
+- [x] V1.1.14 — P(-1) hardening pass completed (steps 3-8). Internal deep review filed (3 hotspots — H-1/H-2/H-3 — all resolved or downgraded). CVE landscape doc filed for the 17 module-bound kernel interfaces. Security audit produced 4 findings (F-7 INFO, F-8/F-9/F-10 LOW); F-7/F-8/F-9 closed by source changes in this release, F-10 verified clean (no code change). New `fuse_parse.fcyr` fuzz harness (7 total). 247 integration tests (+5: 3 fuse escape + 2 security smoke). Post-review bench rerun: 30 benches stable, no regressions. No new ADRs earned (changes were mechanical, not architectural). Cyrius pin held at 5.10.19.
 
 Slot # = agnosys VERSION # for this minor cycle. Multi-version
 shipping arcs (1.1.2-1.1.4 ct_eq_bytes; 1.1.5-1.1.6 exhaustive
@@ -178,4 +180,4 @@ V1.2.0 (multi-profile `cyrius distlib`) follows. See [`roadmap.md`](roadmap.md) 
 
 ## Last Security Audit
 
-[`docs/audit/2026-04-26-audit.md`](../audit/2026-04-26-audit.md) — P(-1) hardening pass at 1.0.1.
+[`docs/audit/2026-05-09-audit.md`](../audit/2026-05-09-audit.md) — P(-1) hardening pass at 1.1.14. Pairs with [`2026-05-09-cve-landscape.md`](../audit/2026-05-09-cve-landscape.md) (CVE class survey) and [`reviews/2026-05-09-internal-review.md`](reviews/2026-05-09-internal-review.md) (internal deep review). 0 critical / 0 high / 0 medium findings; 3 LOW + 1 INFO closed in this release. Prior round: [`docs/audit/2026-04-26-audit.md`](../audit/2026-04-26-audit.md) at 1.0.1.
