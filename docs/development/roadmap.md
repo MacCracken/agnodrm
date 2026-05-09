@@ -345,7 +345,7 @@ stay as-is since their bounds are already explicit.
 
 **Rationale:** bounds-checked indexing on the agnosys parsers (audit netlink, fuse mount entries, EFI var bytes, IMA measurement records) closes the off-by-one class without a runtime cost we can't already amortize.
 
-#### V1.1.12 / V1.1.13 — `#derive(Serialize)` — SHIPPED 2026-05-09
+#### V1.1.12 — `#derive(Serialize)` ✅ SHIPPED 2026-05-09
 
 The slot's premise — `#derive(Serialize)` auto-generates a
 working `<struct>_to_json(ptr, sb)` per vidya
@@ -358,7 +358,7 @@ versions; PP_DERIVE Serialize codegen referenced helpers
 absent from the stubs. cyrius's PP_DERIVE was correct on
 both arches the entire time.
 
-agnosys 1.1.13 ships:
+agnosys 1.1.12 ships:
 
 - **2 derived serializers** via stacked `#derive`
   (cyrius 5.10.14+): `audit_status_to_json`,

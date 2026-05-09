@@ -9,70 +9,125 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.1.13] — 2026-05-09
 
-**V1.1.12 reopen — `#derive(Serialize)` for diagnostic
-status structs lands. Two-week investigation arc closes.**
+**Doc reconciliation post-1.1.12 ship + P(-1) hardening
+baseline.**
 
-The original V1.1.12 deferral was driven by an apparent
-SIGILL on aarch64 with `#derive(Serialize)`. Root-cause
-discovery 2026-05-08 (cyrius team's `pwd && ls -la lib/`
-diagnostic): agnosys's vendored `./lib/fnptr.cyr` (1,207 B
-stub) and `./lib/json.cyr` (4,389 B stub) were shadowing
-the v5.10.x stdlib's full versions (33,590 B / 49,537 B);
-PP_DERIVE Serialize codegen referenced helpers absent from
-the stubs, fixup wrote sentinel offsets, aarch64 binary
-hit SIGILL. The "x86 instructions in aarch64 body" disasm
-was sentinel-byte misread by the disassembler — not a real
+The V1.1.12 `#derive(Serialize)` slot tagged as 1.1.12
+on 2026-05-09 with all the work folded in (2 derived
+serializers + 5 hand-rolled `_to_json` shims + cyrius pin
+arc through 5.10.19 + ./lib/ gitignored). Pre-tag,
+CHANGELOG/state.md/roadmap.md had stray references to a
+1.1.13 placeholder version that was never minted; this
+release reconciles those documents to reflect the actual
+1.1.12 ship narrative, and starts the post-V1.1 P(-1)
+hardening pass per CLAUDE.md.
+
+### Changed
+- **`CHANGELOG.md`** — `[1.1.12]` entry rewritten with the
+  shipped narrative (was the deferred narrative); the
+  never-tagged `[1.1.13]` entry removed (its content was
+  the actual 1.1.12 ship narrative folded into `[1.1.12]`).
+- **`docs/development/state.md`** — Last refresh, VERSION
+  cell, cyrius pin (5.10.16 → 5.10.19), Recent Releases
+  table, V1.1.x slot list, integration assertion count,
+  audit-gates header all reconciled to the 1.1.12 ship.
+- **`docs/development/roadmap.md`** — `V1.1.12 / V1.1.13`
+  section header collapsed to `V1.1.12`; trailing
+  "agnosys 1.1.13 ships:" → "agnosys 1.1.12 ships:".
+
+### P(-1) hardening pass — kicked off
+- **Step 1 — Cleanliness:** `scripts/audit.sh` clean —
+  10/10 gates pass at cyrius 5.10.19, 242 / 242
+  integration tests, build 152,880 B, 30 benchmarks
+  green, no lint warnings, no API surface drift.
+- **Step 2 — Benchmark baseline:** 33 timings recorded for
+  commit `9ec6063` via `scripts/bench-history.sh`
+  (gitignored CSV + BENCHMARKS.md). Baseline for
+  comparison against any post-V1.1 perf work.
+
+Steps 3-9 (internal deep review, external research, security
+audit, additional tests/fuzz, post-review benchmarks,
+documentation audit) tracked as separate slot patches.
+
+### Verified
+- All 10 audit gates pass under cyrius 5.10.19.
+- 242 / 242 integration tests pass (no test changes since
+  1.1.12).
+- API surface clean: ~730 fns, no drift since 1.1.12.
+
+## [1.1.12] — 2026-05-09
+
+**V1.1.12 — `#derive(Serialize)` for diagnostic status
+structs ships. Two-week investigation arc closes.**
+
+The slot scoped generating JSON serializers for module
+diagnostic-status structs so consumers (kavach, sigil,
+argonaut) can dump agnosys state to log without writing
+per-module formatters. Initial filing 2026-05-07 deferred
+the slot on apparent aarch64 SIGILL with `#derive(Serialize)`;
+root-cause discovery 2026-05-08 (cyrius team's
+`pwd && ls -la lib/` diagnostic) was that agnosys's vendored
+`./lib/fnptr.cyr` (1,207 B stub) and `./lib/json.cyr`
+(4,389 B stub) were shadowing v5.10.x stdlib's full
+versions; PP_DERIVE codegen referenced helpers absent from
+the stubs, fixup wrote sentinel offsets, aarch64 binary hit
+SIGILL. The "x86 instructions in aarch64 body" disasm was
+sentinel-byte misread by the disassembler — not a real
 codegen bug. cyrius's PP_DERIVE was correct on both arches
 the entire time.
 
-A second blocker surfaced during the reopen attempt
-(`#derive(accessors)` + `#derive(Serialize)` couldn't stack);
-fixed upstream in cyrius 5.10.14. A third (api-surface
-scanner desyncing on `str_builder_putc(sb, 125)`) fixed in
-cyrius 5.10.16.
-
-V1.1.13 ships:
-- Two derived serializers via stacked `#derive`:
-  `audit_status_to_json` + `ima_status_to_json` (both
-  all-numeric structs).
-- Five hand-rolled `_to_json` shims for cstring-bearing
-  diagnostic structs: `mac_profile`, `dmverity_status`,
-  `update_state`, `certpin_info`, `drm_verinfo`. Each uses
-  a private `_<mod>_emit_cstr_or_null` helper:
-  null cstring → `"null"`, populated → JSON-quoted via
-  `str_builder_add_json_str(str_from(c))`. Hand-rolls
-  unwind cleanly when cyrius adds cstring `#derive(Serialize)`
-  support.
-- `[deps] stdlib` extended with `fnptr`, `json`, `tagged`
-  for Serialize helper resolution and the post-5.7.x
-  `tagged` → `result` split.
-- cyrius pin: 5.9.27 → 5.10.16 (multi-step bump tracked
-  durably in state.md; covered the release that fixed
-  multi-derive and the api-surface scanner).
-- `.gitignore` ignores `qemu_*.core` debug artifacts.
+Three follow-on cyrius issues filed and resolved during the
+arc:
+- `2026-05-08-cyrius-derive-multi-stacking` — stacked
+  `#derive(accessors)` + `#derive(Serialize)` only honored
+  one directive. Fixed cyrius 5.10.14.
+- `2026-05-09-cyrius-api-surface-putc-brace-desync` —
+  api-surface scanner mistook literal `125` (the byte for
+  `}`) for a brace. Fixed cyrius 5.10.16.
+- `lib/process.cyr O_WRONLY` syntax-check blocker — process
+  module used `O_WRONLY` from `lib/io.cyr` without
+  including it. Fixed cyrius 5.10.18 + 5.10.19.
 
 ### Added
 - `audit_status_to_json/2` + `audit_status_from_json/1` —
-  derive-emitted (numeric struct, both arches verified
-  on real Pi).
+  derive-emitted via stacked `#derive(accessors)` +
+  `#derive(Serialize)` (numeric struct, both arches
+  verified on real Pi).
 - `ima_status_to_json/2` + `ima_status_from_json/1` —
   derive-emitted.
 - `mac_profile_to_json/2`, `dmverity_status_to_json/2`,
   `update_state_to_json/2`, `certpin_info_to_json/2`,
   `drm_verinfo_to_json/2` — hand-rolled cstring-aware
-  serializers.
-- 6 new integration assertions covering populated and
+  serializers using a per-module
+  `_<mod>_emit_cstr_or_null` helper (null cstring →
+  `"null"`, populated → JSON-quoted via
+  `str_builder_add_json_str(str_from(c))`). Hand-rolls
+  unwind cleanly when cyrius adds cstring
+  `#derive(Serialize)` support.
+- 8 new integration assertions covering populated and
   null-field JSON output (242 tests total, was 234).
 
 ### Changed
-- **`cyrius.cyml`** — pin 5.9.27 → 5.10.16; `[deps] stdlib`
-  adds `fnptr`, `json`, `tagged`.
-- **`./lib/{fnptr,json,tagged}.cyr`** — refreshed to
-  v5.10.16 stdlib content via `cyrius deps`.
+- **`cyrius.cyml`** — pin 5.9.27 → 5.10.19; `[deps] stdlib`
+  extended from 9 to 18 modules (adds `fnptr`, `json`,
+  `tagged`, `assert`, `bench`, `fs`, `hashmap`, `net`,
+  `process`) for Serialize helper resolution + post-5.7.x
+  `tagged` → `result` split + closing the
+  vendored-stub-shadow issue once and for all.
+- **`.gitignore`** — `/lib/` added (matches yukti/patra
+  convention; vendored stdlib auto-populated by
+  `cyrius deps` from the version-pinned snapshot, no longer
+  committed).
+- **`.github/workflows/ci.yml`** — `Resolve dependencies`
+  step moved to immediately after `Verify toolchain` so
+  downstream steps (syntax check, api-surface, capacity,
+  fmt, lint, vet, dist verify, build) all see a fresh
+  `./lib/` populated at the pinned version.
 - **Workaround**: hand-rolled `_to_json` shims close with
-  `str_builder_add_cstr(sb, "}")` rather than the
-  idiomatic `str_builder_putc(sb, 125)`. Both forms work
-  on 5.10.16+ — keeping add_cstr to avoid diff churn.
+  `str_builder_add_cstr(sb, "}")` rather than the idiomatic
+  `str_builder_putc(sb, 125)` — both forms work on 5.10.16+,
+  keeping add_cstr to avoid diff churn from the
+  api-surface-scanner-bug-era code.
 
 ### Resolved & archived
 - `2026-05-07-cyrius-derive-serialize-incomplete.md` —
@@ -85,74 +140,16 @@ V1.1.13 ships:
   counting.
 
 ### Verified
-- All 10 audit gates pass under cyrius 5.10.16.
-- 242 / 242 integration tests pass (+8 vs 1.1.12: 6 to_json
-  assertions + the existing audit + ima coverage).
-- 30 benchmarks across 11 groups.
-- API surface: 730 public fns, +9 since 1.1.12 baseline
-  (7 to_json shims + 2 from_json from the derived structs);
-  all additive, no removals.
-- Real Pi (aarch64, Ubuntu 6.8.0-1053-raspi) build runs
-  clean for every #derive(Serialize) struct shape verified
-  during the investigation arc.
-
-## [1.1.12] — 2026-05-07
-
-**V1.1.12 — `#derive(Serialize)` deferred (upstream
-primitive-helper gap).**
-
-The slot scoped generating JSON serializers for module status
-structs (mac/audit/ima/secureboot/tpm/drm) via cyrius's
-`#derive(Serialize)` directive. Verification on cyrius 5.9.27:
-
-- For untyped fields (`struct s { x; y; z; }`) the generated
-  `s_to_json(...)` body is **empty** — emits 0 bytes to the
-  str_builder.
-- For typed fields (`struct s { x: i64; y: i64; z: i64; }`)
-  the body references `i64_to_json_sb(sb, n)` which is **not
-  in stdlib** — build warns "undefined function" and the
-  binary SIGILLs at runtime.
-
-No primitive-type Serialize helpers (`i64_to_json_sb`,
-`Str_to_json_sb`, etc.) ship in cyrius 5.9.27. The only
-`_to_json` fns in `~/.cyrius/lib` are sigil's domain-specific
-revocation-list serializers and yukti's hand-rolled
-`device_info_to_json` — both manual, not derive-driven.
-
-Filed
-[`docs/development/issues/2026-05-07-cyrius-derive-serialize-incomplete.md`](docs/development/issues/2026-05-07-cyrius-derive-serialize-incomplete.md);
-reproducer at `/tmp/cyrius-derive-serialize-incomplete/`. When
-the primitive Serialize helpers land upstream, V1.1.12
-re-opens.
-
-### Changed
-- **`docs/development/issues/2026-05-07-cyrius-derive-serialize-incomplete.md`**
-  — new upstream issue.
-- **`dist/agnosys.cyr`** regenerated (header v1.1.12 — no body
-  changes).
-
-### Verified
-- All 10 audit gates pass under cyrius 5.9.27, including the
-  aarch64 cross-build gate.
-- 234 / 234 integration tests pass.
+- All 10 audit gates pass under cyrius 5.10.19.
+- 242 / 242 integration tests pass (+8 vs 1.1.11: 8 to_json
+  round-trip assertions across the 7 diagnostic structs).
 - 30 benchmarks across 11 groups; bench parity unchanged.
-- API surface clean: 721 fns, no drift.
-
-### Why ship as deferral
-
-Hand-rolling JSON serializers (the yukti/sigil pattern) is
-the alternative route, but defeats the slot's "auto-generate"
-intent — and a future re-migration to working
-`#derive(Serialize)` would just unwind the hand-rolls. Defer
-matches V1.1.2's pattern (initial filing → upstream fix →
-reopen). The 5 V1.1.x slots that have shipped as deferred or
-verification (V1.1.1 defer, V1.1.2 ct_eq deferral, V1.1.7
-tagged-union verify, V1.1.11 slice survey, this one) reflect
-the broader observation that V1.1.x's roadmap was authored
-with more upstream lag in mind than actually exists — most
-of the language affordances were already shipped, and the
-ones that weren't (this `#derive(Serialize)` gap) get filed
-upstream and tracked there.
+- API surface: ~730 public fns, +9 since 1.1.11
+  (7 `_to_json` shims + 2 `_from_json` from the derived
+  structs); all additive, no removals.
+- Real Pi (aarch64, Ubuntu 6.8.0-1053-raspi) build runs
+  clean for every `#derive(Serialize)` struct shape
+  verified during the investigation arc.
 
 ## [1.1.11] — 2026-05-07
 
