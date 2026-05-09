@@ -308,6 +308,36 @@ fn certpin_info_new() {
     return c;
 }
 
+# Hand-rolled JSON serializer (cstring-pointer fields not yet
+# supported by cyrius #derive(Serialize)).
+fn certpin_info_to_json(c, sb) {
+    str_builder_add_cstr(sb, "{\"subject\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_subject(c));
+    str_builder_add_cstr(sb, ",\"issuer\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_issuer(c));
+    str_builder_add_cstr(sb, ",\"serial\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_serial(c));
+    str_builder_add_cstr(sb, ",\"not_before\":");
+    str_builder_add_int(sb, certpin_info_not_before(c));
+    str_builder_add_cstr(sb, ",\"not_after\":");
+    str_builder_add_int(sb, certpin_info_not_after(c));
+    str_builder_add_cstr(sb, ",\"sha256_fp\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_sha256_fp(c));
+    str_builder_add_cstr(sb, ",\"spki_sha256\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_spki_sha256(c));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _certpin_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
+
 # Check pin expiry against current time.
 # Returns 1 if expired, 0 if not expired or no expiry set.
 fn certpin_check_pin_expiry(entry, current_time) {

@@ -1509,6 +1509,30 @@ fn mac_profile_new(agent_type) {
     return p;
 }
 
+# Hand-rolled JSON serializer (cyrius v5.10.15 #derive(Serialize)
+# doesn't support cstring-pointer fields; cyrius issue filed
+# 2026-05-09). Mirrors the codegen output shape for migration when
+# cstring support lands.
+fn mac_profile_to_json(p, sb) {
+    str_builder_add_cstr(sb, "{\"agent_type\":");
+    _mac_emit_cstr_or_null(sb, mac_profile_agent_type(p));
+    str_builder_add_cstr(sb, ",\"selinux_ctx\":");
+    _mac_emit_cstr_or_null(sb, mac_profile_selinux_ctx(p));
+    str_builder_add_cstr(sb, ",\"apparmor_name\":");
+    _mac_emit_cstr_or_null(sb, mac_profile_apparmor_name(p));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _mac_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
+
 # ================================================================
 # Create a default agent MAC profile from an agent type string
 # Generates standard SELinux context and AppArmor profile name.
@@ -4366,6 +4390,32 @@ fn dmverity_status_new(name, is_active, is_verified, corruption_detected, root_h
     return s;
 }
 
+# Hand-rolled JSON serializer (mirrors #derive(Serialize) shape;
+# replace when cyrius cstring-pointer Serialize lands).
+fn dmverity_status_to_json(s, sb) {
+    str_builder_add_cstr(sb, "{\"name\":");
+    _dmverity_emit_cstr_or_null(sb, dmverity_status_name(s));
+    str_builder_add_cstr(sb, ",\"is_active\":");
+    str_builder_add_int(sb, dmverity_status_is_active(s));
+    str_builder_add_cstr(sb, ",\"is_verified\":");
+    str_builder_add_int(sb, dmverity_status_is_verified(s));
+    str_builder_add_cstr(sb, ",\"corruption_detected\":");
+    str_builder_add_int(sb, dmverity_status_corruption_detected(s));
+    str_builder_add_cstr(sb, ",\"root_hash\":");
+    _dmverity_emit_cstr_or_null(sb, dmverity_status_root_hash(s));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _dmverity_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
+
 # ================================================================
 # Validation helpers
 # ================================================================
@@ -6216,6 +6266,36 @@ fn certpin_info_new() {
     return c;
 }
 
+# Hand-rolled JSON serializer (cstring-pointer fields not yet
+# supported by cyrius #derive(Serialize)).
+fn certpin_info_to_json(c, sb) {
+    str_builder_add_cstr(sb, "{\"subject\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_subject(c));
+    str_builder_add_cstr(sb, ",\"issuer\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_issuer(c));
+    str_builder_add_cstr(sb, ",\"serial\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_serial(c));
+    str_builder_add_cstr(sb, ",\"not_before\":");
+    str_builder_add_int(sb, certpin_info_not_before(c));
+    str_builder_add_cstr(sb, ",\"not_after\":");
+    str_builder_add_int(sb, certpin_info_not_after(c));
+    str_builder_add_cstr(sb, ",\"sha256_fp\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_sha256_fp(c));
+    str_builder_add_cstr(sb, ",\"spki_sha256\":");
+    _certpin_emit_cstr_or_null(sb, certpin_info_spki_sha256(c));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _certpin_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
+
 # Check pin expiry against current time.
 # Returns 1 if expired, 0 if not expired or no expiry set.
 fn certpin_check_pin_expiry(entry, current_time) {
@@ -7382,6 +7462,34 @@ fn drm_verinfo_new(major, minor, patch, name, date, desc) {
     drm_verinfo_set_date(v, date);
     drm_verinfo_set_desc(v, desc);
     return v;
+}
+
+# Hand-rolled JSON serializer (cstring-pointer fields not yet
+# supported by cyrius #derive(Serialize)).
+fn drm_verinfo_to_json(v, sb) {
+    str_builder_add_cstr(sb, "{\"major\":");
+    str_builder_add_int(sb, drm_verinfo_major(v));
+    str_builder_add_cstr(sb, ",\"minor\":");
+    str_builder_add_int(sb, drm_verinfo_minor(v));
+    str_builder_add_cstr(sb, ",\"patch\":");
+    str_builder_add_int(sb, drm_verinfo_patch(v));
+    str_builder_add_cstr(sb, ",\"name\":");
+    _drm_emit_cstr_or_null(sb, drm_verinfo_name(v));
+    str_builder_add_cstr(sb, ",\"date\":");
+    _drm_emit_cstr_or_null(sb, drm_verinfo_date(v));
+    str_builder_add_cstr(sb, ",\"desc\":");
+    _drm_emit_cstr_or_null(sb, drm_verinfo_desc(v));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _drm_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
 }
 
 # ================================================================
@@ -9024,6 +9132,32 @@ fn update_state_new(slot, version) {
 # 1.0 API preservation — `set_rollback` (asymmetric) delegates
 # through `set_rollback_available`.
 fn update_state_set_rollback(s, val) { return update_state_set_rollback_available(s, val); }
+
+# Hand-rolled JSON serializer (cstring-pointer fields not yet
+# supported by cyrius #derive(Serialize)).
+fn update_state_to_json(s, sb) {
+    str_builder_add_cstr(sb, "{\"slot\":");
+    str_builder_add_int(sb, update_state_slot(s));
+    str_builder_add_cstr(sb, ",\"version\":");
+    _update_emit_cstr_or_null(sb, update_state_version(s));
+    str_builder_add_cstr(sb, ",\"pending\":");
+    str_builder_add_int(sb, update_state_pending(s));
+    str_builder_add_cstr(sb, ",\"rollback_available\":");
+    str_builder_add_int(sb, update_state_rollback_available(s));
+    str_builder_add_cstr(sb, ",\"boot_count\":");
+    str_builder_add_int(sb, update_state_boot_count(s));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _update_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
 
 # ================================================================
 # UpdateConfig struct — 7 fields * 8 = 56 bytes.

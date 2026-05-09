@@ -9,6 +9,7 @@ build/
 Thumbs.db
 core
 core.*
+qemu_*.core
 bench-history.csv
 BENCHMARKS.md
 .claude/

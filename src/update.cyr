@@ -390,6 +390,32 @@ fn update_state_new(slot, version) {
 # through `set_rollback_available`.
 fn update_state_set_rollback(s, val) { return update_state_set_rollback_available(s, val); }
 
+# Hand-rolled JSON serializer (cstring-pointer fields not yet
+# supported by cyrius #derive(Serialize)).
+fn update_state_to_json(s, sb) {
+    str_builder_add_cstr(sb, "{\"slot\":");
+    str_builder_add_int(sb, update_state_slot(s));
+    str_builder_add_cstr(sb, ",\"version\":");
+    _update_emit_cstr_or_null(sb, update_state_version(s));
+    str_builder_add_cstr(sb, ",\"pending\":");
+    str_builder_add_int(sb, update_state_pending(s));
+    str_builder_add_cstr(sb, ",\"rollback_available\":");
+    str_builder_add_int(sb, update_state_rollback_available(s));
+    str_builder_add_cstr(sb, ",\"boot_count\":");
+    str_builder_add_int(sb, update_state_boot_count(s));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _update_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
+
 # ================================================================
 # UpdateConfig struct — 7 fields * 8 = 56 bytes.
 # Field names match 1.0 getters: `url`/`slot_a`/`slot_b` (not the

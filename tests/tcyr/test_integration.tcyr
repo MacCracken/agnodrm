@@ -167,6 +167,10 @@ fn test_certpin() {
     var ci = certpin_info_new();
     certpin_info_set_subject(ci, "CN=test");
     assert(streq(certpin_info_subject(ci), "CN=test") == 1, "ci_sub");
+    var sb = str_builder_new();
+    certpin_info_to_json(ci, sb);
+    var json = str_builder_build(sb);
+    assert(str_eq_cstr(json, "{\"subject\":\"CN=test\",\"issuer\":null,\"serial\":null,\"not_before\":0,\"not_after\":0,\"sha256_fp\":null,\"spki_sha256\":null}") == 1, "ci_json");
     return 0;
 }
 
@@ -188,6 +192,12 @@ fn test_update() {
     assert(streq(update_slot_str(SLOT_B), "B") == 1, "sl_sb");
     assert(streq(update_phase_str(PHASE_DOWNLOADING), "Downloading") == 1, "ph_dl");
     assert(streq(update_phase_str(PHASE_COMPLETE), "Complete") == 1, "ph_ok");
+    var us = update_state_new(SLOT_A, "2026.5.1");
+    update_state_set_boot_count(us, 7);
+    var sb = str_builder_new();
+    update_state_to_json(us, sb);
+    var json = str_builder_build(sb);
+    assert(str_eq_cstr(json, "{\"slot\":1,\"version\":\"2026.5.1\",\"pending\":0,\"rollback_available\":0,\"boot_count\":7}") == 1, "us_json");
     return 0;
 }
 
@@ -289,6 +299,15 @@ fn test_mac() {
     assert(streq(mac_profile_selinux_ctx(p2), "user:role:type:level") == 1, "mp_se");
     mac_profile_set_apparmor_name(p2, "test-profile");
     assert(streq(mac_profile_apparmor_name(p2), "test-profile") == 1, "mp_aa");
+    var sb = str_builder_new();
+    mac_profile_to_json(p2, sb);
+    var json = str_builder_build(sb);
+    assert(str_eq_cstr(json, "{\"agent_type\":\"test\",\"selinux_ctx\":\"user:role:type:level\",\"apparmor_name\":\"test-profile\"}") == 1, "mp_json");
+    var p3 = mac_profile_new("min");
+    var sb3 = str_builder_new();
+    mac_profile_to_json(p3, sb3);
+    var json3 = str_builder_build(sb3);
+    assert(str_eq_cstr(json3, "{\"agent_type\":\"min\",\"selinux_ctx\":null,\"apparmor_name\":null}") == 1, "mp_json_null");
     return 0;
 }
 
@@ -308,6 +327,10 @@ fn test_dmverity() {
     assert(streq(dmverity_status_name(st), "test-vol") == 1, "vs_n");
     assert_eq(dmverity_status_is_active(st), 1, "vs_a");
     assert_eq(dmverity_status_corruption_detected(st), 0, "vs_c");
+    var sb = str_builder_new();
+    dmverity_status_to_json(st, sb);
+    var json = str_builder_build(sb);
+    assert(str_eq_cstr(json, "{\"name\":\"test-vol\",\"is_active\":1,\"is_verified\":1,\"corruption_detected\":0,\"root_hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}") == 1, "vs_json");
     return 0;
 }
 
@@ -438,6 +461,10 @@ fn test_drm() {
     assert_eq(drm_verinfo_patch(v), 3, "dv_pa");
     assert(streq(drm_verinfo_name(v), "amdgpu") == 1, "dv_n");
     assert(streq(drm_verinfo_desc(v), "AMD GPU") == 1, "dv_de");
+    var sb = str_builder_new();
+    drm_verinfo_to_json(v, sb);
+    var json = str_builder_build(sb);
+    assert(str_eq_cstr(json, "{\"major\":1,\"minor\":2,\"patch\":3,\"name\":\"amdgpu\",\"date\":\"20230101\",\"desc\":\"AMD GPU\"}") == 1, "dv_json");
     return 0;
 }
 

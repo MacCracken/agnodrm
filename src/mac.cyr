@@ -361,6 +361,30 @@ fn mac_profile_new(agent_type) {
     return p;
 }
 
+# Hand-rolled JSON serializer (cyrius v5.10.15 #derive(Serialize)
+# doesn't support cstring-pointer fields; cyrius issue filed
+# 2026-05-09). Mirrors the codegen output shape for migration when
+# cstring support lands.
+fn mac_profile_to_json(p, sb) {
+    str_builder_add_cstr(sb, "{\"agent_type\":");
+    _mac_emit_cstr_or_null(sb, mac_profile_agent_type(p));
+    str_builder_add_cstr(sb, ",\"selinux_ctx\":");
+    _mac_emit_cstr_or_null(sb, mac_profile_selinux_ctx(p));
+    str_builder_add_cstr(sb, ",\"apparmor_name\":");
+    _mac_emit_cstr_or_null(sb, mac_profile_apparmor_name(p));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _mac_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
+
 # ================================================================
 # Create a default agent MAC profile from an agent type string
 # Generates standard SELinux context and AppArmor profile name.

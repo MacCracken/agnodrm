@@ -109,6 +109,32 @@ fn dmverity_status_new(name, is_active, is_verified, corruption_detected, root_h
     return s;
 }
 
+# Hand-rolled JSON serializer (mirrors #derive(Serialize) shape;
+# replace when cyrius cstring-pointer Serialize lands).
+fn dmverity_status_to_json(s, sb) {
+    str_builder_add_cstr(sb, "{\"name\":");
+    _dmverity_emit_cstr_or_null(sb, dmverity_status_name(s));
+    str_builder_add_cstr(sb, ",\"is_active\":");
+    str_builder_add_int(sb, dmverity_status_is_active(s));
+    str_builder_add_cstr(sb, ",\"is_verified\":");
+    str_builder_add_int(sb, dmverity_status_is_verified(s));
+    str_builder_add_cstr(sb, ",\"corruption_detected\":");
+    str_builder_add_int(sb, dmverity_status_corruption_detected(s));
+    str_builder_add_cstr(sb, ",\"root_hash\":");
+    _dmverity_emit_cstr_or_null(sb, dmverity_status_root_hash(s));
+    str_builder_add_cstr(sb, "}");
+    return 0;
+}
+
+fn _dmverity_emit_cstr_or_null(sb, c) {
+    if (c == 0) {
+        str_builder_add_cstr(sb, "null");
+    } else {
+        str_builder_add_json_str(sb, str_from(c));
+    }
+    return 0;
+}
+
 # ================================================================
 # Validation helpers
 # ================================================================
