@@ -35,19 +35,12 @@ jobs:
       - name: Verify toolchain
         run: cc5 --version
 
-      - name: Syntax check
-        run: |
-          for f in src/*.cyr; do
-            cyrius check "$f"
-          done
-
-      - name: API surface check
-        run: scripts/check-api-surface.sh
-
-      - name: Capacity gate
-        run: cyrius capacity --check src/main.cyr
-
       - name: Resolve dependencies
+        # Must run before any step that resolves `include "lib/..."`
+        # (syntax check, api-surface, capacity, fmt, lint, vet, build).
+        # `./lib/` is gitignored — `cyrius deps` populates it from
+        # the version-pinned stdlib snapshot. Matches yukti/patra
+        # convention.
         run: cyrius deps
 
       - name: Verify dep hashes
@@ -60,6 +53,18 @@ jobs:
           else
             echo "::warning::cyrius.lock not committed — skipping hash verification"
           fi
+
+      - name: Syntax check
+        run: |
+          for f in src/*.cyr; do
+            cyrius check "$f"
+          done
+
+      - name: API surface check
+        run: scripts/check-api-surface.sh
+
+      - name: Capacity gate
+        run: cyrius capacity --check src/main.cyr
 
       - name: Format check
         # cyrius fmt <file> emits the formatted source to stdout; diff
