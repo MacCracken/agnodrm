@@ -1,8 +1,10 @@
 # Capacity Baseline
 
 > Snapshot of Cyrius compiler table utilization across representative agnosys
-> builds. Captured at **1.2.1** with **Cyrius 5.10.19**. Refreshed each minor
-> bump. The 85% gate (`cyrius capacity --check`) is enforced on every CI build.
+> builds. Captured at **1.2.3** with **Cyrius 5.10.19** (initial 1.2.1 capture
+> still holds — no source changes between 1.2.1 and 1.2.3). Refreshed each
+> minor bump. The 85% gate (`cyrius capacity --check`) is enforced on every
+> CI build.
 >
 > Note on table-size growth: Cyrius 5.10.x bumped several table ceilings vs the
 > original 1.0.0 baseline (`fixup_table` 16,384 → 262,144; `string_data` 262,144

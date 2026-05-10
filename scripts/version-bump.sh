@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bump version in VERSION file
+# Bump VERSION file. Agents and CI: STOP HERE — git operations
+# (commit / tag / push) are owned by the maintainer, not by any
+# automated process. See CLAUDE.md "Rules (Hard Constraints)".
 NEW_VERSION="${1:?Usage: $0 <new-version>}"
 
 echo "$NEW_VERSION" > VERSION
 
-echo "Bumped to $NEW_VERSION"
+echo "VERSION file updated to $NEW_VERSION."
 echo ""
-echo "Next steps:"
-echo "  git add VERSION"
-echo "  git commit -m 'release: $NEW_VERSION'"
-echo "  git tag $NEW_VERSION"
-echo "  git push origin main --tags"
+echo "Maintainer-only follow-up (NOT for agents):"
+echo "  - review the diff"
+echo "  - commit / tag / push at maintainer discretion"

@@ -7,6 +7,81 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.3] — 2026-05-10
+
+**V1.2.3 consumer integration CI + 1.2.1 doc cleanup carry-forward.**
+
+Skips 1.2.2 — that slot's deliverable (capability map per public fn)
+was folded into the 1.2.1 ship. Per the agnosys slot-rhythm
+convention (slot # = agnosys VERSION #), V1.2.3 (consumer
+integration CI) gets its own version.
+
+### Added
+- **`.github/workflows/consumer-integration.yml`** — V1.2.3 slot.
+  Nightly @ 06:00 UTC + `workflow_dispatch`. Runs in its own
+  workflow file; **NOT part of the primary build/test pipeline**
+  (failures are signal, not blocker — agnosys's own audit gates
+  remain authoritative for the tag).
+  - Per-job: checks out agnosys + the consumer; builds agnosys's
+    6 dist bundles (full + 5 profiles); vendors them into the
+    consumer's `lib/`; force-syncs the consumer's cyrius pin to
+    match agnosys's; runs the consumer's declared audit command.
+  - Initial matrix: kavach (`cyrius test`) + sigil
+    (`scripts/check.sh`) — highest-module-surface consumers per
+    the V1.2.3 spec. Expand the matrix once the pair runs cleanly
+    for a few cycles.
+  - On failure: auto-files a `consumer-break` issue here with
+    agnosys commit + cyrius pin + run log + triage checklist.
+    Dedups by title prefix — re-fires comment on the existing
+    issue rather than creating duplicates.
+  - Notification channel: GitHub Issues (the auto-filed
+    `consumer-break` ticket). No Slack / Discord wiring — repo
+    Issues is the canonical inbox.
+- **`docs/doc-health.md`** — living ledger of doc currency
+  (fresh / stale / read-through / evergreen / archive / open-
+  question buckets per tier). Mirrors the agnostik pattern,
+  agnosys-shaped tiers (root / project state / architecture /
+  ADRs / audit / reviews / issues / headliner). Refresh cadence
+  is opportunistic — touched when other docs are touched.
+
+### Changed
+- **`README.md`** — top-line block refreshed to 1.2.3 / Cyrius
+  5.10.19 / 730 fns / ~10 300 lines / ~153 KB binary / ~170 ms
+  compile (was 1.0.0 / Cyrius 5.2.0 / 556 fns / 291 KB / 460 ms).
+  Build section adds the 5 profile-bundle distlib commands.
+  Per-module example replaced with profile-bundle example +
+  5-bundle table. Quality gates: 10 → 11. Test/fuzz counts:
+  222 / 3 → 247 / 7. Docs section adds state.md, capability-map,
+  doc-health.
+- **`CONTRIBUTING.md`** — Cyrius prereq refreshed
+  ("pinned in cyrius.cyml; currently 5.10.19"); workflow has
+  11 gates + the new auto-gen scripts (`gen-api-surface-prose`,
+  `gen-capability-map`); commands table includes `cyrius deps`,
+  the 5 profile-bundle options, `cyrius build --aarch64`.
+  "Adding a Module" uses `[lib] modules` (per ADR-003) + profile
+  picker + freeze framing. Cyrius Conventions notes
+  `#derive(accessors)` adopted (V1.1.0); arch-gating on
+  `#ifdef CYRIUS_ARCH_<UPPER>` (NOT `#ifplat` — points at the
+  upstream-blocker ticket).
+- **`docs/development/capacity-baseline.md`** — re-captured at
+  1.2.3 baseline. 7 rows: live core demo + core profile +
+  4 core+profile combos + full bundle. 1.0.0 baseline preserved
+  as historical-comparison block. Highest util at 1.2.3: full
+  bundle 35% code_size, 30% fn_table — well under the 85% gate.
+- **`scripts/version-bump.sh`** — removed the auto-suggested
+  `git add` / `commit` / `tag` / `push` next-steps block that
+  was misleading agents. Replaced with an explicit
+  "Maintainer-only follow-up (NOT for agents)" framing per
+  CLAUDE.md hard-constraint § "do not commit or push".
+
+### Verified
+- All 11 audit gates pass under cyrius 5.10.19.
+- 247 / 247 integration tests pass (no test changes since 1.2.1).
+- 30 benchmarks across 11 groups; bench parity unchanged.
+- 7 fuzz harnesses.
+- API surface: 730 public fns, no drift since 1.2.1.
+- 6 dist bundles (full + 5 profiles) regenerated at 1.2.3 header.
+
 ## [1.2.1] — 2026-05-09
 
 **V1.2.2 capability map + Phase 8 doc-tooling + 3 upstream-blocker
