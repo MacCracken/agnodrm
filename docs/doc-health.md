@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — agnosys
 
-> **Last refresh**: 2026-05-10 (initial audit, paired with the 1.2.1 doc cleanup pass) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-05-10 (initial audit + 3-row cleanup, paired with the 1.2.1 doc cleanup pass) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`agnosys`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo cyrius pin/version drift lives in [`development/state.md`](development/state.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as docs change. Agnosys is the kernel-interface library every AGNOS component depends on — stale syscall / capability docs propagate downstream, so doc currency carries weight. The doc surface is moderate (~34 files) and most are load-bearing.
@@ -21,8 +21,8 @@ Pattern lifted from the agnostik ledger ([`agnostik/docs/doc-health.md`](https:/
 
 | Bucket | Count | What it means |
 |---|---|---|
-| ✅ **Fresh — touched in 1.1.13 → 1.2.1 cycle** | ~21 | state, roadmap, CHANGELOG, CLAUDE, architecture/overview, capability-map, api-surface (auto-gen), audit/2026-05-09-audit, audit/2026-05-09-cve-landscape, reviews/2026-05-09-internal-review, the 3 ADRs that shipped with 1.0.x, the 3 active issues, the 9 archived issues. |
-| 🟡 **Stale — refresh in place** | 3 | `README.md` (top-line stats still claim 1.0.0 / Cyrius 5.2.0 / 556 fns); `CONTRIBUTING.md` (Cyrius 5.2.0+, "10 gates"); `docs/development/capacity-baseline.md` (snapshot text says "Captured at 1.0.0 with Cyrius 5.2.0"). All easy refresh — values change, format stays. |
+| ✅ **Fresh — touched in 1.1.13 → 1.2.1 cycle** | ~24 | state, roadmap, CHANGELOG, CLAUDE, README, CONTRIBUTING, capacity-baseline (1.2.1 baseline added), architecture/overview, capability-map, api-surface (auto-gen), audit/2026-05-09-audit, audit/2026-05-09-cve-landscape, reviews/2026-05-09-internal-review, the 3 ADRs that shipped with 1.0.x, the 3 active issues, the 9 archived issues. |
+| 🟡 **Stale — refresh in place** | 0 | All 3 stale rows from the initial audit closed in this same pass: `README.md` top-line block + footprint refreshed to 1.2.1; `CONTRIBUTING.md` Cyrius pin / gate count / workflow steps refreshed; `docs/development/capacity-baseline.md` regenerated with 1.2.1 measurements (core + 4 profile combos + full bundle), 1.0.0 baseline preserved as historical-comparison block. |
 | 🟠 **Read-through outstanding** | 1 | `docs/SECURITY-NOTES.md` — last touched 2026-04-30. No version refs surfaced in the staleness scan, but a per-module re-read against current src/ would confirm the security considerations still match (V1.1.12/V1.1.14 added `_to_json` shims + the F-7..F-9 hardenings; some notes may be additive). |
 | 🔵 **Probably evergreen** | 3 | `CODE_OF_CONDUCT.md`, `LICENSE`, `SECURITY.md`. No version-tied claims. Re-read pass annually. |
 | 📦 **Archive / frozen by design** | ~5 | `docs/benchmarks-rust-vs-cyrius.md` (HEADLINER — Rust→Cyrius port comparison, point-in-time); `docs/audit/2026-04-26-audit.md` (1.0.1 P(-1) report); ADR-004 (1.1.x roadmap rework — historical decision); the issues `archive/` set (9 cyrius bugs that landed during V1.0/V1.1). |
@@ -45,10 +45,10 @@ Pattern lifted from the agnostik ledger ([`agnostik/docs/doc-health.md`](https:/
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `README.md` | 2026-04-30 | 🟡 Stale | Top-line block reads "**1.0.0 · Cyrius 5.2.0 · 20 modules · 556 public fns · 9 884 lines · 291 KB binary · 460 ms compile · 0 runtime deps**". Current is 1.2.1 / Cyrius 5.10.19 / 730 fns / ~152 KB binary. Footprint paragraph also says "fn_table 236 / 4096, code_size 50 KB" (1.0.0 numbers). Refresh in place. |
+| `README.md` | 2026-05-10 | ✅ Fresh | Top-line refreshed to 1.2.1 / Cyrius 5.10.19 / 730 fns / ~10 300 lines / 153 KB binary / ~170 ms compile. Adds profile-bundle table (V1.2.0+) + the 5-bundle distlib commands. Quality-gates section now lists 11 gates + 247 assertions + 7 fuzz harnesses. Docs section adds state.md, capability-map, doc-health. |
 | `CHANGELOG.md` | 2026-05-09 | ✅ Fresh | Source of truth for shipped work. Entries through 1.2.1. |
 | `CLAUDE.md` | 2026-05-09 | ✅ Fresh | Durable rules. P(-1) cleanliness gate count refreshed 10 → 11. |
-| `CONTRIBUTING.md` | 2026-04-30 | 🟡 Stale | Says "Cyrius toolchain **5.2.0+**" (current pin is **5.10.19**) and "Run `scripts/audit.sh` — **10 gates**" (now **11 gates**). Refresh prerequisites + workflow step. |
+| `CONTRIBUTING.md` | 2026-05-10 | ✅ Fresh | Cyrius prereq refreshed to "pinned in cyrius.cyml (currently 5.10.19)"; workflow step has 11 gates + the new auto-gen scripts (`gen-api-surface-prose.sh`, `gen-capability-map.sh`); commands table includes `cyrius deps`, the 5 profile-bundle options, and `cyrius build --aarch64`; "Adding a Module" section uses `[lib] modules` (per ADR-003) + profile picker; Cyrius Conventions notes `#derive(accessors)` adopted (V1.1.0) and points at the ifplat issue ticket. |
 | `SECURITY.md` | 2026-04-30 | 🔵 Evergreen | Reporting policy + scope. No version-tied claims; re-read annually. |
 | `CODE_OF_CONDUCT.md` | 2026-04-30 | 🔵 Evergreen | Standard. |
 | `VERSION` | 2026-05-09 | ✅ Fresh | `1.2.1` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}`. |
@@ -65,7 +65,7 @@ Pattern lifted from the agnostik ledger ([`agnostik/docs/doc-health.md`](https:/
 | `api-surface-1.0.md` | 2026-05-09 | ✅ Fresh — auto-gen | 1.0 baseline framing + auto-generated per-fn prose for all 730 current fns (was V1.0-era 556-fn curated snapshot). Regen via `scripts/gen-api-surface-prose.sh`. Audit gate 2 verifies staleness. |
 | `api-surface-1.0.snapshot` | 2026-05-09 | ✅ Fresh | Machine-checkable companion (one `module::fn/arity` line per public fn). Audit gate 2 diffs against this. |
 | `capability-map.md` | 2026-05-09 | ✅ Fresh — auto-gen | Per-module kernel-surface map (syscalls, sys_* wrappers, exec paths, fs paths) + per-profile rollup matching the V1.2.0 dist bundles. Regen via `scripts/gen-capability-map.sh`. Audit gate 3 verifies staleness. |
-| `capacity-baseline.md` | 2026-04-30 | 🟡 Stale | Header says "Captured at **1.0.0** with **Cyrius 5.2.0**". Current capacity (per state.md): fn_table 390 / 4096, identifiers 10260 / 131072, var_table 319 / 8192. Re-capture at 1.2.1 baseline + add a "post-1.0 sample" row. |
+| `capacity-baseline.md` | 2026-05-10 | ✅ Fresh | Re-captured at 1.2.1 baseline. New rows: `dist/agnosys-core.cyr` standalone + 4 core+profile combos (security/storage/trust/system) + full bundle. 1.0.0 baseline preserved as historical-comparison block. Highest util at 1.2.1: full bundle 35% code_size, 30% fn_table — well under the 85% gate. |
 
 ---
 
