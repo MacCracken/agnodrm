@@ -26,36 +26,32 @@ agnosys/
 │   ├── bootloader.cyr  systemd-boot/GRUB detection
 │   ├── update.cyr  atomic file ops, version compare
 │   └── fuse.cyr   FUSE mount parsing, mount/unmount
-├── lib/           vendored Cyrius stdlib (23 files)
-│   ├── alloc.cyr  heap allocator (brk) + arena
-│   ├── string.cyr  C string operations (strlen, memcpy, strstr, atoi, ...)
-│   ├── str.cyr    fat pointer strings {data, len} + builder
-│   ├── vec.cyr    dynamic array of i64
-│   ├── tagged.cyr  tagged unions (Ok/Err Result, Option)
-│   ├── hashmap.cyr  hash table (string keys, i64 values)
-│   ├── fmt.cyr    integer/hex/float formatting
-│   ├── syscalls.cyr  platform-switchable (Linux / AGNOS) syscall bindings
-│   ├── process.cyr  fork/exec/waitpid
-│   ├── fs.cyr     directory listing, path helpers
-│   ├── io.cyr     file I/O + locking
-│   ├── net.cyr    TCP/UDP sockets
-│   ├── bench.cyr  benchmark timing utilities
-│   └── ...
-├── dist/          bundled single-file distribution (cyrius distlib output)
-│   └── agnosys.cyr  all 20 modules concatenated in declared order
+├── lib/           vendored Cyrius stdlib — gitignored as of 1.1.12;
+│                  populated by `cyrius deps` from the cyrius.cyml
+│                  `[deps] stdlib` list (18 modules at v5.10.19).
+│                  Matches yukti/patra convention.
+├── dist/          bundled distributions (`cyrius distlib [profile]` output)
+│   ├── agnosys.cyr           all 20 modules concatenated (full bundle, ~329 KB)
+│   ├── agnosys-core.cyr      error + syscall + logging + arch peers (~23 KB)
+│   ├── agnosys-security.cyr  security + mac + audit + pam (~76 KB)
+│   ├── agnosys-storage.cyr   luks + dmverity + fuse (~49 KB)
+│   ├── agnosys-trust.cyr     tpm + ima + secureboot + certpin (~70 KB)
+│   └── agnosys-system.cyr    journald + bootloader + udev + drm + netns + update (~111 KB)
 ├── tests/
 │   ├── tcyr/      integration tests (.tcyr, discovered by `cyrius test`)
 │   └── bcyr/      benchmarks (.bcyr)
 ├── fuzz/          parser fuzz harnesses (.fcyr)
-├── scripts/       version-bump.sh, bench-history.sh, audit.sh, check-api-surface.sh
+├── scripts/       version-bump.sh, bench-history.sh, audit.sh,
+│                  check-api-surface.sh, gen-capability-map.sh,
+│                  gen-api-surface-prose.sh
 └── build/         compiled binaries (gitignored)
 ```
 
 ## Include Model
 
 Cyrius uses a flat include model. Each `.cyr` file is a module. Programs include
-the stdlib files they need from `lib/`, then either individual `src/` modules or
-the bundled `dist/agnosys.cyr`:
+the stdlib files they need from `lib/`, then either individual `src/` modules,
+the full bundled `dist/agnosys.cyr`, or one of the slim profile bundles:
 
 ```
 # Per-module (feature-gated)
@@ -66,14 +62,19 @@ include "src/security.cyr"
 
 # Full bundle (single include, all 20 modules)
 include "dist/agnosys.cyr"
+
+# Profile bundle (V1.2.0+) — slim subset for a specific domain
+include "dist/agnosys-core.cyr"      # core: error + syscall + logging
+include "dist/agnosys-security.cyr"  # security + mac + audit + pam
 ```
 
 Cyrius provides **include-once semantics** — a file included multiple times is
 only processed once. Each `src/` module includes its own dependencies, so
-modules can be syntax-checked independently with `cyrius check`. The
-`dist/agnosys.cyr` bundle is regenerated via `cyrius distlib`, which reads the
-`[build] modules` list from `cyrius.cyml` and concatenates in declared order
-(strips `include` directives so the output is self-contained).
+modules can be syntax-checked independently with `cyrius check`. Bundles
+(full + 5 profiles) are regenerated via `cyrius distlib [profile]`, which
+reads the `[lib]` / `[lib.<profile>]` `modules` list from `cyrius.cyml` and
+concatenates in declared order (strips `include` directives so the output
+is self-contained).
 
 ## Data Flow
 

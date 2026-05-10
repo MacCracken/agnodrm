@@ -88,7 +88,7 @@ Freeze prerequisites added pre-1.0 — closed:
 - [x] Capacity baseline — `docs/development/capacity-baseline.md`
 - [x] README consumer quickstart — per-module and full-bundle patterns documented
 - [x] Full naming sweep — 139 public fns renamed so every module carries its prefix. Zero remaining prefix outliers
-- [x] Local audit runner — `scripts/audit.sh` (10 gates, mirrors CI)
+- [x] Local audit runner — `scripts/audit.sh` (11 gates as of 1.2.1, mirrors CI)
 
 ## V1.0.1 — Toolchain Alignment & CI Hardening ✅ (2026-04-26)
 

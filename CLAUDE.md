@@ -101,7 +101,7 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 
 ### P(-1): Scaffold / Project Hardening (before any new features)
 
-1. **Cleanliness** — `scripts/audit.sh` clean; all 10 gates pass
+1. **Cleanliness** — `scripts/audit.sh` clean; all 11 gates pass
 2. **Benchmark baseline** — `cyrius bench tests/bcyr/bench_all.bcyr`, record CSV via `scripts/bench-history.sh`
 3. **Internal deep review** — gaps, optimizations, correctness, docs
 4. **External research** — domain completeness, best practices, current CVE landscape for the kernel interfaces we bind

@@ -147,7 +147,9 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 Full narrative in [`CHANGELOG.md`](../../CHANGELOG.md).
 
-## In-Flight Slots
+## Slot Ledger
+
+V1.1.x cycle and V1.2.0 / V1.2.1 are all shipped; nothing is currently in-flight. V1.2.3 (consumer integration CI) is the next concrete slot to pick up — see [`roadmap.md`](roadmap.md). The deferred V1.2.1 (`#ifplat`) and V1.2.4 (`#deprecated`) live in [`issues/`](issues/) as passive upstream-blocker tickets.
 
 **V1.1.0 — `#derive(accessors)` migration — SHIPPED 2026-05-06**
 
@@ -178,10 +180,6 @@ Slot # = agnosys VERSION # for this minor cycle. Multi-version
 shipping arcs (1.1.2-1.1.4 ct_eq_bytes; 1.1.5-1.1.6 exhaustive
 match; 1.1.8-1.1.10 multi-width struct fields) get one slot per
 shipped patch.
-- [ ] 1.1.4 — first-class tagged-union `Result` replacing lib/tagged.cyr
-- [ ] 1.1.5 — multi-width struct fields for kernel binary protocols
-- [ ] 1.1.6 — slice migration for syscall + parser buffers
-- [ ] 1.1.7 — `#derive(Serialize)` for diagnostic JSON output
 
 V1.2.0 (multi-profile `cyrius distlib`) shipped 2026-05-09. V1.2.1 ship batched V1.2.2 capability map + Phase 8 prose generator + audit-gate tightening + 3 upstream-blocker tickets (passive). V1.2.3 (consumer integration CI — nightly downstream rebuild + drift detection across the 13 consumers) is the next concrete slot. V1.2.1 (`#ifplat` cosmetic migration) and V1.2.4 (`#deprecated` adoption) remain held in the upstream-blocker tickets. See [`roadmap.md`](roadmap.md) for the full plan.
 
