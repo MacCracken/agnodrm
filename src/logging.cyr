@@ -30,7 +30,7 @@ enum LogLevel {
 
 var _log_level_cell = 0;
 
-fn log_init_from_env() {
+fn log_init_from_env(): i64 {
     if (_log_level_cell != 0) { return 0; }
     _log_level_cell = alloc(8);
     store64(_log_level_cell, LOG_INFO + 1);  # default: INFO
@@ -120,12 +120,12 @@ fn log_init_from_env() {
     return 0;
 }
 
-fn log_get_level() {
+fn log_get_level(): i64 {
     log_init_from_env();
     return load64(_log_level_cell) - 1;
 }
 
-fn log_set_level(level) {
+fn log_set_level(level): i64 {
     if (_log_level_cell == 0) {
         _log_level_cell = alloc(8);
     }
@@ -137,7 +137,7 @@ fn log_set_level(level) {
 # Log level prefix strings
 # ================================================================
 
-fn log_level_prefix(level) {
+fn log_level_prefix(level): i64 {
     if (level == LOG_TRACE) { return "[TRACE] "; }
     if (level == LOG_DEBUG) { return "[DEBUG] "; }
     if (level == LOG_INFO)  { return "[INFO]  "; }
@@ -152,7 +152,7 @@ fn log_level_prefix(level) {
 
 # Log a message at the given level to stderr (fd 2).
 # Does nothing if the current level is above the message level.
-fn log_msg(level, message) {
+fn log_msg(level, message): i64 {
     var current = log_get_level();
     if (level < current) { return 0; }
 
@@ -174,15 +174,15 @@ fn log_msg(level, message) {
 # Convenience functions
 # ================================================================
 
-fn log_trace(message) { return log_msg(LOG_TRACE, message); }
-fn log_debug(message) { return log_msg(LOG_DEBUG, message); }
-fn log_info(message)  { return log_msg(LOG_INFO, message); }
-fn log_warn(message)  { return log_msg(LOG_WARN, message); }
-fn log_error(message) { return log_msg(LOG_ERROR, message); }
+fn log_trace(message): i64 { return log_msg(LOG_TRACE, message); }
+fn log_debug(message): i64 { return log_msg(LOG_DEBUG, message); }
+fn log_info(message): i64 { return log_msg(LOG_INFO, message); }
+fn log_warn(message): i64 { return log_msg(LOG_WARN, message); }
+fn log_error(message): i64 { return log_msg(LOG_ERROR, message); }
 
 # Log a message with a key=value context pair.
 # Outputs: [LEVEL] message key=value
-fn log_msg_kv(level, message, key, value) {
+fn log_msg_kv(level, message, key, value): i64 {
     var current = log_get_level();
     if (level < current) { return 0; }
 

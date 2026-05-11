@@ -52,7 +52,7 @@ enum AppArmorState {
 # Returns Result: Ok(str_ptr) or Err(syserr)
 # ================================================================
 
-fn mac_read_file(path) {
+fn mac_read_file(path): i64 {
     var fd = sys_open(path, O_RDONLY, 0);
     if (fd < 0) {
         return err_io(0 - fd, path);
@@ -77,7 +77,7 @@ fn mac_read_file(path) {
 # Returns Result: Ok(0) or Err(syserr)
 # ================================================================
 
-fn mac_write_file(path, data, data_len) {
+fn mac_write_file(path, data, data_len): i64 {
     var fd = sys_open(path, O_WRONLY, 0);
     if (fd < 0) {
         var errno = 0 - fd;
@@ -100,7 +100,7 @@ fn mac_write_file(path, data, data_len) {
 # File existence check — returns 1 if file exists, 0 otherwise
 # ================================================================
 
-fn mac_file_exists(path) {
+fn mac_file_exists(path): i64 {
     # F_OK = 0
     return sys_access(path, 0) == 0;
 }
@@ -111,7 +111,7 @@ fn mac_file_exists(path) {
 # or MAC_NONE.
 # ================================================================
 
-fn mac_detect_system() {
+fn mac_detect_system(): i64 {
     var res = mac_read_file("/sys/kernel/security/lsm");
     if (is_err_result(res) == 1) {
         # Cannot read LSM file — no MAC detection available
@@ -145,7 +145,7 @@ fn mac_detect_system() {
 # SELINUX_PERMISSIVE, or SELINUX_DISABLED.
 # ================================================================
 
-fn mac_get_selinux_mode() {
+fn mac_get_selinux_mode(): i64 {
     var enforce_path = "/sys/fs/selinux/enforce";
 
     if (mac_file_exists(enforce_path) == 0) {
@@ -176,7 +176,7 @@ fn mac_get_selinux_mode() {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn mac_set_selinux_mode(mode) {
+fn mac_set_selinux_mode(mode): i64 {
     var enforce_path = "/sys/fs/selinux/enforce";
 
     if (mac_file_exists(enforce_path) == 0) {
@@ -203,7 +203,7 @@ fn mac_set_selinux_mode(mode) {
 # Returns Result: Ok(str_ptr) or Err.
 # ================================================================
 
-fn mac_get_selinux_context() {
+fn mac_get_selinux_context(): i64 {
     var path = "/proc/self/attr/current";
 
     if (mac_file_exists(path) == 0) {
@@ -227,7 +227,7 @@ fn mac_get_selinux_context() {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn mac_set_selinux_context(context, on_exec) {
+fn mac_set_selinux_context(context, on_exec): i64 {
     if (strlen(context) == 0) {
         return err_invalid_argument("SELinux context cannot be empty");
     }
@@ -266,7 +266,7 @@ fn mac_set_selinux_context(context, on_exec) {
 # or AA_UNCONFINED.
 # ================================================================
 
-fn mac_get_apparmor_mode() {
+fn mac_get_apparmor_mode(): i64 {
     var path = "/proc/self/attr/current";
 
     if (mac_file_exists(path) == 0) {
@@ -305,7 +305,7 @@ fn mac_get_apparmor_mode() {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn mac_apparmor_change_profile(profile_name) {
+fn mac_apparmor_change_profile(profile_name): i64 {
     var name_len = strlen(profile_name);
 
     if (name_len == 0) {
@@ -353,7 +353,7 @@ fn mac_apparmor_change_profile(profile_name) {
 #derive(accessors)
 struct mac_profile { agent_type; selinux_ctx; apparmor_name; }
 
-fn mac_profile_new(agent_type) {
+fn mac_profile_new(agent_type): i64 {
     var p = alloc(24);
     mac_profile_set_agent_type(p, agent_type);
     mac_profile_set_selinux_ctx(p, 0);
@@ -365,7 +365,7 @@ fn mac_profile_new(agent_type) {
 # doesn't support cstring-pointer fields; cyrius issue filed
 # 2026-05-09). Mirrors the codegen output shape for migration when
 # cstring support lands.
-fn mac_profile_to_json(p, sb) {
+fn mac_profile_to_json(p, sb): i64 {
     str_builder_add_cstr(sb, "{\"agent_type\":");
     _mac_emit_cstr_or_null(sb, mac_profile_agent_type(p));
     str_builder_add_cstr(sb, ",\"selinux_ctx\":");
@@ -376,7 +376,7 @@ fn mac_profile_to_json(p, sb) {
     return 0;
 }
 
-fn _mac_emit_cstr_or_null(sb, c) {
+fn _mac_emit_cstr_or_null(sb, c): i64 {
     if (c == 0) {
         str_builder_add_cstr(sb, "null");
     } else {
@@ -391,7 +391,7 @@ fn _mac_emit_cstr_or_null(sb, c) {
 # agent_type: null-terminated C string (e.g. "user", "service", "system")
 # ================================================================
 
-fn mac_default_profile(agent_type) {
+fn mac_default_profile(agent_type): i64 {
     var p = mac_profile_new(agent_type);
     var tlen = strlen(agent_type);
 
@@ -432,7 +432,7 @@ fn mac_default_profile(agent_type) {
 # Returns Result: Ok(0) on valid, Err on invalid.
 # ================================================================
 
-fn mac_profile_validate(profile, mac_system) {
+fn mac_profile_validate(profile, mac_system): i64 {
     var agent_type = mac_profile_agent_type(profile);
     if (agent_type == 0) {
         return err_invalid_argument("agent type cannot be empty");
@@ -494,7 +494,7 @@ fn mac_profile_validate(profile, mac_system) {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn mac_apply_agent_profile(agent_type, profiles, profile_count) {
+fn mac_apply_agent_profile(agent_type, profiles, profile_count): i64 {
     var mac_system = mac_detect_system();
 
     if (mac_system == MAC_NONE) {

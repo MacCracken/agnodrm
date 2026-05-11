@@ -35,7 +35,7 @@ enum BootloaderType {
 #derive(accessors)
 struct bootloader_entry { id; title; linux; initrd; options; is_default; version; }
 
-fn bootloader_entry_new() {
+fn bootloader_entry_new(): i64 {
     var e = alloc(56);
     memset(e, 0, 56);
     return e;
@@ -57,7 +57,7 @@ fn bootloader_entry_new() {
 #derive(accessors)
 struct bootloader_config { type; timeout; default_id; entries_arr; entry_count; }
 
-fn bootloader_config_new() {
+fn bootloader_config_new(): i64 {
     var c = alloc(40);
     memset(c, 0, 40);
     return c;
@@ -65,8 +65,8 @@ fn bootloader_config_new() {
 
 # 1.0 API preservation — `entries` getter + 3-arg `set_entries`
 # delegate through the derive-generated `entries_arr` accessors.
-fn bootloader_config_entries(c) { return bootloader_config_entries_arr(c); }
-fn bootloader_config_set_entries(c, arr, count) {
+fn bootloader_config_entries(c): i64 { return bootloader_config_entries_arr(c); }
+fn bootloader_config_set_entries(c, arr, count): i64 {
     bootloader_config_set_entries_arr(c, arr);
     bootloader_config_set_entry_count(c, count);
     return 0;
@@ -78,7 +78,7 @@ fn bootloader_config_set_entries(c, arr, count) {
 
 # Detect the installed bootloader by probing well-known paths.
 # Returns Result: Ok(BootloaderType constant).
-fn bootloader_detect() {
+fn bootloader_detect(): i64 {
     # Check for systemd-boot: /boot/efi/EFI/systemd
     var sd_path = "/boot/efi/EFI/systemd";
     var fd = sys_open(sd_path, 0x10000, 0);  # O_RDONLY | O_DIRECTORY
@@ -103,7 +103,7 @@ fn bootloader_detect() {
 # ================================================================
 
 # Helper: check if line starts with prefix (skipping leading whitespace)
-fn bootloader_line_starts_with(line, linelen, prefix) {
+fn bootloader_line_starts_with(line, linelen, prefix): i64 {
     var plen = strlen(prefix);
     # Skip leading whitespace
     var start = 0;
@@ -123,7 +123,7 @@ fn bootloader_line_starts_with(line, linelen, prefix) {
 
 # Extract the value after a key in a line (trim whitespace).
 # Returns heap string pointer.
-fn bootloader_extract_value(line, linelen, key_end_pos) {
+fn bootloader_extract_value(line, linelen, key_end_pos): i64 {
     var start = key_end_pos;
     # Skip whitespace
     while (start < linelen) {
@@ -141,7 +141,7 @@ fn bootloader_extract_value(line, linelen, key_end_pos) {
 
 # Parse loader.conf file contents.
 # Returns { timeout, default_id } as a 16-byte struct.
-fn bootloader_parse_loader_conf(text) {
+fn bootloader_parse_loader_conf(text): i64 {
     var result = alloc(16);
     store64(result, 5);  # default timeout: 5 seconds
     store64(result + 8, 0);  # default_id: null
@@ -229,7 +229,7 @@ fn bootloader_parse_loader_conf(text) {
 # result_arr: pre-allocated array of BootEntry pointers.
 # max_entries: capacity.
 # Returns Result: Ok(count) or Err.
-fn bootloader_list_boot_entries(result_arr, max_entries) {
+fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     # Use bootctl list (systemd-boot) as it provides structured output
     var cmd = "bootctl";
     var argv = alloc(16);
@@ -251,7 +251,7 @@ fn bootloader_list_boot_entries(result_arr, max_entries) {
 
 # Parse bootctl list output (simplified).
 # Each entry block starts with a line containing "title:" or "id:".
-fn bootloader_parse_bootctl_list(text, result_arr, max_entries) {
+fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
     var count = 0;
     var current = 0;
     var textlen = strlen(text);
@@ -330,7 +330,7 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries) {
 # Dangerous command-line tokens that must be rejected.
 # We check for these as substrings (case-insensitive matching via lowercase).
 
-fn bootloader_is_dangerous_token(text, textlen, token) {
+fn bootloader_is_dangerous_token(text, textlen, token): i64 {
     var tlen = strlen(token);
     if (tlen > textlen) { return 0; }
     var i = 0;
@@ -354,9 +354,9 @@ fn bootloader_is_dangerous_token(text, textlen, token) {
 
 var _bootloader_danger_map = 0;
 
-fn bootloader_danger_reset() { _bootloader_danger_map = 0; return 0; }
+fn bootloader_danger_reset(): i64 { _bootloader_danger_map = 0; return 0; }
 
-fn _bootloader_danger_init() {
+fn _bootloader_danger_init(): i64 {
     if (_bootloader_danger_map != 0) { return 0; }
     _bootloader_danger_map = map_new();
     # Single-user / shell-escape patterns
@@ -388,7 +388,7 @@ fn _bootloader_danger_init() {
 
 # Validate kernel command-line parameters.
 # Returns Result: Ok(0) if valid, Err if dangerous or malformed.
-fn bootloader_validate_kernel_cmdline(options) {
+fn bootloader_validate_kernel_cmdline(options): i64 {
     if (options == 0) {
         return err_invalid_argument("kernel cmdline is null");
     }
@@ -446,7 +446,7 @@ fn bootloader_validate_kernel_cmdline(options) {
 }
 
 # Bootloader type to string.
-fn bootloader_type_str(bt) {
+fn bootloader_type_str(bt): i64 {
     if (bt == BOOT_SYSTEMD_BOOT) { return "systemd-boot"; }
     if (bt == BOOT_GRUB2) { return "GRUB2"; }
     return "unknown";

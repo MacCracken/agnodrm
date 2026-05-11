@@ -65,13 +65,13 @@ struct luks_config {
     pbkdf;
 }
 
-fn luks_config_alloc() {
+fn luks_config_alloc(): i64 {
     var c = alloc(72);
     memset(c, 0, 72);
     return c;
 }
 
-fn luks_config_set_core(c, name, backing_path, size_mb, mount_point, filesystem) {
+fn luks_config_set_core(c, name, backing_path, size_mb, mount_point, filesystem): i64 {
     luks_config_set_name(c, name);
     luks_config_set_backing_path(c, backing_path);
     luks_config_set_size_mb(c, size_mb);
@@ -80,7 +80,7 @@ fn luks_config_set_core(c, name, backing_path, size_mb, mount_point, filesystem)
     return c;
 }
 
-fn luks_config_set_crypto(c, cipher_algo, cipher_mode, key_size_bits, pbkdf) {
+fn luks_config_set_crypto(c, cipher_algo, cipher_mode, key_size_bits, pbkdf): i64 {
     luks_config_set_cipher_algo(c, cipher_algo);
     luks_config_set_cipher_mode(c, cipher_mode);
     luks_config_set_key_size_bits(c, key_size_bits);
@@ -89,7 +89,7 @@ fn luks_config_set_crypto(c, cipher_algo, cipher_mode, key_size_bits, pbkdf) {
 }
 
 # Create a default config with sensible defaults (AES-XTS, 512-bit, Argon2id)
-fn luks_config_default(name, backing_path, mount_point) {
+fn luks_config_default(name, backing_path, mount_point): i64 {
     var c = luks_config_alloc();
     luks_config_set_core(c, name, backing_path, LUKS_DEFAULT_SIZE_MB, mount_point, LUKS_FS_EXT4);
     luks_config_set_crypto(c, "aes", "xts-plain64", LUKS_DEFAULT_KEY_BITS, LUKS_PBKDF_ARGON2ID);
@@ -100,21 +100,21 @@ fn luks_config_default(name, backing_path, mount_point) {
 # Filesystem string helpers
 # ================================================================
 
-fn luks_fs_as_str(fs) {
+fn luks_fs_as_str(fs): i64 {
     if (fs == LUKS_FS_EXT4) { return "ext4"; }
     if (fs == LUKS_FS_XFS) { return "xfs"; }
     if (fs == LUKS_FS_BTRFS) { return "btrfs"; }
     return "ext4";
 }
 
-fn luks_fs_mkfs_cmd(fs) {
+fn luks_fs_mkfs_cmd(fs): i64 {
     if (fs == LUKS_FS_EXT4) { return "/usr/sbin/mkfs.ext4"; }
     if (fs == LUKS_FS_XFS) { return "/usr/sbin/mkfs.xfs"; }
     if (fs == LUKS_FS_BTRFS) { return "/usr/sbin/mkfs.btrfs"; }
     return "/usr/sbin/mkfs.ext4";
 }
 
-fn luks_pbkdf_as_str(pbkdf) {
+fn luks_pbkdf_as_str(pbkdf): i64 {
     if (pbkdf == LUKS_PBKDF_ARGON2ID) { return "argon2id"; }
     if (pbkdf == LUKS_PBKDF_PBKDF2) { return "pbkdf2"; }
     return "argon2id";
@@ -125,7 +125,7 @@ fn luks_pbkdf_as_str(pbkdf) {
 # ================================================================
 
 # Check if a byte is alphanumeric, dash, or underscore
-fn luks_is_name_char(ch) {
+fn luks_is_name_char(ch): i64 {
     if (ch >= 48 && ch <= 57) { return 1; }   # 0-9
     if (ch >= 65 && ch <= 90) { return 1; }   # A-Z
     if (ch >= 97 && ch <= 122) { return 1; }  # a-z
@@ -135,7 +135,7 @@ fn luks_is_name_char(ch) {
 }
 
 # Validate a LuksConfig. Returns Ok(0) or Err.
-fn luks_config_validate(config) {
+fn luks_config_validate(config): i64 {
     var name = luks_config_name(config);
     var namelen = strlen(name);
 
@@ -187,7 +187,7 @@ fn luks_config_validate(config) {
 
 # Generate a random key of `size` bytes. Returns Ok(ptr) or Err.
 # The returned pointer points to `size` bytes of random data.
-fn luks_generate_key(size) {
+fn luks_generate_key(size): i64 {
     if (size == 0) {
         return err_invalid_argument("Key size must be > 0");
     }
@@ -211,7 +211,7 @@ fn luks_generate_key(size) {
 }
 
 # Zeroize key material in memory
-fn luks_zeroize_key(key_ptr, size) {
+fn luks_zeroize_key(key_ptr, size): i64 {
     memset(key_ptr, 0, size);
     return 0;
 }
@@ -227,7 +227,7 @@ fn luks_zeroize_key(key_ptr, size) {
 # rejected. Reject is case-sensitive vs cryptsetup conventions; the redundant
 # "null" substring rejection catches case variants like "Null" / "NULL".
 
-fn _luks_algo_allowed(algo) {
+fn _luks_algo_allowed(algo): i64 {
     if (streq(algo, "aes") == 1) { return 1; }
     if (streq(algo, "serpent") == 1) { return 1; }
     if (streq(algo, "twofish") == 1) { return 1; }
@@ -235,7 +235,7 @@ fn _luks_algo_allowed(algo) {
     return 0;
 }
 
-fn _luks_mode_allowed(mode) {
+fn _luks_mode_allowed(mode): i64 {
     if (streq(mode, "xts-plain64") == 1) { return 1; }
     if (streq(mode, "cbc-plain64") == 1) { return 1; }
     if (streq(mode, "xts-essiv:sha256") == 1) { return 1; }
@@ -245,7 +245,7 @@ fn _luks_mode_allowed(mode) {
 
 # Case-insensitive substring search for "null" — catches null, Null, NULL,
 # cipher_null, ciphernull, etc. used in v2.8.1-pre cryptsetup attacks.
-fn _luks_contains_null_ci(s) {
+fn _luks_contains_null_ci(s): i64 {
     var slen = strlen(s);
     if (slen < 4) { return 0; }
     var i = 0;
@@ -267,7 +267,7 @@ fn _luks_contains_null_ci(s) {
 # Validate that (algo, mode) names a safe cipher pairing.
 # Rejects: empty strings, anything containing "null" (any case), any algo or
 # mode not on the allowlist. Returns Ok(0) or Err.
-fn luks_validate_cipher(algo, mode) {
+fn luks_validate_cipher(algo, mode): i64 {
     if (algo == 0) { return err_invalid_argument("LUKS cipher algo is null pointer"); }
     if (mode == 0) { return err_invalid_argument("LUKS cipher mode is null pointer"); }
     if (strlen(algo) == 0) { return err_invalid_argument("LUKS cipher algo is empty"); }
@@ -291,7 +291,7 @@ fn luks_validate_cipher(algo, mode) {
 # Build cipher string for cryptsetup (e.g., "aes-xts-plain64")
 # ================================================================
 
-fn luks_cipher_str(config) {
+fn luks_cipher_str(config): i64 {
     var algo = luks_config_cipher_algo(config);
     var mode = luks_config_cipher_mode(config);
     var alen = strlen(algo);
@@ -316,7 +316,7 @@ fn luks_cipher_str(config) {
 # prediction; the O_EXCL | O_NOFOLLOW flags in luks_write_keyfile defeat
 # symlink races.
 # Returns Ok(path) on success or Err if getrandom fails.
-fn luks_keyfile_path() {
+fn luks_keyfile_path(): i64 {
     var pid = sys_getpid();
     var pid_buf[24];
     var pid_len = fmt_int_buf(pid, &pid_buf);
@@ -358,7 +358,7 @@ fn luks_keyfile_path() {
 # (CVE-2025-6020 / pam_namespace symlink-race class). 0600 mode means only
 # the creating user can read.
 # Returns Ok(keyfile_path) or Err.
-fn luks_write_keyfile(key_ptr, key_len) {
+fn luks_write_keyfile(key_ptr, key_len): i64 {
     var path_res = luks_keyfile_path();
     if (is_err_result(path_res) == 1) { return path_res; }
     var keyfile = payload(path_res);
@@ -383,7 +383,7 @@ fn luks_write_keyfile(key_ptr, key_len) {
 # ================================================================
 
 # Helper: build argv vec and run with exec_capture, return Ok(bytes_read) or Err
-fn luks_run_capture(args, buf, buflen) {
+fn luks_run_capture(args, buf, buflen): i64 {
     var n = exec_capture(args, buf, buflen);
     if (n < 0) {
         return err_unknown("command execution failed");
@@ -392,7 +392,7 @@ fn luks_run_capture(args, buf, buflen) {
 }
 
 # Helper: build argv vec and run, return Ok(exit_code) or Err
-fn luks_run_checked(args) {
+fn luks_run_checked(args): i64 {
     var rc = exec_vec(args);
     if (rc != 0) {
         return err_unknown("command failed with non-zero exit");
@@ -404,7 +404,7 @@ fn luks_run_checked(args) {
 # Steps: 1) fallocate backing file 2) losetup 3) cryptsetup luksFormat
 # key_ptr: pointer to key bytes, key_len: key length
 # Returns Ok(loop_device_str) or Err.
-fn luks_format(config, key_ptr, key_len) {
+fn luks_format(config, key_ptr, key_len): i64 {
     var res = luks_config_validate(config);
     if (is_err_result(res) == 1) { return res; }
 
@@ -494,7 +494,7 @@ fn luks_format(config, key_ptr, key_len) {
 # Open (unlock) a LUKS volume. Maps to /dev/mapper/{name}.
 # key_ptr/key_len: key material.
 # Returns Ok(mapper_path_ptr) or Err.
-fn luks_open(config, key_ptr, key_len) {
+fn luks_open(config, key_ptr, key_len): i64 {
     var res = luks_config_validate(config);
     if (is_err_result(res) == 1) { return res; }
 
@@ -556,7 +556,7 @@ fn luks_open(config, key_ptr, key_len) {
 # Close (lock) a LUKS volume. Closes the dm-crypt mapping.
 # name: volume name (string pointer).
 # Returns Ok(0) or Err.
-fn luks_close(name) {
+fn luks_close(name): i64 {
     if (strlen(name) == 0) {
         return err_invalid_argument("Volume name cannot be empty");
     }
@@ -588,7 +588,7 @@ fn luks_close(name) {
 # device: path to device (e.g., /dev/mapper/name)
 # filesystem: LUKS_FS_EXT4 / LUKS_FS_XFS / LUKS_FS_BTRFS
 # Returns Ok(0) or Err.
-fn luks_mkfs(device, filesystem) {
+fn luks_mkfs(device, filesystem): i64 {
     var cmd = luks_fs_mkfs_cmd(filesystem);
 
     var args = vec_new();
@@ -609,7 +609,7 @@ fn luks_mkfs(device, filesystem) {
 # mount_point: path to mount directory
 # filesystem: LUKS_FS_* constant
 # Returns Ok(0) or Err.
-fn luks_mount(device, mount_point, filesystem) {
+fn luks_mount(device, mount_point, filesystem): i64 {
     # Create mount point directory
     var mk_args = vec_new();
     vec_push(mk_args, "/usr/bin/mkdir");
@@ -631,7 +631,7 @@ fn luks_mount(device, mount_point, filesystem) {
 
 # Unmount a mount point.
 # Returns Ok(0) or Err.
-fn luks_unmount(mount_point) {
+fn luks_unmount(mount_point): i64 {
     var args = vec_new();
     vec_push(args, "/usr/bin/umount");
     vec_push(args, mount_point);

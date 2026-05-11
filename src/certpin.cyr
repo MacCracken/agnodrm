@@ -33,7 +33,7 @@ enum CertPinResult {
 #derive(accessors)
 struct certpin_entry { host; pins_arr; pin_count; backups_arr; backup_count; expires; }
 
-fn certpin_entry_new(host, expires) {
+fn certpin_entry_new(host, expires): i64 {
     var e = alloc(48);
     certpin_entry_set_host(e, host);
     certpin_entry_set_pins_arr(e, 0);
@@ -46,14 +46,14 @@ fn certpin_entry_new(host, expires) {
 
 # 1.0 API preservation — `pins`/`backups` getters + 3-arg
 # `set_pins`/`set_backups` setters delegate through derive accessors.
-fn certpin_entry_pins(e) { return certpin_entry_pins_arr(e); }
-fn certpin_entry_backups(e) { return certpin_entry_backups_arr(e); }
-fn certpin_entry_set_pins(e, pins_ptr, count) {
+fn certpin_entry_pins(e): i64 { return certpin_entry_pins_arr(e); }
+fn certpin_entry_backups(e): i64 { return certpin_entry_backups_arr(e); }
+fn certpin_entry_set_pins(e, pins_ptr, count): i64 {
     certpin_entry_set_pins_arr(e, pins_ptr);
     certpin_entry_set_pin_count(e, count);
     return 0;
 }
-fn certpin_entry_set_backups(e, backups_ptr, count) {
+fn certpin_entry_set_backups(e, backups_ptr, count): i64 {
     certpin_entry_set_backups_arr(e, backups_ptr);
     certpin_entry_set_backup_count(e, count);
     return 0;
@@ -66,7 +66,7 @@ fn certpin_entry_set_backups(e, backups_ptr, count) {
 #derive(accessors)
 struct certpin_set { entries_arr; count; enforce; }
 
-fn certpin_set_new(enforce) {
+fn certpin_set_new(enforce): i64 {
     var s = alloc(24);
     certpin_set_set_entries_arr(s, 0);
     certpin_set_set_count(s, 0);
@@ -75,8 +75,8 @@ fn certpin_set_new(enforce) {
 }
 
 # 1.0 API preservation
-fn certpin_set_entries(s) { return certpin_set_entries_arr(s); }
-fn certpin_set_set_entries(s, entries_ptr, count) {
+fn certpin_set_entries(s): i64 { return certpin_set_entries_arr(s); }
+fn certpin_set_set_entries(s, entries_ptr, count): i64 {
     certpin_set_set_entries_arr(s, entries_ptr);
     certpin_set_set_count(s, count);
     return 0;
@@ -89,7 +89,7 @@ fn certpin_set_set_entries(s, entries_ptr, count) {
 # Validate a base64-encoded SHA-256 pin string.
 # A valid pin is 44 characters of base64 (32 bytes -> 44 chars with padding).
 # Returns 1 if valid, 0 if invalid.
-fn certpin_validate_pin_format(pin) {
+fn certpin_validate_pin_format(pin): i64 {
     var len = strlen(pin);
     # SHA-256 base64: ceil(32/3)*4 = 44 chars
     if (len != 44) { return 0; }
@@ -122,13 +122,13 @@ fn certpin_validate_pin_format(pin) {
 # This fn stays as the cstring wrapper because pin storage flows
 # through cstring pointers; pin length is non-secret in agnosys
 # (44-char base64 SHA-256, fixed by spec).
-fn certpin_ct_streq(a, b) {
+fn certpin_ct_streq(a, b): i64 {
     return ct_eq_bytes_lens(a, strlen(a), b, strlen(b));
 }
 
 # Find the pin entry for a given host in the pin set.
 # Returns entry pointer or 0 if not found.
-fn certpin_find_entry(pin_set, host) {
+fn certpin_find_entry(pin_set, host): i64 {
     var entries = certpin_set_entries(pin_set);
     var count = certpin_set_count(pin_set);
     var i = 0;
@@ -147,7 +147,7 @@ fn certpin_find_entry(pin_set, host) {
 # actual_pin: the base64-encoded SPKI SHA-256 hash from the presented cert.
 # current_time: unix timestamp (0 to skip expiry check).
 # Returns a CertPinResult constant.
-fn certpin_verify_pin(host, actual_pin, pin_set, current_time) {
+fn certpin_verify_pin(host, actual_pin, pin_set, current_time): i64 {
     var entry = certpin_find_entry(pin_set, host);
     if (entry == 0) {
         return CERTPIN_NO_PIN_CONFIGURED;
@@ -200,7 +200,7 @@ fn certpin_verify_pin(host, actual_pin, pin_set, current_time) {
 #           openssl pkey -pubin -outform DER |
 #           openssl dgst -sha256 -binary |
 #           openssl enc -base64
-fn certpin_compute_spki_pin(cert_path) {
+fn certpin_compute_spki_pin(cert_path): i64 {
     if (cert_path == 0) {
         return err_invalid_argument("cert_path is null");
     }
@@ -302,7 +302,7 @@ fn certpin_compute_spki_pin(cert_path) {
 #derive(accessors)
 struct certpin_info { subject; issuer; serial; not_before; not_after; sha256_fp; spki_sha256; }
 
-fn certpin_info_new() {
+fn certpin_info_new(): i64 {
     var c = alloc(56);
     memset(c, 0, 56);
     return c;
@@ -310,7 +310,7 @@ fn certpin_info_new() {
 
 # Hand-rolled JSON serializer (cstring-pointer fields not yet
 # supported by cyrius #derive(Serialize)).
-fn certpin_info_to_json(c, sb) {
+fn certpin_info_to_json(c, sb): i64 {
     str_builder_add_cstr(sb, "{\"subject\":");
     _certpin_emit_cstr_or_null(sb, certpin_info_subject(c));
     str_builder_add_cstr(sb, ",\"issuer\":");
@@ -329,7 +329,7 @@ fn certpin_info_to_json(c, sb) {
     return 0;
 }
 
-fn _certpin_emit_cstr_or_null(sb, c) {
+fn _certpin_emit_cstr_or_null(sb, c): i64 {
     if (c == 0) {
         str_builder_add_cstr(sb, "null");
     } else {
@@ -340,7 +340,7 @@ fn _certpin_emit_cstr_or_null(sb, c) {
 
 # Check pin expiry against current time.
 # Returns 1 if expired, 0 if not expired or no expiry set.
-fn certpin_check_pin_expiry(entry, current_time) {
+fn certpin_check_pin_expiry(entry, current_time): i64 {
     var expires = certpin_entry_expires(entry);
     if (expires == 0) { return 0; }
     return current_time > expires;

@@ -48,7 +48,7 @@ var VER_GREATER = 1;
 # data: pointer to data buffer.
 # data_len: number of bytes to write.
 # Returns Result: Ok(0) or Err.
-fn update_atomic_write(path, data, data_len) {
+fn update_atomic_write(path, data, data_len): i64 {
     if (path == 0) {
         return err_invalid_argument("atomic_write path is null");
     }
@@ -106,7 +106,7 @@ fn update_atomic_write(path, data, data_len) {
 
 # Atomically copy src to dst (via temp + rename).
 # Returns Result: Ok(bytes_copied) or Err.
-fn update_atomic_copy(src, dst) {
+fn update_atomic_copy(src, dst): i64 {
     if (src == 0) { return err_invalid_argument("atomic_copy src is null"); }
     if (dst == 0) { return err_invalid_argument("atomic_copy dst is null"); }
 
@@ -172,7 +172,7 @@ fn update_atomic_copy(src, dst) {
 
 # Parse a version string into { year, month, day }.
 # Returns pointer to 24-byte struct, or 0 on parse failure.
-fn update_parse_version(version) {
+fn update_parse_version(version): i64 {
     if (version == 0) { return 0; }
     var vlen = strlen(version);
     if (vlen == 0) { return 0; }
@@ -237,7 +237,7 @@ fn update_parse_version(version) {
 
 # Validate a CalVer version string (YYYY.M.D).
 # Returns Result: Ok(0) or Err.
-fn update_validate_version(version) {
+fn update_validate_version(version): i64 {
     var v = update_parse_version(version);
     if (v == 0) {
         return err_invalid_argument("version must have exactly 3 parts (YYYY.M.D)");
@@ -267,7 +267,7 @@ fn update_validate_version(version) {
 # Compare two CalVer version strings.
 # Returns VER_LESS (-1), VER_EQUAL (0), or VER_GREATER (1).
 # Falls back to byte-by-byte comparison if either string is malformed.
-fn update_compare_versions(a, b) {
+fn update_compare_versions(a, b): i64 {
     var va = update_parse_version(a);
     var vb = update_parse_version(b);
 
@@ -319,22 +319,22 @@ fn update_compare_versions(a, b) {
 # Update slot helpers
 # ================================================================
 
-fn update_other_slot(slot) {
+fn update_other_slot(slot): i64 {
     if (slot == SLOT_A) { return SLOT_B; }
     return SLOT_A;
 }
 
-fn update_slot_suffix(slot) {
+fn update_slot_suffix(slot): i64 {
     if (slot == SLOT_A) { return "a"; }
     return "b";
 }
 
-fn update_slot_str(slot) {
+fn update_slot_str(slot): i64 {
     if (slot == SLOT_A) { return "A"; }
     return "B";
 }
 
-fn update_phase_str(phase) {
+fn update_phase_str(phase): i64 {
     if (phase == PHASE_DOWNLOADING) { return "Downloading"; }
     if (phase == PHASE_VERIFYING) { return "Verifying"; }
     if (phase == PHASE_APPLYING) { return "Applying"; }
@@ -356,7 +356,7 @@ enum UpdateChannel {
     CHAN_CUSTOM = 4;
 }
 
-fn update_channel_str(channel) {
+fn update_channel_str(channel): i64 {
     if (channel == CHAN_STABLE) { return "stable"; }
     if (channel == CHAN_BETA) { return "beta"; }
     if (channel == CHAN_NIGHTLY) { return "nightly"; }
@@ -376,7 +376,7 @@ fn update_channel_str(channel) {
 #derive(accessors)
 struct update_state { slot; version; pending; rollback_available; boot_count; }
 
-fn update_state_new(slot, version) {
+fn update_state_new(slot, version): i64 {
     var s = alloc(40);
     update_state_set_slot(s, slot);
     update_state_set_version(s, version);
@@ -388,11 +388,11 @@ fn update_state_new(slot, version) {
 
 # 1.0 API preservation — `set_rollback` (asymmetric) delegates
 # through `set_rollback_available`.
-fn update_state_set_rollback(s, val) { return update_state_set_rollback_available(s, val); }
+fn update_state_set_rollback(s, val): i64 { return update_state_set_rollback_available(s, val); }
 
 # Hand-rolled JSON serializer (cstring-pointer fields not yet
 # supported by cyrius #derive(Serialize)).
-fn update_state_to_json(s, sb) {
+fn update_state_to_json(s, sb): i64 {
     str_builder_add_cstr(sb, "{\"slot\":");
     str_builder_add_int(sb, update_state_slot(s));
     str_builder_add_cstr(sb, ",\"version\":");
@@ -407,7 +407,7 @@ fn update_state_to_json(s, sb) {
     return 0;
 }
 
-fn _update_emit_cstr_or_null(sb, c) {
+fn _update_emit_cstr_or_null(sb, c): i64 {
     if (c == 0) {
         str_builder_add_cstr(sb, "null");
     } else {
@@ -434,7 +434,7 @@ struct update_config {
     verify;
 }
 
-fn update_config_new() {
+fn update_config_new(): i64 {
     var c = alloc(56);
     update_config_set_url(c, "https://updates.agnos.org");
     update_config_set_slot_a(c, "/dev/disk/by-partlabel/rootfs_a");
@@ -446,7 +446,7 @@ fn update_config_new() {
     return c;
 }
 
-fn update_config_device_for_slot(c, slot) {
+fn update_config_device_for_slot(c, slot): i64 {
     if (slot == SLOT_A) { return update_config_slot_a(c); }
     return update_config_slot_b(c);
 }
@@ -461,7 +461,7 @@ fn update_config_device_for_slot(c, slot) {
 #derive(accessors)
 struct update_manifest { version; channel; files; release_date; min_version; changelog; }
 
-fn update_manifest_new(version, channel, release_date) {
+fn update_manifest_new(version, channel, release_date): i64 {
     var m = alloc(48);
     update_manifest_set_version(m, version);
     update_manifest_set_channel(m, channel);
@@ -481,7 +481,7 @@ fn update_manifest_new(version, channel, release_date) {
 #derive(accessors)
 struct update_file { path; sha256; size; delta_from; compressed; }
 
-fn update_file_new(path, sha256, size_bytes) {
+fn update_file_new(path, sha256, size_bytes): i64 {
     var f = alloc(40);
     update_file_set_path(f, path);
     update_file_set_sha256(f, sha256);
@@ -498,7 +498,7 @@ fn update_file_new(path, sha256, size_bytes) {
 # Detect current boot slot by reading /proc/cmdline for "agnos.slot=".
 # Falls back to reading the state file, then defaults to slot A.
 # Returns Result: Ok(slot) or Err.
-fn update_get_current_slot() {
+fn update_get_current_slot(): i64 {
     # Read /proc/cmdline
     var cmdfd = sys_open("/proc/cmdline", 0, 0);
     if (cmdfd >= 0) {
@@ -547,7 +547,7 @@ fn update_get_current_slot() {
 
 # Save update state to a JSON file.
 # Returns Result: Ok(0) or Err.
-fn update_save_state(state, path) {
+fn update_save_state(state, path): i64 {
     if (state == 0) { return err_invalid_argument("state is null"); }
     if (path == 0) { return err_invalid_argument("path is null"); }
 
@@ -621,7 +621,7 @@ fn update_save_state(state, path) {
 
 # Load update state from a JSON file.
 # Returns Result: Ok(state_ptr) or Err.
-fn update_load_state(path) {
+fn update_load_state(path): i64 {
     if (path == 0) { return err_invalid_argument("state path is null"); }
 
     var fd = sys_open(path, 0, 0);
@@ -724,7 +724,7 @@ fn update_load_state(path) {
 # Returns Result: Ok(0) or Err.
 # Note: SHA-256 digest verification requires a SHA-256 implementation
 # which is not yet available in Cyrius stdlib. Structural checks only.
-fn update_verify_manifest(manifest) {
+fn update_verify_manifest(manifest): i64 {
     if (manifest == 0) { return err_invalid_argument("manifest is null"); }
 
     var ver = update_manifest_version(manifest);
@@ -785,7 +785,7 @@ fn update_verify_manifest(manifest) {
 # Note: Network fetch (curl) not yet implemented in Cyrius.
 # Supports local file paths and file:// URLs only.
 # Future: Mac/Windows will need platform-specific fetch (NSURLSession, WinHTTP).
-fn update_check(config, current_version) {
+fn update_check(config, current_version): i64 {
     if (config == 0) { return err_invalid_argument("config is null"); }
     if (current_version == 0) { return err_invalid_argument("current_version is null"); }
 
@@ -853,7 +853,7 @@ fn update_check(config, current_version) {
 
 # Write update image to the inactive slot's block device.
 # Returns Result: Ok(0) or Err.
-fn update_apply(config, manifest) {
+fn update_apply(config, manifest): i64 {
     if (config == 0) { return err_invalid_argument("config is null"); }
     if (manifest == 0) { return err_invalid_argument("manifest is null"); }
 
@@ -933,7 +933,7 @@ fn update_apply(config, manifest) {
 # Mark a slot as active for the next boot.
 # Writes slot marker for argonaut and optionally sets EFI boot entry.
 # Returns Result: Ok(0) or Err.
-fn update_switch_slot(config, slot) {
+fn update_switch_slot(config, slot): i64 {
     if (config == 0) { return err_invalid_argument("config is null"); }
 
     # Write slot marker file
@@ -977,7 +977,7 @@ fn update_switch_slot(config, slot) {
 
 # Roll back to the previous slot.
 # Returns Result: Ok(0) or Err.
-fn update_rollback(config) {
+fn update_rollback(config): i64 {
     if (config == 0) { return err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
@@ -1016,7 +1016,7 @@ fn update_rollback(config) {
 # Mark the current boot as successful.
 # Increments boot counter, clears pending update flag.
 # Returns Result: Ok(0) or Err.
-fn update_mark_boot_successful(config) {
+fn update_mark_boot_successful(config): i64 {
     if (config == 0) { return err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
@@ -1036,7 +1036,7 @@ fn update_mark_boot_successful(config) {
 
 # Pure function: returns 1 if boot count exceeds max_attempts
 # and there is a pending update (indicating automatic rollback needed).
-fn update_needs_rollback(state, max_boot_attempts) {
+fn update_needs_rollback(state, max_boot_attempts): i64 {
     if (update_state_pending(state) == 0) { return 0; }
     return update_state_boot_count(state) >= max_boot_attempts;
 }

@@ -73,7 +73,7 @@ enum AuditRuleType {
 #derive(accessors)
 struct audit_config { use_netlink; use_proc; proc_path; }
 
-fn audit_config_new() {
+fn audit_config_new(): i64 {
     var c = alloc(24);
     audit_config_set_use_netlink(c, 1);
     audit_config_set_use_proc(c, 0);
@@ -82,8 +82,8 @@ fn audit_config_new() {
 }
 
 # 1.0 API preservation — asymmetric setter names delegate to derive.
-fn audit_config_set_netlink(c, val) { return audit_config_set_use_netlink(c, val); }
-fn audit_config_set_proc(c, val) { return audit_config_set_use_proc(c, val); }
+fn audit_config_set_netlink(c, val): i64 { return audit_config_set_use_netlink(c, val); }
+fn audit_config_set_proc(c, val): i64 { return audit_config_set_use_proc(c, val); }
 
 # ================================================================
 # Audit handle struct — 2 fields * 8 = 16 bytes.
@@ -92,7 +92,7 @@ fn audit_config_set_proc(c, val) { return audit_config_set_use_proc(c, val); }
 #derive(accessors)
 struct audit_handle { fd; config; }
 
-fn audit_handle_new(fd, config) {
+fn audit_handle_new(fd, config): i64 {
     var h = alloc(16);
     audit_handle_set_fd(h, fd);
     audit_handle_set_config(h, config);
@@ -107,7 +107,7 @@ fn audit_handle_new(fd, config) {
 #derive(Serialize)
 struct audit_status { enabled; failure_action; pid; backlog_limit; lost; backlog; }
 
-fn audit_status_new() {
+fn audit_status_new(): i64 {
     var s = alloc(48);
     audit_status_set_enabled(s, 0);
     audit_status_set_failure_action(s, 1);    # printk
@@ -129,7 +129,7 @@ fn audit_status_new() {
 #derive(accessors)
 struct audit_rule { type; path; syscall_nr; key; }
 
-fn audit_rule_new(rule_type, path, syscall_nr, key) {
+fn audit_rule_new(rule_type, path, syscall_nr, key): i64 {
     var r = alloc(32);
     audit_rule_set_type(r, rule_type);
     audit_rule_set_path(r, path);
@@ -139,15 +139,15 @@ fn audit_rule_new(rule_type, path, syscall_nr, key) {
 }
 
 # 1.0 API preservation — `syscall` getter delegates to `syscall_nr`.
-fn audit_rule_syscall(r) { return audit_rule_syscall_nr(r); }
+fn audit_rule_syscall(r): i64 { return audit_rule_syscall_nr(r); }
 
 # Create a file watch rule
-fn audit_rule_file_watch(path, key) {
+fn audit_rule_file_watch(path, key): i64 {
     return audit_rule_new(AUDIT_RULE_FILE_WATCH, path, 0, key);
 }
 
 # Create a syscall watch rule
-fn audit_rule_syscall_watch(syscall_nr, key) {
+fn audit_rule_syscall_watch(syscall_nr, key): i64 {
     return audit_rule_new(AUDIT_RULE_SYSCALL_WATCH, 0, syscall_nr, key);
 }
 
@@ -156,7 +156,7 @@ fn audit_rule_syscall_watch(syscall_nr, key) {
 # Returns Result: Ok(0) if valid, Err if not.
 # ================================================================
 
-fn audit_rule_validate(rule) {
+fn audit_rule_validate(rule): i64 {
     var key = audit_rule_key(rule);
     if (key == 0) {
         return err_invalid_argument("audit rule key cannot be empty");
@@ -242,7 +242,7 @@ struct audit_kstatus {
     backlog: i32;
 }
 
-fn audit_sockaddr_nl(pid) {
+fn audit_sockaddr_nl(pid): i64 {
     var buf = alloc(12);
     memset(buf, 0, 12);
     var sa: sockaddr_nl = buf;
@@ -256,7 +256,7 @@ fn audit_sockaddr_nl(pid) {
 # Returns pointer to the buffer (stores total length at the head).
 # ================================================================
 
-fn audit_build_nlmsg(msg_type, payload_ptr, payload_len) {
+fn audit_build_nlmsg(msg_type, payload_ptr, payload_len): i64 {
     var total_len = NLMSG_HDRLEN + payload_len;
     var buf = alloc(total_len);
     memset(buf, 0, total_len);
@@ -276,7 +276,7 @@ fn audit_build_nlmsg(msg_type, payload_ptr, payload_len) {
 }
 
 # Get total length of a built nlmsg (read from the header)
-fn audit_nlmsg_len(buf) {
+fn audit_nlmsg_len(buf): i64 {
     return load32(buf);
 }
 
@@ -286,7 +286,7 @@ fn audit_nlmsg_len(buf) {
 # Returns Result: Ok(handle_ptr) or Err.
 # ================================================================
 
-fn audit_open(config) {
+fn audit_open(config): i64 {
     var fd = 0 - 1;
 
     if (audit_config_use_netlink(config) == 1) {
@@ -334,7 +334,7 @@ fn audit_open(config) {
 # Closes the netlink socket if open.
 # ================================================================
 
-fn audit_close(handle) {
+fn audit_close(handle): i64 {
     var fd = audit_handle_fd(handle);
     if (fd >= 0) {
         syscall(SYS_CLOSE, fd);
@@ -347,7 +347,7 @@ fn audit_close(handle) {
 # Returns Result: Ok(bytes_sent) or Err.
 # ================================================================
 
-fn audit_send_raw(handle, buf, buf_len) {
+fn audit_send_raw(handle, buf, buf_len): i64 {
     var fd = audit_handle_fd(handle);
     if (fd < 0) {
         return err_invalid_argument("audit handle has no netlink socket");
@@ -367,7 +367,7 @@ fn audit_send_raw(handle, buf, buf_len) {
 # Returns Result: Ok(bytes_received) or Err.
 # ================================================================
 
-fn audit_recv_raw(handle, buf, buf_len) {
+fn audit_recv_raw(handle, buf, buf_len): i64 {
     var fd = audit_handle_fd(handle);
     if (fd < 0) {
         return err_invalid_argument("audit handle has no netlink socket");
@@ -388,7 +388,7 @@ fn audit_recv_raw(handle, buf, buf_len) {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn audit_send_event(handle, event_type, message) {
+fn audit_send_event(handle, event_type, message): i64 {
     var fd = audit_handle_fd(handle);
     if (fd < 0) {
         return err_invalid_argument("audit handle has no netlink socket");
@@ -429,7 +429,7 @@ fn audit_send_event(handle, event_type, message) {
 # Returns Result: Ok(audit_status_ptr) or Err.
 # ================================================================
 
-fn audit_get_status(handle) {
+fn audit_get_status(handle): i64 {
     var fd = audit_handle_fd(handle);
     if (fd < 0) {
         return err_invalid_argument("audit handle has no netlink socket");
@@ -502,7 +502,7 @@ fn audit_get_status(handle) {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn audit_set_enabled(handle, enabled) {
+fn audit_set_enabled(handle, enabled): i64 {
     var fd = audit_handle_fd(handle);
     if (fd < 0) {
         return err_invalid_argument("audit handle has no netlink socket");
@@ -533,7 +533,7 @@ fn audit_set_enabled(handle, enabled) {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn audit_send_rule_msg(handle, rule, msg_type) {
+fn audit_send_rule_msg(handle, rule, msg_type): i64 {
     var fd = audit_handle_fd(handle);
     if (fd < 0) {
         return err_invalid_argument("audit handle has no netlink socket");
@@ -577,7 +577,7 @@ fn audit_send_rule_msg(handle, rule, msg_type) {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn audit_add_rule(handle, rule) {
+fn audit_add_rule(handle, rule): i64 {
     var vres = audit_rule_validate(rule);
     if (is_err_result(vres) == 1) { return vres; }
 
@@ -589,7 +589,7 @@ fn audit_add_rule(handle, rule) {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn audit_delete_rule(handle, rule) {
+fn audit_delete_rule(handle, rule): i64 {
     var vres = audit_rule_validate(rule);
     if (is_err_result(vres) == 1) { return vres; }
 
@@ -604,7 +604,7 @@ fn audit_delete_rule(handle, rule) {
 # Returns Result: Ok(vec_of_strs) or Err.
 # ================================================================
 
-fn audit_read_proc_events(proc_path) {
+fn audit_read_proc_events(proc_path): i64 {
     # Check if file exists
     if (sys_access(proc_path, 0) != 0) {
         # File does not exist — return empty vec
@@ -663,7 +663,7 @@ fn audit_read_proc_events(proc_path) {
 # Returns Result: Ok(0) or Err.
 # ================================================================
 
-fn audit_agnos_log(action, data, result_code) {
+fn audit_agnos_log(action, data, result_code): i64 {
     var action_len = strlen(action);
     if (action_len == 0) {
         return err_invalid_argument("audit action cannot be empty");

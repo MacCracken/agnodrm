@@ -24,7 +24,7 @@ include "src/syscall_arch.cyr"
 
 # Execute a syscall and return Result: Ok(ret) or Err(syserr).
 # name is a string label for diagnostics (not used in codegen).
-fn agnosys_checked_syscall(ret) {
+fn agnosys_checked_syscall(ret): i64 {
     if (ret < 0) {
         return err_from_syscall_ret(ret);
     }
@@ -36,27 +36,27 @@ fn agnosys_checked_syscall(ret) {
 # ================================================================
 
 # Get the current process ID.
-fn agnosys_getpid() {
+fn agnosys_getpid(): i64 {
     return syscall(SYS_GETPID);
 }
 
 # Get the current thread ID.
-fn agnosys_gettid() {
+fn agnosys_gettid(): i64 {
     return syscall(SYS_GETTID);
 }
 
 # Get the current user ID.
-fn agnosys_getuid() {
+fn agnosys_getuid(): i64 {
     return syscall(SYS_GETUID);
 }
 
 # Get the current effective user ID.
-fn agnosys_geteuid() {
+fn agnosys_geteuid(): i64 {
     return syscall(SYS_GETEUID);
 }
 
 # Check if the current process has root privileges.
-fn agnosys_is_root() {
+fn agnosys_is_root(): i64 {
     if (agnosys_geteuid() == 0) { return 1; }
     return 0;
 }
@@ -97,7 +97,7 @@ enum SysInfoConst {
 # Query sysinfo(2) into a caller-provided buffer.
 # out must point to at least 120 bytes.
 # Returns Result: Ok(out) or Err(syserr). Zero heap allocation on success.
-fn query_sysinfo(out) {
+fn query_sysinfo(out): i64 {
     var ret = syscall(SYS_SYSINFO, out);
     if (ret < 0) {
         return err_from_syscall_ret(ret);
@@ -106,13 +106,13 @@ fn query_sysinfo(out) {
 }
 
 # Get uptime in seconds from a sysinfo pointer.
-fn sysinfo_uptime(info) {
+fn sysinfo_uptime(info): i64 {
     return load64(info + SI_UPTIME);
 }
 
 # Get total RAM in bytes from a sysinfo pointer.
 # Uses saturating multiplication to prevent overflow.
-fn sysinfo_total_memory(info) {
+fn sysinfo_total_memory(info): i64 {
     var ram = load64(info + SI_TOTALRAM);
     var unit = load32(info + SI_MEM_UNIT);
     # Saturating multiply: if either is 0 or result would overflow, cap it
@@ -123,7 +123,7 @@ fn sysinfo_total_memory(info) {
 }
 
 # Get free RAM in bytes from a sysinfo pointer.
-fn sysinfo_free_memory(info) {
+fn sysinfo_free_memory(info): i64 {
     var ram = load64(info + SI_FREERAM);
     var unit = load32(info + SI_MEM_UNIT);
     if (unit == 0) { return ram; }
@@ -133,7 +133,7 @@ fn sysinfo_free_memory(info) {
 }
 
 # Get number of running processes from a sysinfo pointer.
-fn sysinfo_procs(info) {
+fn sysinfo_procs(info): i64 {
     return load16(info + SI_PROCS);
 }
 
@@ -142,7 +142,7 @@ fn sysinfo_procs(info) {
 # ================================================================
 
 # Get system uptime in seconds. Returns Result.
-fn agnosys_uptime() {
+fn agnosys_uptime(): i64 {
     var buf[120];
     var res = query_sysinfo(&buf);
     if (is_err_result(res) == 1) { return res; }
@@ -150,7 +150,7 @@ fn agnosys_uptime() {
 }
 
 # Get total system memory in bytes. Returns Result.
-fn agnosys_total_memory() {
+fn agnosys_total_memory(): i64 {
     var buf[120];
     var res = query_sysinfo(&buf);
     if (is_err_result(res) == 1) { return res; }
@@ -158,7 +158,7 @@ fn agnosys_total_memory() {
 }
 
 # Get free system memory in bytes. Returns Result.
-fn agnosys_free_memory() {
+fn agnosys_free_memory(): i64 {
     var buf[120];
     var res = query_sysinfo(&buf);
     if (is_err_result(res) == 1) { return res; }
@@ -189,7 +189,7 @@ enum UtsConst {
 # Query uname(2) into a caller-provided buffer.
 # out must point to at least 390 bytes.
 # Returns Result: Ok(out) or Err. All uts fields accessible via offsets.
-fn agnosys_uname(out) {
+fn agnosys_uname(out): i64 {
     var ret = syscall(SYS_UNAME, out);
     if (ret < 0) {
         return err_from_syscall_ret(ret);
@@ -198,16 +198,16 @@ fn agnosys_uname(out) {
 }
 
 # Get hostname from a utsname buffer.
-fn uname_hostname(uts) {
+fn uname_hostname(uts): i64 {
     return uts + UTS_NODENAME;
 }
 
 # Get kernel release from a utsname buffer.
-fn uname_release(uts) {
+fn uname_release(uts): i64 {
     return uts + UTS_RELEASE;
 }
 
 # Get machine arch from a utsname buffer.
-fn uname_machine(uts) {
+fn uname_machine(uts): i64 {
     return uts + UTS_MACHINE;
 }

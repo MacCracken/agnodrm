@@ -37,7 +37,7 @@ include "src/security.cyr"
 # Main — self-test
 # ================================================================
 
-fn main() {
+fn main(): i64 {
     alloc_init();
 
     # -- error module --

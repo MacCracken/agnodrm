@@ -44,7 +44,7 @@ enum TpmConst {
 # PCR bank helpers
 # ================================================================
 
-fn tpm_bank_str(bank) {
+fn tpm_bank_str(bank): i64 {
     if (bank == TPM_SHA1) { return "sha1"; }
     if (bank == TPM_SHA256) { return "sha256"; }
     if (bank == TPM_SHA384) { return "sha384"; }
@@ -52,7 +52,7 @@ fn tpm_bank_str(bank) {
     return "sha256";
 }
 
-fn tpm_bank_hex_len(bank) {
+fn tpm_bank_hex_len(bank): i64 {
     if (bank == TPM_SHA1) { return TPM_SHA1_HEX_LEN; }
     if (bank == TPM_SHA256) { return TPM_SHA256_HEX_LEN; }
     if (bank == TPM_SHA384) { return TPM_SHA384_HEX_LEN; }
@@ -68,7 +68,7 @@ fn tpm_bank_hex_len(bank) {
 #derive(accessors)
 struct tpm_pcr_value { index; bank; value; }
 
-fn tpm_pcr_value_new(index, bank, value) {
+fn tpm_pcr_value_new(index, bank, value): i64 {
     var v = alloc(24);
     tpm_pcr_value_set_index(v, index);
     tpm_pcr_value_set_bank(v, bank);
@@ -85,7 +85,7 @@ fn tpm_pcr_value_new(index, bank, value) {
 #derive(accessors)
 struct tpm_sealed { context; pcr_sel; }
 
-fn tpm_sealed_new(context_path, pcr_selection) {
+fn tpm_sealed_new(context_path, pcr_selection): i64 {
     var s = alloc(16);
     tpm_sealed_set_context(s, context_path);
     tpm_sealed_set_pcr_sel(s, pcr_selection);
@@ -96,7 +96,7 @@ fn tpm_sealed_new(context_path, pcr_selection) {
 # Helper: run tpm2-tools command
 # ================================================================
 
-fn tpm_run_capture(args, buf, buflen) {
+fn tpm_run_capture(args, buf, buflen): i64 {
     var n = exec_capture(args, buf, buflen);
     if (n < 0) {
         return err_unknown("tpm2 tool execution failed");
@@ -104,7 +104,7 @@ fn tpm_run_capture(args, buf, buflen) {
     return Ok(n);
 }
 
-fn tpm_run_checked(args) {
+fn tpm_run_checked(args): i64 {
     var rc = exec_vec(args);
     if (rc != 0) {
         return err_unknown("tpm2 tool command failed");
@@ -119,7 +119,7 @@ fn tpm_run_checked(args) {
 # Returns heap-allocated null-terminated string.
 # ================================================================
 
-fn tpm_pcr_selection(bank, indices) {
+fn tpm_pcr_selection(bank, indices): i64 {
     var bank_str = tpm_bank_str(bank);
     var blen = strlen(bank_str);
     var count = vec_len(indices);
@@ -157,7 +157,7 @@ fn tpm_pcr_selection(bank, indices) {
 
 # Check if a TPM 2.0 device is available.
 # Returns 1 if available, 0 if not.
-fn tpm_detect() {
+fn tpm_detect(): i64 {
     if (sys_access("/dev/tpmrm0", 0) == 0) { return 1; }
     return sys_access("/dev/tpm0", 0) == 0;
 }
@@ -169,7 +169,7 @@ fn tpm_detect() {
 # Returns Ok(vec_of_tpm_pcr_value_ptrs) or Err.
 # ================================================================
 
-fn tpm_read_pcr(bank, indices) {
+fn tpm_read_pcr(bank, indices): i64 {
     var count = vec_len(indices);
     if (count == 0) {
         return err_invalid_argument("Must specify at least one PCR index");
@@ -288,7 +288,7 @@ fn tpm_read_pcr(bank, indices) {
 # Returns Ok(0) or Err.
 # ================================================================
 
-fn tpm_extend_pcr(bank, index, hash) {
+fn tpm_extend_pcr(bank, index, hash): i64 {
     if (index > TPM_PCR_MAX) {
         return err_invalid_argument("PCR index out of range (0-23)");
     }
@@ -339,7 +339,7 @@ fn tpm_extend_pcr(bank, index, hash) {
 # Returns Ok(sealed_secret_ptr) or Err.
 # ================================================================
 
-fn tpm_seal(bank, pcr_indices, data_ptr, data_len, output_dir) {
+fn tpm_seal(bank, pcr_indices, data_ptr, data_len, output_dir): i64 {
     if (data_len == 0) {
         return err_invalid_argument("Cannot seal empty data");
     }
@@ -435,7 +435,7 @@ fn tpm_seal(bank, pcr_indices, data_ptr, data_len, output_dir) {
 # Returns Ok(bytes_read) or Err.
 # ================================================================
 
-fn tpm_unseal(sealed, buf, buflen) {
+fn tpm_unseal(sealed, buf, buflen): i64 {
     var ctx = tpm_sealed_context(sealed);
     var pcr_sel = tpm_sealed_pcr_sel(sealed);
 
@@ -469,7 +469,7 @@ fn tpm_unseal(sealed, buf, buflen) {
 # Returns Ok(bytes_written) or Err.
 # ================================================================
 
-fn tpm_get_random(buf, count) {
+fn tpm_get_random(buf, count): i64 {
     if (count == 0) {
         return err_invalid_argument("Cannot request 0 random bytes");
     }
@@ -528,7 +528,7 @@ fn tpm_get_random(buf, count) {
 # Returns Ok(1) if all match, Ok(0) if mismatch.
 # ================================================================
 
-fn tpm_verify_measured_boot(expected) {
+fn tpm_verify_measured_boot(expected): i64 {
     var count = vec_len(expected);
     if (count == 0) {
         return err_invalid_argument("Baseline has no expected PCR values");

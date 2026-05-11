@@ -45,7 +45,7 @@ struct netns_config {
     dns_count;
 }
 
-fn netns_config_new(name, agent_ip, host_ip, prefix_len, enable_nat) {
+fn netns_config_new(name, agent_ip, host_ip, prefix_len, enable_nat): i64 {
     var c = alloc(56);
     netns_config_set_name(c, name);
     netns_config_set_agent_ip(c, agent_ip);
@@ -57,7 +57,7 @@ fn netns_config_new(name, agent_ip, host_ip, prefix_len, enable_nat) {
     return c;
 }
 
-fn netns_config_set_dns(c, dns_arr, dns_count) {
+fn netns_config_set_dns(c, dns_arr, dns_count): i64 {
     netns_config_set_dns_arr(c, dns_arr);
     netns_config_set_dns_count(c, dns_count);
     return 0;
@@ -70,7 +70,7 @@ fn netns_config_set_dns(c, dns_arr, dns_count) {
 #derive(accessors)
 struct netns_handle { name; veth_host; veth_agent; netns_path; }
 
-fn netns_handle_new(name, veth_host, veth_agent, netns_path) {
+fn netns_handle_new(name, veth_host, veth_agent, netns_path): i64 {
     var h = alloc(32);
     netns_handle_set_name(h, name);
     netns_handle_set_veth_host(h, veth_host);
@@ -86,7 +86,7 @@ fn netns_handle_new(name, veth_host, veth_agent, netns_path) {
 #derive(accessors)
 struct netns_fw_rule { direction; protocol; port; remote_addr; action; comment; }
 
-fn netns_fw_rule_new(direction, protocol, port, remote_addr, action, comment) {
+fn netns_fw_rule_new(direction, protocol, port, remote_addr, action, comment): i64 {
     var r = alloc(48);
     netns_fw_rule_set_direction(r, direction);
     netns_fw_rule_set_protocol(r, protocol);
@@ -109,7 +109,7 @@ fn netns_fw_rule_new(direction, protocol, port, remote_addr, action, comment) {
 #derive(accessors)
 struct netns_fw_policy { default_in; default_out; rules_arr; rule_count; }
 
-fn netns_fw_policy_new(default_in, default_out) {
+fn netns_fw_policy_new(default_in, default_out): i64 {
     var p = alloc(32);
     netns_fw_policy_set_default_in(p, default_in);
     netns_fw_policy_set_default_out(p, default_out);
@@ -119,8 +119,8 @@ fn netns_fw_policy_new(default_in, default_out) {
 }
 
 # 1.0 API preservation
-fn netns_fw_policy_rules(p) { return netns_fw_policy_rules_arr(p); }
-fn netns_fw_policy_set_rules(p, rules_arr, count) {
+fn netns_fw_policy_rules(p): i64 { return netns_fw_policy_rules_arr(p); }
+fn netns_fw_policy_set_rules(p, rules_arr, count): i64 {
     netns_fw_policy_set_rules_arr(p, rules_arr);
     netns_fw_policy_set_rule_count(p, count);
     return 0;
@@ -131,7 +131,7 @@ fn netns_fw_policy_set_rules(p, rules_arr, count) {
 # ================================================================
 
 # Simple hash function for agent name -> 10.100.x.{1,2}/30
-fn netns_hash_name(name) {
+fn netns_hash_name(name): i64 {
     var h = 5381;
     var i = 0;
     var len = strlen(name);
@@ -146,7 +146,7 @@ fn netns_hash_name(name) {
 }
 
 # Generate agent IPs. Returns a struct { host_ip, agent_ip }.
-fn netns_generate_agent_ips(agent_name) {
+fn netns_generate_agent_ips(agent_name): i64 {
     var h = netns_hash_name(agent_name);
     var third = h % 255;
 
@@ -182,7 +182,7 @@ fn netns_generate_agent_ips(agent_name) {
 # Create convenience config for an agent
 # ================================================================
 
-fn netns_config_for_agent(name) {
+fn netns_config_for_agent(name): i64 {
     var ips = netns_generate_agent_ips(name);
     var host_ip = load64(ips);
     var agent_ip = load64(ips + 8);
@@ -193,7 +193,7 @@ fn netns_config_for_agent(name) {
 # Validate namespace config
 # ================================================================
 
-fn netns_validate_config(config) {
+fn netns_validate_config(config): i64 {
     var name = netns_config_name(config);
     if (name == 0) { return err_invalid_argument("namespace name is null"); }
     if (strlen(name) == 0) { return err_invalid_argument("namespace name cannot be empty"); }
@@ -217,7 +217,7 @@ fn netns_validate_config(config) {
 # Truncate veth name to 15 chars (Linux max)
 # ================================================================
 
-fn netns_truncate_veth(base) {
+fn netns_truncate_veth(base): i64 {
     var len = strlen(base);
     if (len <= 15) {
         var out = alloc(len + 1);
@@ -235,7 +235,7 @@ fn netns_truncate_veth(base) {
 # Helper: run ip command
 # ================================================================
 
-fn netns_run_ip(argv) {
+fn netns_run_ip(argv): i64 {
     var cmd = "ip";
     var res = run_capture(cmd, argv);
     if (is_err_result(res) == 1) { return res; }
@@ -246,7 +246,7 @@ fn netns_run_ip(argv) {
 # Build a string by concatenating parts
 # ================================================================
 
-fn netns_concat2(a, b) {
+fn netns_concat2(a, b): i64 {
     var alen = strlen(a);
     var blen = strlen(b);
     var out = alloc(alen + blen + 1);
@@ -256,7 +256,7 @@ fn netns_concat2(a, b) {
     return out;
 }
 
-fn netns_concat3(a, b, c) {
+fn netns_concat3(a, b, c): i64 {
     var ab = netns_concat2(a, b);
     return netns_concat2(ab, c);
 }
@@ -267,7 +267,7 @@ fn netns_concat3(a, b, c) {
 
 # Create a network namespace for an agent with veth pair and IP configuration.
 # Returns Result: Ok(handle_ptr) or Err.
-fn netns_create_agent_netns(config) {
+fn netns_create_agent_netns(config): i64 {
     var vres = netns_validate_config(config);
     if (is_err_result(vres) == 1) { return vres; }
 
@@ -431,7 +431,7 @@ fn netns_create_agent_netns(config) {
 # Destroy agent network namespace
 # ================================================================
 
-fn netns_destroy_agent_netns(handle) {
+fn netns_destroy_agent_netns(handle): i64 {
     var veth_host = netns_handle_veth_host(handle);
     var ns_name = netns_handle_name(handle);
 
@@ -458,19 +458,19 @@ fn netns_destroy_agent_netns(handle) {
 
 # Helper to append a string to a buffer, return new position.
 # Checks bounds against buf_size; if exceeded, returns pos unchanged (truncation).
-fn netns_nft_append(buf, pos, str) {
+fn netns_nft_append(buf, pos, str): i64 {
     var len = strlen(str);
     if (pos + len >= 16384) { return pos; }
     memcpy(buf + pos, str, len);
     return pos + len;
 }
 
-fn netns_nft_action_str(action) {
+fn netns_nft_action_str(action): i64 {
     if (action == FW_ACCEPT) { return "accept"; }
     return "drop";
 }
 
-fn netns_nft_proto_str(proto) {
+fn netns_nft_proto_str(proto): i64 {
     if (proto == PROTO_TCP) { return "tcp"; }
     if (proto == PROTO_UDP) { return "udp"; }
     return 0;
@@ -478,7 +478,7 @@ fn netns_nft_proto_str(proto) {
 
 # Render a FirewallPolicy into an nftables ruleset string.
 # Returns a heap-allocated null-terminated string.
-fn netns_render_nftables_ruleset(policy) {
+fn netns_render_nftables_ruleset(policy): i64 {
     var buf_size = 16384;
     var buf = alloc(buf_size);
     var pos = 0;
@@ -593,7 +593,7 @@ fn netns_render_nftables_ruleset(policy) {
 # Apply a pre-rendered nftables ruleset inside the namespace.
 # ruleset: null-terminated nftables script string.
 # Returns Result.
-fn netns_apply_nftables_ruleset(handle, ruleset) {
+fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     var ns_name = netns_handle_name(handle);
 
     # Write ruleset to per-PID temp file

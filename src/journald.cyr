@@ -58,7 +58,7 @@ struct journald_entry {
     field_vals;
 }
 
-fn journald_entry_new(timestamp, unit, priority, message, pid) {
+fn journald_entry_new(timestamp, unit, priority, message, pid): i64 {
     var e = alloc(56);
     journald_entry_set_timestamp(e, timestamp);
     journald_entry_set_unit(e, unit);
@@ -71,7 +71,7 @@ fn journald_entry_new(timestamp, unit, priority, message, pid) {
 }
 
 # Add an extra field (key-value pair) to a journal entry
-fn journald_entry_add_field(e, key, val) {
+fn journald_entry_add_field(e, key, val): i64 {
     vec_push(journald_entry_field_keys(e), key);
     vec_push(journald_entry_field_vals(e), val);
     return 0;
@@ -93,7 +93,7 @@ struct journald_filter {
     boot;
 }
 
-fn journald_filter_new() {
+fn journald_filter_new(): i64 {
     var f = alloc(56);
     journald_filter_set_unit(f, 0);
     journald_filter_set_since(f, 0);
@@ -115,7 +115,7 @@ fn journald_filter_new() {
 # (unit, grep, since, until, boot) are passed verbatim to journalctl as
 # argv[i]; an attacker controlling those values cannot escape into the
 # shell because there is no shell. See audit F-1 (2026-04-26).
-fn _journald_build_argv(filter) {
+fn _journald_build_argv(filter): i64 {
     var args = vec_new();
     vec_push(args, "/usr/bin/journalctl");
     vec_push(args, "--output=json");
@@ -176,7 +176,7 @@ fn _journald_build_argv(filter) {
 
 # Build a sockaddr_un pointing to /run/systemd/journal/socket.
 # Returns pointer to the struct (110 bytes).
-fn journald_make_sockaddr() {
+fn journald_make_sockaddr(): i64 {
     var sa = alloc(SOCKADDR_UN_SIZE);
     memset(sa, 0, SOCKADDR_UN_SIZE);
     store16(sa, AF_UNIX);  # sa_family = AF_UNIX
@@ -196,7 +196,7 @@ fn journald_make_sockaddr() {
 # sent as a single datagram to /run/systemd/journal/socket.
 #
 # Returns Result: Ok(0) on success, Err on failure.
-fn journald_send(message, priority, identifier) {
+fn journald_send(message, priority, identifier): i64 {
     if (message == 0) {
         return err_invalid_argument("journal message cannot be null");
     }
@@ -253,7 +253,7 @@ fn journald_send(message, priority, identifier) {
 # fields_keys: vec of C string pointers (field names).
 # fields_vals: vec of C string pointers (field values).
 # Returns Result: Ok(0) or Err.
-fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals) {
+fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals): i64 {
     if (message == 0) {
         return err_invalid_argument("journal message cannot be null");
     }
@@ -328,7 +328,7 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
 # Minimal JSON field extraction: find a key in a JSON object string
 # and extract the string value. Returns Str or 0 if not found.
 # This is a lightweight parser — handles flat JSON objects only.
-fn journald_json_get_str(json, key) {
+fn journald_json_get_str(json, key): i64 {
     # Search for "key" in the JSON
     var jlen = str_len(json);
     var jd = str_data(json);
@@ -384,7 +384,7 @@ fn journald_json_get_str(json, key) {
 
 # Parse a single JSON line from journalctl output into a JournalEntry.
 # Returns Result: Ok(entry_ptr) or Err.
-fn journald_parse_json(json_line) {
+fn journald_parse_json(json_line): i64 {
     var jlen = str_len(json_line);
     if (jlen == 0) {
         return err_invalid_argument("empty journal JSON line");
@@ -437,7 +437,7 @@ fn journald_parse_json(json_line) {
 # A consumer that passes attacker-controlled input through filter setters
 # is safe — the value lands in argv[i] and is read verbatim by journalctl.
 # See audit F-1 (2026-04-26) and SECURITY-NOTES.md § journald.
-fn journald_query(filter) {
+fn journald_query(filter): i64 {
     var args = _journald_build_argv(filter);
     var buf = alloc(131072);  # 128KB capture buffer
     var nbytes = exec_capture(args, buf, 131072);
@@ -480,7 +480,7 @@ fn journald_query(filter) {
 # unit_name: C string (e.g. "sshd.service").
 # lines: number of entries to return.
 # Returns Result: Ok(vec_of_entry_ptrs) or Err.
-fn journald_get_unit_logs(unit_name, lines) {
+fn journald_get_unit_logs(unit_name, lines): i64 {
     if (unit_name == 0) {
         return err_invalid_argument("unit name cannot be null");
     }
@@ -502,21 +502,21 @@ fn journald_get_unit_logs(unit_name, lines) {
 # Send an info-level message to the journal.
 # message: C string.
 # Returns Result: Ok(0) or Err.
-fn journald_info(message) {
+fn journald_info(message): i64 {
     return journald_send(message, JOURNAL_INFO, "agnosys");
 }
 
 # Send a warning-level message to the journal.
-fn journald_warning(message) {
+fn journald_warning(message): i64 {
     return journald_send(message, JOURNAL_WARNING, "agnosys");
 }
 
 # Send an error-level message to the journal.
-fn journald_error(message) {
+fn journald_error(message): i64 {
     return journald_send(message, JOURNAL_ERR, "agnosys");
 }
 
 # Send a debug-level message to the journal.
-fn journald_debug(message) {
+fn journald_debug(message): i64 {
     return journald_send(message, JOURNAL_DEBUG, "agnosys");
 }

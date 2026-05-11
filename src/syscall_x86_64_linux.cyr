@@ -23,12 +23,12 @@ enum SysNrAgnos {
 }
 
 # fsync(2) — flush file to disk.
-fn agnosys_fsync(fd) {
+fn agnosys_fsync(fd): i64 {
     return syscall(AGNOS_SYS_FSYNC, fd);
 }
 
 # rename(2) — atomic rename. Direct syscall on x86_64.
-fn agnosys_rename(old_path, new_path) {
+fn agnosys_rename(old_path, new_path): i64 {
     return syscall(AGNOS_SYS_RENAME, old_path, new_path);
 }
 

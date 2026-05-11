@@ -35,7 +35,7 @@ enum PamServiceId {
 
 # Get the config filename for a PAM service ID.
 # Returns a C string pointer.
-fn pam_service_name(svc_id) {
+fn pam_service_name(svc_id): i64 {
     if (svc_id == PAM_SVC_LOGIN) { return "login"; }
     if (svc_id == PAM_SVC_SUDO) { return "sudo"; }
     if (svc_id == PAM_SVC_SSHD) { return "sshd"; }
@@ -54,7 +54,7 @@ enum PamRuleTypeId {
     PAM_TYPE_PASSWORD = 3;
 }
 
-fn pam_rule_type_name(t) {
+fn pam_rule_type_name(t): i64 {
     if (t == PAM_TYPE_AUTH) { return "auth"; }
     if (t == PAM_TYPE_ACCOUNT) { return "account"; }
     if (t == PAM_TYPE_SESSION) { return "session"; }
@@ -63,7 +63,7 @@ fn pam_rule_type_name(t) {
 }
 
 # Parse rule type from Str. Returns type id or -1 on error.
-fn pam_parse_rule_type(s) {
+fn pam_parse_rule_type(s): i64 {
     if (str_eq(s, str_from("auth")) == 1) { return PAM_TYPE_AUTH; }
     if (str_eq(s, str_from("account")) == 1) { return PAM_TYPE_ACCOUNT; }
     if (str_eq(s, str_from("session")) == 1) { return PAM_TYPE_SESSION; }
@@ -83,7 +83,7 @@ enum PamControlId {
     PAM_CTL_INCLUDE = 4;
 }
 
-fn pam_control_name(c) {
+fn pam_control_name(c): i64 {
     if (c == PAM_CTL_REQUIRED) { return "required"; }
     if (c == PAM_CTL_REQUISITE) { return "requisite"; }
     if (c == PAM_CTL_SUFFICIENT) { return "sufficient"; }
@@ -93,7 +93,7 @@ fn pam_control_name(c) {
 }
 
 # Parse control flag from Str. Returns control id or -1 on error.
-fn pam_parse_control(s) {
+fn pam_parse_control(s): i64 {
     if (str_eq(s, str_from("required")) == 1) { return PAM_CTL_REQUIRED; }
     if (str_eq(s, str_from("requisite")) == 1) { return PAM_CTL_REQUISITE; }
     if (str_eq(s, str_from("sufficient")) == 1) { return PAM_CTL_SUFFICIENT; }
@@ -111,7 +111,7 @@ fn pam_parse_control(s) {
 #derive(accessors)
 struct pam_rule { type; control; module; args; }
 
-fn pam_rule_new(rule_type, control, module, args) {
+fn pam_rule_new(rule_type, control, module, args): i64 {
     var r = alloc(32);
     pam_rule_set_type(r, rule_type);
     pam_rule_set_control(r, control);
@@ -141,13 +141,13 @@ struct pam_user {
     is_system;
 }
 
-fn pam_user_alloc() {
+fn pam_user_alloc(): i64 {
     var u = alloc(56);
     memset(u, 0, 56);
     return u;
 }
 
-fn pam_user_set(u, username, uid, gid, home_dir, shell) {
+fn pam_user_set(u, username, uid, gid, home_dir, shell): i64 {
     pam_user_set_username(u, username);
     pam_user_set_uid(u, uid);
     pam_user_set_gid(u, gid);
@@ -158,8 +158,8 @@ fn pam_user_set(u, username, uid, gid, home_dir, shell) {
 
 # 1.0 API preservation — `groups` getter + 3-arg `set_groups`
 # delegate through the derive accessors.
-fn pam_user_groups(u) { return pam_user_groups_arr(u); }
-fn pam_user_set_groups(u, groups, is_system) {
+fn pam_user_groups(u): i64 { return pam_user_groups_arr(u); }
+fn pam_user_set_groups(u, groups, is_system): i64 {
     pam_user_set_groups_arr(u, groups);
     pam_user_set_is_system(u, is_system);
     return u;
@@ -174,7 +174,7 @@ fn pam_user_set_groups(u, groups, is_system) {
 #derive(accessors)
 struct pam_session { id; user; login_time; tty; remote_host; pid; }
 
-fn pam_session_new(session_id, user, login_time, tty, remote_host, pid) {
+fn pam_session_new(session_id, user, login_time, tty, remote_host, pid): i64 {
     var s = alloc(48);
     pam_session_set_id(s, session_id);
     pam_session_set_user(s, user);
@@ -193,7 +193,7 @@ fn pam_session_new(session_id, user, login_time, tty, remote_host, pid) {
 # Rules: max 32 chars, must start with lowercase letter or underscore,
 # may contain lowercase letters, digits, hyphens, underscores.
 # Returns Result: Ok(0) on valid, Err on invalid.
-fn pam_validate_username(name) {
+fn pam_validate_username(name): i64 {
     var nlen = strlen(name);
     if (nlen == 0) {
         return err_invalid_argument("username cannot be empty");
@@ -235,7 +235,7 @@ fn pam_validate_username(name) {
 
 # Format: username:x:uid:gid:gecos:home:shell
 # Returns Result: Ok(user_info_ptr) or Err.
-fn pam_parse_passwd_line(line) {
+fn pam_parse_passwd_line(line): i64 {
     # Split by ':'
     var fields = str_split(line, 58);  # 58 = ':'
     if (vec_len(fields) < 7) {
@@ -281,7 +281,7 @@ fn pam_parse_passwd_line(line) {
 #   alice    pts/0        2026-03-06 10:30 (192.168.1.5)
 #   bob      tty1         2026-03-06 09:15
 # Returns vec of session info pointers.
-fn pam_parse_who_output(output) {
+fn pam_parse_who_output(output): i64 {
     var sessions = vec_new();
     var lines = str_split(output, 10);  # 10 = '\n'
     var idx = 0;
@@ -344,7 +344,7 @@ fn pam_parse_who_output(output) {
 
 # Split a Str by whitespace (space/tab), skipping consecutive whitespace.
 # Returns vec of Str.
-fn pam_split_whitespace(s) {
+fn pam_split_whitespace(s): i64 {
     var parts = vec_new();
     var slen = str_len(s);
     var sd = str_data(s);
@@ -388,7 +388,7 @@ fn pam_split_whitespace(s) {
 # Parse PAM config text into a vec of PamRule pointers.
 # Each non-blank, non-comment line: type control module [args...]
 # Returns Result: Ok(vec_of_rules) or Err.
-fn pam_parse_config(content) {
+fn pam_parse_config(content): i64 {
     var rules = vec_new();
     var lines = str_split(content, 10);  # 10 = '\n'
     var idx = 0;
@@ -445,7 +445,7 @@ fn pam_parse_config(content) {
 # ================================================================
 
 # Returns Result: Ok(vec_of_Str) — filenames in /etc/pam.d/.
-fn pam_list_services() {
+fn pam_list_services(): i64 {
     var pam_dir = str_from("/etc/pam.d");
     var entries = dir_list(pam_dir);
     return Ok(entries);
@@ -458,7 +458,7 @@ fn pam_list_services() {
 # Read /etc/pam.d/<service_name> and parse it.
 # service_name: C string (e.g. "sshd", "sudo").
 # Returns Result: Ok(vec_of_rules) or Err.
-fn pam_read_service_config(service_name) {
+fn pam_read_service_config(service_name): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "/etc/pam.d/");
     str_builder_add_cstr(sb, service_name);
@@ -496,7 +496,7 @@ fn pam_read_service_config(service_name) {
 
 # Read /etc/passwd and return vec of UserInfo pointers.
 # Returns Result: Ok(vec) or Err.
-fn pam_list_users() {
+fn pam_list_users(): i64 {
     var fd = sys_open("/etc/passwd", O_RDONLY, 0);
     if (fd < 0) {
         return err_syscall_failed(0 - fd, "failed to open /etc/passwd");
@@ -549,7 +549,7 @@ fn pam_list_users() {
 
 # Run `who` and parse output into vec of SessionInfo.
 # Returns Result: Ok(vec) or Err.
-fn pam_list_sessions() {
+fn pam_list_sessions(): i64 {
     var buf = alloc(16384);
     var res = run_capture("/usr/bin/who", 0, 0, buf, 16384);
     if (is_err_result(res) == 1) {
@@ -567,7 +567,7 @@ fn pam_list_sessions() {
 # ================================================================
 
 # Render a single PamRule to a config-file line (Str).
-fn pam_render_rule(rule) {
+fn pam_render_rule(rule): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, pam_rule_type_name(pam_rule_type(rule)));
     str_builder_add_cstr(sb, "\t");
@@ -588,7 +588,7 @@ fn pam_render_rule(rule) {
 
 # Render a full PAM config from a vec of PamRule pointers.
 # Returns Str.
-fn pam_render_config(rules) {
+fn pam_render_config(rules): i64 {
     var sb = str_builder_new();
     str_builder_add_cstr(sb, "# Generated by AGNOS PAM manager\n");
 
@@ -608,7 +608,7 @@ fn pam_render_config(rules) {
 
 # Check module path is reasonable and args have no shell metacharacters.
 # Returns Result: Ok(0) on valid, Err on invalid.
-fn pam_validate_rule(rule) {
+fn pam_validate_rule(rule): i64 {
     var module = pam_rule_module(rule);
     if (str_len(module) == 0) {
         return err_invalid_argument("PAM module path cannot be empty");
@@ -713,7 +713,7 @@ fn pam_validate_rule(rule) {
 
 # Lookup a user in /etc/passwd by name.
 # Returns Result: Ok(user_info_ptr) or Err.
-fn pam_get_user_info(username) {
+fn pam_get_user_info(username): i64 {
     var res = pam_validate_username(username);
     if (is_err_result(res) == 1) { return res; }
 

@@ -125,7 +125,7 @@ enum DrmVerOff {
 #derive(accessors)
 struct drm_verinfo { major; minor; patch; name; date; desc; }
 
-fn drm_verinfo_new(major, minor, patch, name, date, desc) {
+fn drm_verinfo_new(major, minor, patch, name, date, desc): i64 {
     var v = alloc(48);
     drm_verinfo_set_major(v, major);
     drm_verinfo_set_minor(v, minor);
@@ -138,7 +138,7 @@ fn drm_verinfo_new(major, minor, patch, name, date, desc) {
 
 # Hand-rolled JSON serializer (cstring-pointer fields not yet
 # supported by cyrius #derive(Serialize)).
-fn drm_verinfo_to_json(v, sb) {
+fn drm_verinfo_to_json(v, sb): i64 {
     str_builder_add_cstr(sb, "{\"major\":");
     str_builder_add_int(sb, drm_verinfo_major(v));
     str_builder_add_cstr(sb, ",\"minor\":");
@@ -155,7 +155,7 @@ fn drm_verinfo_to_json(v, sb) {
     return 0;
 }
 
-fn _drm_emit_cstr_or_null(sb, c) {
+fn _drm_emit_cstr_or_null(sb, c): i64 {
     if (c == 0) {
         str_builder_add_cstr(sb, "null");
     } else {
@@ -172,7 +172,7 @@ fn _drm_emit_cstr_or_null(sb, c) {
 # result_arr: pre-allocated array of string pointers.
 # max_cards: capacity of result_arr.
 # Returns Result: Ok(count) or Err.
-fn drm_list_devices(result_arr, max_cards) {
+fn drm_list_devices(result_arr, max_cards): i64 {
     # Open /dev/dri/ directory
     var dri_path = "/dev/dri";
     # O_RDONLY | O_DIRECTORY = 0x10000
@@ -219,7 +219,7 @@ fn drm_list_devices(result_arr, max_cards) {
 # ================================================================
 
 # Open a DRM device by path. Returns Result: Ok(fd) or Err.
-fn drm_open(path) {
+fn drm_open(path): i64 {
     if (path == 0) {
         return err_invalid_argument("drm device path is null");
     }
@@ -232,7 +232,7 @@ fn drm_open(path) {
 }
 
 # Close a DRM device fd.
-fn drm_close(fd) {
+fn drm_close(fd): i64 {
     sys_close(fd);
     return 0;
 }
@@ -243,7 +243,7 @@ fn drm_close(fd) {
 
 # Get the DRM driver version for an open device fd.
 # Returns Result: Ok(drm_verinfo_ptr) or Err.
-fn drm_get_driver_version(fd) {
+fn drm_get_driver_version(fd): i64 {
     # First call: get string lengths
     var ver = alloc(DRM_VER_SIZE);
     memset(ver, 0, DRM_VER_SIZE);
@@ -297,7 +297,7 @@ fn drm_get_driver_version(fd) {
 # Query a DRM capability value for an open device fd.
 # cap: one of the DRM_CAP_* constants.
 # Returns Result: Ok(value) or Err.
-fn drm_get_capability(fd, cap) {
+fn drm_get_capability(fd, cap): i64 {
     # DrmGetCap struct: { capability: u64, value: u64 } = 16 bytes
     var getcap = alloc(16);
     store64(getcap, cap);
@@ -317,7 +317,7 @@ fn drm_get_capability(fd, cap) {
 
 # Check if device supports dumb buffers.
 # Returns Result: Ok(1) or Ok(0).
-fn drm_supports_dumb_buffer(fd) {
+fn drm_supports_dumb_buffer(fd): i64 {
     var res = drm_get_capability(fd, DRM_CAP_DUMB_BUFFER);
     if (is_err_result(res) == 1) { return res; }
     var val = payload(res);

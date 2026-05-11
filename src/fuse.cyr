@@ -14,7 +14,7 @@
 #derive(accessors)
 struct fuse_mount { device; mountpoint; fstype; options; }
 
-fn fuse_mount_new(device, mountpoint, fstype, options) {
+fn fuse_mount_new(device, mountpoint, fstype, options): i64 {
     var m = alloc(32);
     fuse_mount_set_device(m, device);
     fuse_mount_set_mountpoint(m, mountpoint);
@@ -28,7 +28,7 @@ fn fuse_mount_new(device, mountpoint, fstype, options) {
 # ================================================================
 
 # Check if a string starts with a prefix.
-fn fuse_starts_with(str, prefix) {
+fn fuse_starts_with(str, prefix): i64 {
     var slen = strlen(str);
     var plen = strlen(prefix);
     if (slen < plen) { return 0; }
@@ -43,7 +43,7 @@ fn fuse_starts_with(str, prefix) {
 # Extract a whitespace-delimited field from a line.
 # field_idx: 0-based field index.
 # Returns heap-allocated string or 0.
-fn fuse_extract_field(line, linelen, field_idx) {
+fn fuse_extract_field(line, linelen, field_idx): i64 {
     var pos = 0;
     var field = 0;
 
@@ -126,7 +126,7 @@ fn fuse_extract_field(line, linelen, field_idx) {
 # max_mounts: capacity.
 # fuse_only: 1 to return only fuse.* mounts, 0 for all.
 # Returns Result: Ok(count) or Err.
-fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only) {
+fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
     # Read /proc/mounts
     var fd = sys_open("/proc/mounts", 0, 0);  # O_RDONLY
     if (fd < 0) {
@@ -196,7 +196,7 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only) {
 # fuse_type: the specific FUSE fs type command (e.g., "sshfs", "ntfs-3g").
 # extra_opts: additional mount options string, or 0 for none.
 # Returns Result: Ok(0) or Err.
-fn fuse_mount(device, mountpoint, fuse_type, extra_opts) {
+fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
     if (device == 0) { return err_invalid_argument("fuse device is null"); }
     if (mountpoint == 0) { return err_invalid_argument("fuse mountpoint is null"); }
     if (fuse_type == 0) { return err_invalid_argument("fuse type is null"); }
@@ -234,7 +234,7 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts) {
 
 # Unmount a FUSE filesystem at the given mountpoint.
 # Returns Result: Ok(0) or Err.
-fn fuse_unmount(mountpoint) {
+fn fuse_unmount(mountpoint): i64 {
     if (mountpoint == 0) { return err_invalid_argument("unmount mountpoint is null"); }
     if (strlen(mountpoint) == 0) { return err_invalid_argument("unmount mountpoint is empty"); }
 
@@ -254,7 +254,7 @@ fn fuse_unmount(mountpoint) {
 # ================================================================
 
 # Lazy unmount via fusermount -uz (for busy mounts).
-fn fuse_unmount_lazy(mountpoint) {
+fn fuse_unmount_lazy(mountpoint): i64 {
     if (mountpoint == 0) { return err_invalid_argument("unmount mountpoint is null"); }
 
     var cmd = "fusermount";
@@ -274,7 +274,7 @@ fn fuse_unmount_lazy(mountpoint) {
 
 # Check whether FUSE is available on this system (/dev/fuse exists).
 # Returns 1 if available, 0 otherwise.
-fn fuse_is_available() {
+fn fuse_is_available(): i64 {
     return sys_access("/dev/fuse", 0) == 0;
 }
 
@@ -285,7 +285,7 @@ fn fuse_is_available() {
 # Validate that a path is suitable as a FUSE mountpoint.
 # Checks: not null, not root, exists, is a directory.
 # Returns Result: Ok(0) or Err.
-fn fuse_validate_mountpoint(path) {
+fn fuse_validate_mountpoint(path): i64 {
     if (path == 0 || strlen(path) == 0) {
         return err_invalid_argument("mountpoint path is empty");
     }
@@ -318,7 +318,7 @@ fn fuse_validate_mountpoint(path) {
 
 # List all currently mounted FUSE filesystems.
 # Returns Result: Ok(vec_of_mounts) or Err.
-fn fuse_list_mounts() {
+fn fuse_list_mounts(): i64 {
     var arr = alloc(1024);  # up to 128 mount pointers
     var res = fuse_parse_proc_mounts(arr, 128, 1);
     if (is_err_result(res) == 1) { return res; }
@@ -346,7 +346,7 @@ enum FuseStatus {
 
 # Get the status of a FUSE mount at the given mountpoint.
 # Returns Result: Ok(FuseStatus) or Err.
-fn fuse_get_status(mountpoint) {
+fn fuse_get_status(mountpoint): i64 {
     if (mountpoint == 0 || strlen(mountpoint) == 0) {
         return err_invalid_argument("mountpoint is empty");
     }

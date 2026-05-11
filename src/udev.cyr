@@ -43,13 +43,13 @@ struct udev_devinfo {
     prop_count;
 }
 
-fn udev_devinfo_new() {
+fn udev_devinfo_new(): i64 {
     var d = alloc(72);
     memset(d, 0, 72);
     return d;
 }
 
-fn udev_devinfo_set_props(d, keys, vals, count) {
+fn udev_devinfo_set_props(d, keys, vals, count): i64 {
     udev_devinfo_set_prop_keys(d, keys);
     udev_devinfo_set_prop_vals(d, vals);
     udev_devinfo_set_prop_count(d, count);
@@ -63,7 +63,7 @@ fn udev_devinfo_set_props(d, keys, vals, count) {
 # Parse a block of udevadm info output (P:/N:/S:/E: prefixed lines).
 # text: null-terminated string of udevadm output.
 # Returns Result: Ok(devinfo_ptr) or Err.
-fn udev_parse_udevadm_info(text) {
+fn udev_parse_udevadm_info(text): i64 {
     if (text == 0) {
         return err_invalid_argument("udevadm output is null");
     }
@@ -215,7 +215,7 @@ fn udev_parse_udevadm_info(text) {
 # result_arr: pre-allocated array of device pointers.
 # max_devices: max capacity of result_arr.
 # Returns Result: Ok(count) or Err.
-fn udev_list_devices(subsystem_filter, result_arr, max_devices) {
+fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
     var cmd = "udevadm";
     var argv = alloc(24);
     store64(argv, cmd);
@@ -294,7 +294,7 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices) {
 # Get device info for a single device by sysfs path
 # ================================================================
 
-fn udev_get_device_info(syspath) {
+fn udev_get_device_info(syspath): i64 {
     if (syspath == 0) {
         return err_invalid_argument("syspath is null");
     }
@@ -333,7 +333,7 @@ fn udev_get_device_info(syspath) {
 # RUN, PROGRAM, IMPORT{program}, IMPORT{builtin}
 
 # Check if a string starts with a given prefix
-fn udev_starts_with(str, prefix) {
+fn udev_starts_with(str, prefix): i64 {
     var slen = strlen(str);
     var plen = strlen(prefix);
     if (slen < plen) { return 0; }
@@ -349,7 +349,7 @@ fn udev_starts_with(str, prefix) {
 # action_keys: array of string pointers to action key names.
 # action_count: number of action keys.
 # Returns Result: Ok(0) if valid, Err if dangerous keys found.
-fn udev_validate_rule(action_keys, action_count) {
+fn udev_validate_rule(action_keys, action_count): i64 {
     var i = 0;
     while (i < action_count) {
         var key = load64(action_keys + i * 8);
@@ -372,7 +372,7 @@ fn udev_validate_rule(action_keys, action_count) {
 }
 
 # Parse a subsystem string into a constant
-fn udev_parse_subsystem(s) {
+fn udev_parse_subsystem(s): i64 {
     if (streq(s, "block") == 1) { return SUBSYS_BLOCK; }
     if (streq(s, "net") == 1) { return SUBSYS_NET; }
     if (streq(s, "input") == 1) { return SUBSYS_INPUT; }

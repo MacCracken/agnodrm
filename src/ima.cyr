@@ -48,7 +48,7 @@ enum ImaTarget {
 # String representations
 # ================================================================
 
-fn ima_action_str(action) {
+fn ima_action_str(action): i64 {
     if (action == IMA_MEASURE) { return "measure"; }
     if (action == IMA_APPRAISE) { return "appraise"; }
     if (action == IMA_AUDIT) { return "audit"; }
@@ -58,7 +58,7 @@ fn ima_action_str(action) {
     return "measure";
 }
 
-fn ima_target_str(target) {
+fn ima_target_str(target): i64 {
     if (target == IMA_FILE_CHECK) { return "FILE_CHECK"; }
     if (target == IMA_BPRM_CHECK) { return "BPRM_CHECK"; }
     if (target == IMA_MMAP_CHECK) { return "MMAP_CHECK"; }
@@ -84,7 +84,7 @@ struct ima_rule {
     mask;
 }
 
-fn ima_rule_new(action, target) {
+fn ima_rule_new(action, target): i64 {
     var r = alloc(56);
     ima_rule_set_action(r, action);
     ima_rule_set_target(r, target);
@@ -100,7 +100,7 @@ fn ima_rule_new(action, target) {
 # ImaPolicyRule validation
 # ================================================================
 
-fn ima_is_hex_char(ch) {
+fn ima_is_hex_char(ch): i64 {
     if (ch >= 48 && ch <= 57) { return 1; }
     if (ch >= 65 && ch <= 70) { return 1; }
     if (ch >= 97 && ch <= 102) { return 1; }
@@ -108,7 +108,7 @@ fn ima_is_hex_char(ch) {
 }
 
 # Validate a single rule. Returns Ok(0) or Err.
-fn ima_rule_validate(rule) {
+fn ima_rule_validate(rule): i64 {
     # Validate fsuuid if set
     var fsuuid = ima_rule_fsuuid(rule);
     if (fsuuid != 0) {
@@ -149,7 +149,7 @@ fn ima_rule_validate(rule) {
 # Returns Ok(policy_line_ptr) or Err.
 # ================================================================
 
-fn ima_rule_to_policy_line(rule) {
+fn ima_rule_to_policy_line(rule): i64 {
     var res = ima_rule_validate(rule);
     if (is_err_result(res) == 1) { return res; }
 
@@ -238,7 +238,7 @@ fn ima_rule_to_policy_line(rule) {
 #derive(Serialize)
 struct ima_status { active; measurement_count; policy_loaded; }
 
-fn ima_status_new(active, measurement_count, policy_loaded) {
+fn ima_status_new(active, measurement_count, policy_loaded): i64 {
     var s = alloc(24);
     ima_status_set_active(s, active);
     ima_status_set_measurement_count(s, measurement_count);
@@ -259,7 +259,7 @@ struct ima_measurement {
     filename;
 }
 
-fn ima_measurement_new(pcr, template_hash, template_name, filedata_hash, filename) {
+fn ima_measurement_new(pcr, template_hash, template_name, filedata_hash, filename): i64 {
     var m = alloc(40);
     ima_measurement_set_pcr(m, pcr);
     ima_measurement_set_template_hash(m, template_hash);
@@ -274,7 +274,7 @@ fn ima_measurement_new(pcr, template_hash, template_name, filedata_hash, filenam
 # Returns Ok(ima_status_ptr) or Err.
 # ================================================================
 
-fn ima_get_status() {
+fn ima_get_status(): i64 {
     var ima_dir = "/sys/kernel/security/ima";
     var acc = sys_access(ima_dir, 0);
 
@@ -325,7 +325,7 @@ fn ima_get_status() {
 # Returns Ok(vec_of_measurement_ptrs) or Err.
 # ================================================================
 
-fn ima_parse_measurements(content) {
+fn ima_parse_measurements(content): i64 {
     var measurements = vec_new();
     var clen = strlen(content);
     var pos = 0;
@@ -429,7 +429,7 @@ fn ima_parse_measurements(content) {
 # Returns Ok(vec_of_measurement_ptrs) or Err.
 # ================================================================
 
-fn ima_read_measurements() {
+fn ima_read_measurements(): i64 {
     var path = "/sys/kernel/security/ima/ascii_runtime_measurements";
     var fd = sys_open(path, O_RDONLY, 0);
     if (fd < 0) {
@@ -462,7 +462,7 @@ fn ima_read_measurements() {
 # Returns Ok(0) or Err.
 # ================================================================
 
-fn ima_write_policy(rules) {
+fn ima_write_policy(rules): i64 {
     var count = vec_len(rules);
     if (count == 0) {
         return err_invalid_argument("IMA policy has no rules");
@@ -530,7 +530,7 @@ fn ima_write_policy(rules) {
 # Returns Ok(1) if matches, Ok(0) if not.
 # ================================================================
 
-fn ima_verify_file_integrity(path) {
+fn ima_verify_file_integrity(path): i64 {
     var acc = sys_access(path, 0);
     if (acc < 0) {
         return err_invalid_argument("File not found");

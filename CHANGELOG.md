@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.6] — 2026-05-11
+
+**Stdlib annotation pass + cyrius pin 5.10.44 → 5.11.4.**
+
+Every public fn in `src/*.cyr` (351 fns) gains a `: i64`
+return-type annotation. Mechanical pass matching cyrius's
+v5.11.x annotation arc (Phases 1-6 in cyrius/CHANGELOG.md);
+parse-only, zero runtime / codegen change.
+
+Profile bundles all regenerated at v1.2.6:
+- `dist/agnosys.cyr` (700 fns, 10111 lines)
+- `dist/agnosys-core.cyr` (758 lines)
+- `dist/agnosys-security.cyr` (2337 lines)
+- `dist/agnosys-storage.cyr` (1511 lines)
+- `dist/agnosys-system.cyr` (3366 lines)
+- `dist/agnosys-trust.cyr` (2139 lines)
+
+Ready for the next cyrius-side fold-in slot.
+
+### Verified
+
+- `cyrius build src/main.cyr build/agnosys`: green.
+- All 6 profile bundles regenerated cleanly via `cyrius distlib`.
+
 ## [1.2.5] — 2026-05-11
 
 **Cyrius pin bump 5.10.34 → 5.10.44.**

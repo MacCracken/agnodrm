@@ -24,14 +24,14 @@ enum SysNrAgnos {
 }
 
 # fsync(2) — flush file to disk.
-fn agnosys_fsync(fd) {
+fn agnosys_fsync(fd): i64 {
     return syscall(AGNOS_SYS_FSYNC, fd);
 }
 
 # rename(2) equivalent — generic-table has no direct `rename`, route
 # via renameat2(AT_FDCWD, old, AT_FDCWD, new, 0). AT_FDCWD comes from
 # lib/syscalls_aarch64_linux.cyr (included transitively by stdlib).
-fn agnosys_rename(old_path, new_path) {
+fn agnosys_rename(old_path, new_path): i64 {
     return syscall(AGNOS_SYS_RENAMEAT2, AT_FDCWD, old_path, AT_FDCWD, new_path, 0);
 }
 

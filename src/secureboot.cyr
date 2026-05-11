@@ -34,7 +34,7 @@ enum SecureBootState {
 # EFI variables have a 4-byte attributes header followed by the payload.
 #
 # Layout of returned struct: { attrs (4 bytes at +0), payload_byte at +4, total_size at +8 }
-fn secureboot_read_efi_variable(path) {
+fn secureboot_read_efi_variable(path): i64 {
     if (path == 0) {
         return err_invalid_argument("efi variable path is null");
     }
@@ -70,13 +70,13 @@ fn secureboot_read_efi_variable(path) {
 }
 
 # Get the payload byte at index (after the 4-byte attributes header).
-fn secureboot_efi_var_payload_byte(data, index) {
+fn secureboot_efi_var_payload_byte(data, index): i64 {
     var buf = load64(data);
     return load8(buf + 4 + index);
 }
 
 # Get total bytes read.
-fn secureboot_efi_var_size(data) {
+fn secureboot_efi_var_size(data): i64 {
     return load64(data + 8);
 }
 
@@ -86,7 +86,7 @@ fn secureboot_efi_var_size(data) {
 
 # Detect the current Secure Boot state.
 # Returns Result: Ok(SecureBootState) or Err.
-fn secureboot_detect_state() {
+fn secureboot_detect_state(): i64 {
     # Check if EFI is available
     var efi_dir = "/sys/firmware/efi";
     var fd = sys_open(efi_dir, 0, 0);
@@ -162,12 +162,12 @@ fn secureboot_detect_state() {
 # Helper: check if Secure Boot is enforcing
 # ================================================================
 
-fn secureboot_is_enforcing(state) {
+fn secureboot_is_enforcing(state): i64 {
     return state == SB_ENABLED;
 }
 
 # State to string (returns pointer to static string)
-fn secureboot_state_str(state) {
+fn secureboot_state_str(state): i64 {
     if (state == SB_ENABLED) { return "enabled"; }
     if (state == SB_DISABLED) { return "disabled"; }
     if (state == SB_SETUP_MODE) { return "setup_mode"; }
@@ -184,7 +184,7 @@ fn secureboot_state_str(state) {
 #derive(accessors)
 struct secureboot_key { subject; issuer; fingerprint; not_before; not_after; }
 
-fn secureboot_enrolled_key_new(subject, issuer, fingerprint, not_before, not_after) {
+fn secureboot_enrolled_key_new(subject, issuer, fingerprint, not_before, not_after): i64 {
     var k = alloc(40);
     secureboot_key_set_subject(k, subject);
     secureboot_key_set_issuer(k, issuer);
@@ -200,7 +200,7 @@ fn secureboot_enrolled_key_new(subject, issuer, fingerprint, not_before, not_aft
 
 # Parse mokutil --list-enrolled output into a vec of EnrolledKey structs.
 # Returns vec of key pointers.
-fn secureboot_parse_mokutil_list(output, outlen) {
+fn secureboot_parse_mokutil_list(output, outlen): i64 {
     var keys = vec_new();
     var pos = 0;
 
@@ -323,7 +323,7 @@ fn secureboot_parse_mokutil_list(output, outlen) {
 
 # List enrolled MOK (Machine Owner Key) certificates.
 # Returns Result: Ok(vec_of_keys) or Err.
-fn secureboot_list_enrolled_keys() {
+fn secureboot_list_enrolled_keys(): i64 {
     var args = vec_new();
     vec_push(args, "mokutil");
     vec_push(args, "--list-enrolled");
@@ -346,7 +346,7 @@ fn secureboot_list_enrolled_keys() {
 # Enroll a DER-encoded certificate into the MOK list.
 # A reboot is required to complete enrollment.
 # Returns Result: Ok(0) or Err.
-fn secureboot_enroll_key(der_path) {
+fn secureboot_enroll_key(der_path): i64 {
     if (der_path == 0 || strlen(der_path) == 0) {
         return err_invalid_argument("certificate path is empty");
     }
@@ -384,7 +384,7 @@ fn secureboot_enroll_key(der_path) {
 # Sign a kernel module with a private key and certificate.
 # Uses kmodsign, falls back to sign-file from kernel headers.
 # Returns Result: Ok(0) or Err.
-fn secureboot_sign_module(module_path, private_key, certificate) {
+fn secureboot_sign_module(module_path, private_key, certificate): i64 {
     if (module_path == 0 || strlen(module_path) == 0) {
         return err_invalid_argument("module path is empty");
     }
@@ -479,7 +479,7 @@ fn secureboot_sign_module(module_path, private_key, certificate) {
 #derive(accessors)
 struct secureboot_sig { module; has_sig; signer; algorithm; }
 
-fn secureboot_sig_info_new(module_path, has_sig, signer, algo) {
+fn secureboot_sig_info_new(module_path, has_sig, signer, algo): i64 {
     var s = alloc(32);
     secureboot_sig_set_module(s, module_path);
     secureboot_sig_set_has_sig(s, has_sig);
@@ -490,7 +490,7 @@ fn secureboot_sig_info_new(module_path, has_sig, signer, algo) {
 
 # Verify a kernel module's signature using modinfo.
 # Returns Result: Ok(sig_info) or Err.
-fn secureboot_verify_module(module_path) {
+fn secureboot_verify_module(module_path): i64 {
     if (module_path == 0 || strlen(module_path) == 0) {
         return err_invalid_argument("module path is empty");
     }
@@ -558,7 +558,7 @@ fn secureboot_verify_module(module_path) {
 #derive(accessors)
 struct secureboot_efi_var { name; data_size; }
 
-fn secureboot_efi_var_new(name, size) {
+fn secureboot_efi_var_new(name, size): i64 {
     var v = alloc(16);
     secureboot_efi_var_set_name(v, name);
     secureboot_efi_var_set_data_size(v, size);
@@ -567,7 +567,7 @@ fn secureboot_efi_var_new(name, size) {
 
 # List security-relevant EFI variables from sysfs.
 # Returns Result: Ok(vec_of_efi_vars) or Err.
-fn secureboot_list_efi_variables() {
+fn secureboot_list_efi_variables(): i64 {
     var efivars_dir = "/sys/firmware/efi/efivars";
     var fd = sys_open(efivars_dir, 0, 0);
     if (fd < 0) {
