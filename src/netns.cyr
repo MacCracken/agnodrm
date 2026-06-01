@@ -235,10 +235,15 @@ fn netns_truncate_veth(base): i64 {
 # Helper: run ip command
 # ================================================================
 
-fn netns_run_ip(argv): i64 {
-    var cmd = "ip";
-    var res = run_capture(cmd, argv);
-    if (is_err_result(res) == 1) { return res; }
+# Run an `ip` command. `args` is a vec of cstr argv; element 0 is the
+# absolute command path. exec_vec builds a NULL-terminated argv and
+# execve's it directly. (The old run_capture/_exec3 path only supported
+# cmd + 2 args and passed the whole argv array as a single argument, so
+# `ip netns add <name>` never reached `ip`; execve also needs an absolute
+# path, not a bare "ip".)
+fn netns_run_ip(args): i64 {
+    var rc = exec_vec(args);
+    if (rc != 0) { return err_io(0, "ip command failed"); }
     return Ok(0);
 }
 
@@ -277,59 +282,41 @@ fn netns_create_agent_netns(config): i64 {
     var veth_agent = netns_truncate_veth(netns_concat3("veth-", name, "-a"));
 
     # 1. Create namespace: ip netns add <ns_name>
-    var argv1 = alloc(32);
-    store64(argv1, "ip");
-    store64(argv1 + 8, "netns");
-    store64(argv1 + 16, "add");
-    store64(argv1 + 24, ns_name);
-    var res = netns_run_ip(argv1);
+    var args1 = vec_new();
+    vec_push(args1, "/usr/sbin/ip"); vec_push(args1, "netns");
+    vec_push(args1, "add"); vec_push(args1, ns_name);
+    var res = netns_run_ip(args1);
     if (is_err_result(res) == 1) { return res; }
 
     # 2. Create veth pair: ip link add <host> type veth peer name <agent>
-    var argv2 = alloc(72);
-    store64(argv2, "ip");
-    store64(argv2 + 8, "link");
-    store64(argv2 + 16, "add");
-    store64(argv2 + 24, veth_host);
-    store64(argv2 + 32, "type");
-    store64(argv2 + 40, "veth");
-    store64(argv2 + 48, "peer");
-    store64(argv2 + 56, "name");
-    store64(argv2 + 64, veth_agent);
-    res = netns_run_ip(argv2);
+    var args2 = vec_new();
+    vec_push(args2, "/usr/sbin/ip"); vec_push(args2, "link"); vec_push(args2, "add");
+    vec_push(args2, veth_host); vec_push(args2, "type"); vec_push(args2, "veth");
+    vec_push(args2, "peer"); vec_push(args2, "name"); vec_push(args2, veth_agent);
+    res = netns_run_ip(args2);
     if (is_err_result(res) == 1) {
         # Cleanup namespace
-        var cleanup = alloc(32);
-        store64(cleanup, "ip");
-        store64(cleanup + 8, "netns");
-        store64(cleanup + 16, "delete");
-        store64(cleanup + 24, ns_name);
+        var cleanup = vec_new();
+        vec_push(cleanup, "/usr/sbin/ip"); vec_push(cleanup, "netns");
+        vec_push(cleanup, "delete"); vec_push(cleanup, ns_name);
         netns_run_ip(cleanup);
         return res;
     }
 
     # 3. Move agent veth into namespace: ip link set <agent> netns <ns>
-    var argv3 = alloc(48);
-    store64(argv3, "ip");
-    store64(argv3 + 8, "link");
-    store64(argv3 + 16, "set");
-    store64(argv3 + 24, veth_agent);
-    store64(argv3 + 32, "netns");
-    store64(argv3 + 40, ns_name);
-    res = netns_run_ip(argv3);
+    var args3 = vec_new();
+    vec_push(args3, "/usr/sbin/ip"); vec_push(args3, "link"); vec_push(args3, "set");
+    vec_push(args3, veth_agent); vec_push(args3, "netns"); vec_push(args3, ns_name);
+    res = netns_run_ip(args3);
     if (is_err_result(res) == 1) {
         # Cleanup
-        var cl1 = alloc(32);
-        store64(cl1, "ip");
-        store64(cl1 + 8, "link");
-        store64(cl1 + 16, "delete");
-        store64(cl1 + 24, veth_host);
+        var cl1 = vec_new();
+        vec_push(cl1, "/usr/sbin/ip"); vec_push(cl1, "link");
+        vec_push(cl1, "delete"); vec_push(cl1, veth_host);
         netns_run_ip(cl1);
-        var cl2 = alloc(32);
-        store64(cl2, "ip");
-        store64(cl2 + 8, "netns");
-        store64(cl2 + 16, "delete");
-        store64(cl2 + 24, ns_name);
+        var cl2 = vec_new();
+        vec_push(cl2, "/usr/sbin/ip"); vec_push(cl2, "netns");
+        vec_push(cl2, "delete"); vec_push(cl2, ns_name);
         netns_run_ip(cl2);
         return res;
     }
@@ -343,82 +330,45 @@ fn netns_create_agent_netns(config): i64 {
     var agent_cidr = netns_concat3(netns_config_agent_ip(config), "/", plen_str);
 
     # ip addr add <host_cidr> dev <veth_host>
-    var argv4 = alloc(48);
-    store64(argv4, "ip");
-    store64(argv4 + 8, "addr");
-    store64(argv4 + 16, "add");
-    store64(argv4 + 24, host_cidr);
-    store64(argv4 + 32, "dev");
-    store64(argv4 + 40, veth_host);
-    netns_run_ip(argv4);
+    var args4 = vec_new();
+    vec_push(args4, "/usr/sbin/ip"); vec_push(args4, "addr"); vec_push(args4, "add");
+    vec_push(args4, host_cidr); vec_push(args4, "dev"); vec_push(args4, veth_host);
+    netns_run_ip(args4);
 
     # ip netns exec <ns> ip addr add <agent_cidr> dev <agent>
-    var argv5 = alloc(72);
-    store64(argv5, "ip");
-    store64(argv5 + 8, "netns");
-    store64(argv5 + 16, "exec");
-    store64(argv5 + 24, ns_name);
-    store64(argv5 + 32, "ip");
-    store64(argv5 + 40, "addr");
-    store64(argv5 + 48, "add");
-    store64(argv5 + 56, agent_cidr);
-    store64(argv5 + 64, "dev");
-    # Need 11th element
-    var argv5b = alloc(88);
-    memcpy(argv5b, argv5, 72);
-    store64(argv5b + 72, veth_agent);
-    netns_run_ip(argv5b);
+    # (the inner `ip` is PATH-resolved by `ip netns exec`, so it stays bare)
+    var args5 = vec_new();
+    vec_push(args5, "/usr/sbin/ip"); vec_push(args5, "netns"); vec_push(args5, "exec"); vec_push(args5, ns_name);
+    vec_push(args5, "ip"); vec_push(args5, "addr"); vec_push(args5, "add"); vec_push(args5, agent_cidr);
+    vec_push(args5, "dev"); vec_push(args5, veth_agent);
+    netns_run_ip(args5);
 
     # 5. Bring interfaces up
-    var argv6 = alloc(40);
-    store64(argv6, "ip");
-    store64(argv6 + 8, "link");
-    store64(argv6 + 16, "set");
-    store64(argv6 + 24, veth_host);
-    store64(argv6 + 32, "up");
-    netns_run_ip(argv6);
+    var args6 = vec_new();
+    vec_push(args6, "/usr/sbin/ip"); vec_push(args6, "link"); vec_push(args6, "set");
+    vec_push(args6, veth_host); vec_push(args6, "up");
+    netns_run_ip(args6);
 
     # Bring up agent side in namespace
-    var argv7 = alloc(64);
-    store64(argv7, "ip");
-    store64(argv7 + 8, "netns");
-    store64(argv7 + 16, "exec");
-    store64(argv7 + 24, ns_name);
-    store64(argv7 + 32, "ip");
-    store64(argv7 + 40, "link");
-    store64(argv7 + 48, "set");
-    store64(argv7 + 56, veth_agent);
-    var argv7b = alloc(80);
-    memcpy(argv7b, argv7, 64);
-    store64(argv7b + 64, "up");
-    netns_run_ip(argv7b);
+    var args7 = vec_new();
+    vec_push(args7, "/usr/sbin/ip"); vec_push(args7, "netns"); vec_push(args7, "exec"); vec_push(args7, ns_name);
+    vec_push(args7, "ip"); vec_push(args7, "link"); vec_push(args7, "set"); vec_push(args7, veth_agent);
+    vec_push(args7, "up");
+    netns_run_ip(args7);
 
     # Bring up loopback in namespace
-    var argv8 = alloc(72);
-    store64(argv8, "ip");
-    store64(argv8 + 8, "netns");
-    store64(argv8 + 16, "exec");
-    store64(argv8 + 24, ns_name);
-    store64(argv8 + 32, "ip");
-    store64(argv8 + 40, "link");
-    store64(argv8 + 48, "set");
-    store64(argv8 + 56, "lo");
-    store64(argv8 + 64, "up");
-    netns_run_ip(argv8);
+    var args8 = vec_new();
+    vec_push(args8, "/usr/sbin/ip"); vec_push(args8, "netns"); vec_push(args8, "exec"); vec_push(args8, ns_name);
+    vec_push(args8, "ip"); vec_push(args8, "link"); vec_push(args8, "set"); vec_push(args8, "lo");
+    vec_push(args8, "up");
+    netns_run_ip(args8);
 
     # Set default route inside namespace
-    var argv9 = alloc(80);
-    store64(argv9, "ip");
-    store64(argv9 + 8, "netns");
-    store64(argv9 + 16, "exec");
-    store64(argv9 + 24, ns_name);
-    store64(argv9 + 32, "ip");
-    store64(argv9 + 40, "route");
-    store64(argv9 + 48, "add");
-    store64(argv9 + 56, "default");
-    store64(argv9 + 64, "via");
-    store64(argv9 + 72, netns_config_host_ip(config));
-    netns_run_ip(argv9);
+    var args9 = vec_new();
+    vec_push(args9, "/usr/sbin/ip"); vec_push(args9, "netns"); vec_push(args9, "exec"); vec_push(args9, ns_name);
+    vec_push(args9, "ip"); vec_push(args9, "route"); vec_push(args9, "add"); vec_push(args9, "default");
+    vec_push(args9, "via"); vec_push(args9, netns_config_host_ip(config));
+    netns_run_ip(args9);
 
     # Build netns path
     var netns_path = netns_concat2("/var/run/netns/", ns_name);
@@ -436,20 +386,16 @@ fn netns_destroy_agent_netns(handle): i64 {
     var ns_name = netns_handle_name(handle);
 
     # Delete host-side veth (peer is auto-deleted)
-    var argv1 = alloc(32);
-    store64(argv1, "ip");
-    store64(argv1 + 8, "link");
-    store64(argv1 + 16, "delete");
-    store64(argv1 + 24, veth_host);
-    netns_run_ip(argv1);
+    var args1 = vec_new();
+    vec_push(args1, "/usr/sbin/ip"); vec_push(args1, "link");
+    vec_push(args1, "delete"); vec_push(args1, veth_host);
+    netns_run_ip(args1);
 
     # Delete namespace
-    var argv2 = alloc(32);
-    store64(argv2, "ip");
-    store64(argv2 + 8, "netns");
-    store64(argv2 + 16, "delete");
-    store64(argv2 + 24, ns_name);
-    return netns_run_ip(argv2);
+    var args2 = vec_new();
+    vec_push(args2, "/usr/sbin/ip"); vec_push(args2, "netns");
+    vec_push(args2, "delete"); vec_push(args2, ns_name);
+    return netns_run_ip(args2);
 }
 
 # ================================================================
@@ -611,11 +557,10 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     store8(tmp_path + nft_prefix_len + nft_pid_len + nft_suffix_len, 0);
 
     # Ensure directory exists (ignore errors)
-    var mkdir_argv = alloc(24);
-    store64(mkdir_argv, "mkdir");
-    store64(mkdir_argv + 8, "-p");
-    store64(mkdir_argv + 16, "/run/agnos");
-    run_capture("mkdir", mkdir_argv);
+    var mkdir_args = vec_new();
+    vec_push(mkdir_args, "/usr/bin/mkdir"); vec_push(mkdir_args, "-p");
+    vec_push(mkdir_args, "/run/agnos");
+    exec_vec(mkdir_args);
 
     # Write ruleset to file
     var fd = sys_open(tmp_path, 0x241, 0x1A4);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
@@ -630,14 +575,11 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     defer { sys_unlink(tmp_path); }
 
     # ip netns exec <ns> nft -f <path>
-    var argv = alloc(56);
-    store64(argv, "ip");
-    store64(argv + 8, "netns");
-    store64(argv + 16, "exec");
-    store64(argv + 24, ns_name);
-    store64(argv + 32, "nft");
-    store64(argv + 40, "-f");
-    store64(argv + 48, tmp_path);
+    # (the inner `nft` is PATH-resolved by `ip netns exec`, so it stays bare)
+    var nft_args = vec_new();
+    vec_push(nft_args, "/usr/sbin/ip"); vec_push(nft_args, "netns"); vec_push(nft_args, "exec");
+    vec_push(nft_args, ns_name); vec_push(nft_args, "nft"); vec_push(nft_args, "-f");
+    vec_push(nft_args, tmp_path);
 
-    return netns_run_ip(argv);
+    return netns_run_ip(nft_args);
 }

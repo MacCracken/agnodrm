@@ -184,7 +184,7 @@ fn test_certpin() {
 }
 
 # ================================================================
-# update (12 assertions)
+# update (15 assertions)
 # ================================================================
 
 fn test_update() {
@@ -210,6 +210,28 @@ fn test_update() {
     str_builder_add_cstr(sb_exp, "{\"slot\":1,\"version\":\"2026.5.1\",\"pending\":0,");
     str_builder_add_cstr(sb_exp, "\"rollback_available\":0,\"boot_count\":7}");
     assert(str_eq(json, str_builder_build(sb_exp)) == 1, "us_json");
+
+    # Regression (1.3.0): update_check on a manifest larger than the
+    # 16384-byte read buffer must not overflow. The old read loop let
+    # `total` reach 16384, so the trailing `store8(buf+total,0)` wrote
+    # one byte past a full buffer. Manifest is >16383 bytes with the
+    # version field near the front so it still parses after truncation.
+    var mpath = "/tmp/agnos-update-bigmanifest.json";
+    var mbuf = alloc(20000);
+    var mhdr = "{\"version\":\"9999.1.0\",\"pad\":\"";
+    var mp = strlen(mhdr);
+    memcpy(mbuf, mhdr, mp);
+    memset(mbuf + mp, 65, 18000);  # 'A' padding past the 16KB buffer
+    mp = mp + 18000;
+    memcpy(mbuf + mp, "\"}", 2);
+    mp = mp + 2;
+    assert(file_write_all(mpath, mbuf, mp) == mp, "big_write");
+    var bcfg = update_config_new();
+    update_config_set_url(bcfg, "file:///tmp/agnos-update-bigmanifest.json");
+    var bres = update_check(bcfg, "2026.1.0");
+    assert(is_ok(bres) == 1, "big_check_ok");
+    assert(payload(bres) != 0, "big_check_newer");
+    sys_unlink(mpath);
     return 0;
 }
 
@@ -507,7 +529,7 @@ fn test_drm() {
 }
 
 # ================================================================
-# netns (13 assertions)
+# netns (14 assertions)
 # ================================================================
 
 fn test_netns() {
@@ -528,6 +550,23 @@ fn test_netns() {
     var fp = netns_fw_policy_new(FW_DROP, FW_ACCEPT);
     assert_eq(netns_fw_policy_default_in(fp), FW_DROP, "fp_i");
     assert_eq(netns_fw_policy_default_out(fp), FW_ACCEPT, "fp_o");
+
+    # Regression (1.3.0): netns command exec was broken — the argv array was
+    # passed as a single argument to run_capture/_exec3 (cmd + 2 args max),
+    # so multi-arg `ip netns add ...` never reached the binary. netns now
+    # builds a cstr vec and runs it via exec_vec, which NULL-terminates a
+    # real argv and execve's an absolute path. The privileged `ip` path
+    # needs CAP_NET_ADMIN, so guard the mechanism netns depends on with a
+    # rootless absolute-path command carrying two args past argv[0].
+    var ed = "/tmp/agnos-netns-exec-test/sub";
+    var margs = vec_new();
+    vec_push(margs, "/usr/bin/mkdir");
+    vec_push(margs, "-p");
+    vec_push(margs, ed);
+    exec_vec(margs);
+    assert(sys_access(ed, 0) == 0, "exec_vec_multiarg");
+    sys_rmdir("/tmp/agnos-netns-exec-test/sub");
+    sys_rmdir("/tmp/agnos-netns-exec-test");
     return 0;
 }
 

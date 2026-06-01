@@ -437,18 +437,33 @@ fn ima_read_measurements(): i64 {
     }
     defer { sys_close(fd); }
 
-    # Read entire file into buffer (max 64KB)
+    # Read the entire measurement log, growing the buffer to EOF rather
+    # than silently truncating. IMA logs on a busy system routinely exceed
+    # a fixed 64KB buffer; truncating would hide measurements from
+    # attestation (a security gap). Start at 64KB, double on fill, and
+    # refuse anything past a 32MB safety ceiling (runaway / malformed log).
+    var cap_max = 33554432;  # 32 MiB hard ceiling
     var bufsize = 65536;
     var buf = alloc(bufsize);
-    memset(buf, 0, bufsize);
     var total = 0;
     var rgo = 1;
     while (rgo == 1) {
         var n = sys_read(fd, buf + total, bufsize - total - 1);
-        if (n <= 0) { rgo = 0; }
-        else {
+        if (n <= 0) {
+            rgo = 0;
+        } else {
             total = total + n;
-            if (total >= bufsize - 1) { rgo = 0; }
+            if (total >= bufsize - 1) {
+                if (bufsize >= cap_max) {
+                    return err_io(0, "IMA measurement log exceeds 32MB cap");
+                }
+                var newsize = bufsize * 2;
+                if (newsize > cap_max) { newsize = cap_max; }
+                var newbuf = alloc(newsize);
+                memcpy(newbuf, buf, total);
+                buf = newbuf;
+                bufsize = newsize;
+            }
         }
     }
     store8(buf + total, 0);

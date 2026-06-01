@@ -551,8 +551,18 @@ fn update_save_state(state, path): i64 {
     if (state == 0) { return err_invalid_argument("state is null"); }
     if (path == 0) { return err_invalid_argument("path is null"); }
 
-    # Build JSON manually
-    var buf = alloc(512);
+    # Build JSON manually. Size the buffer from the actual variable-length
+    # fields (version, pending) plus fixed scaffolding, so a large field
+    # value loaded from an external state file can't overflow a fixed
+    # allocation. Fixed literals + slot digit + boot_count int total <120
+    # bytes; 160 leaves headroom.
+    var ver = update_state_version(state);
+    var pending = update_state_pending(state);
+    var vlen = 0;
+    if (ver != 0) { vlen = strlen(ver); }
+    var plen = 0;
+    if (pending != 0) { plen = strlen(pending); }
+    var buf = alloc(160 + vlen + plen);
     var pos = 0;
 
     # JSON: current_slot, current_version, pending, rollback, boot_count
@@ -568,9 +578,7 @@ fn update_save_state(state, path): i64 {
     memcpy(buf + pos, cvh, strlen(cvh));
     pos = pos + strlen(cvh);
 
-    var ver = update_state_version(state);
     if (ver != 0) {
-        var vlen = strlen(ver);
         memcpy(buf + pos, ver, vlen);
         pos = pos + vlen;
     }
@@ -580,13 +588,11 @@ fn update_save_state(state, path): i64 {
     var puh = ",\"pending_update\":";
     memcpy(buf + pos, puh, strlen(puh));
     pos = pos + strlen(puh);
-    var pending = update_state_pending(state);
     if (pending == 0) {
         memcpy(buf + pos, "null", 4);
         pos = pos + 4;
     } else {
         store8(buf + pos, 34); pos = pos + 1;
-        var plen = strlen(pending);
         memcpy(buf + pos, pending, plen);
         pos = pos + plen;
         store8(buf + pos, 34); pos = pos + 1;
@@ -809,13 +815,16 @@ fn update_check(config, current_version): i64 {
     }
     defer { sys_close(fd); }
 
+    # Reserve the last byte for the NUL terminator so `total` can never
+    # reach the allocation end (store8 below would otherwise write one
+    # byte past a full 16384-byte buffer). Mirrors ima_read_measurements.
     var buf = alloc(16384);
     var total = 0;
-    var nread = sys_read(fd, buf + total, 16384 - total);
+    var nread = sys_read(fd, buf + total, 16384 - total - 1);
     while (nread > 0) {
         total = total + nread;
-        if (total >= 16384) { break; }
-        nread = sys_read(fd, buf + total, 16384 - total);
+        if (total >= 16384 - 1) { break; }
+        nread = sys_read(fd, buf + total, 16384 - total - 1);
     }
     store8(buf + total, 0);
 
