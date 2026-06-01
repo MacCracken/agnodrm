@@ -443,7 +443,16 @@ language-feature surface — these are durable infrastructure improvements.
 
 ### V1.3+ — Cross-repo / meta-tooling
 
-#### V1.3.0 — `state.md` release post-hook (was 8.6)
+#### V1.3.0 — ✅ SHIPPED 2026-06-01 — correctness + refactor/optimization minor
+
+Re-scoped from the original "state.md post-hook" plan (that cross-repo concern
+moved to V1.4.0 below). 1.3.0 shipped: cyrius pin 6.0.14 → 6.0.24; 4 buffer/exec
+defects fixed (F-11 HIGH heap overflow, F-12/F-13 MEDIUM, F-14 LOW netns exec);
+`src/util.cyr` cross-module dedup (+5 `agnosys_*`, non-breaking); benchmarked
+hot-path wins (`starts_with` −68%/−77%, `mac_default_profile` −26%); Tier-3
+hygiene. See CHANGELOG `[1.3.0]` and `docs/audit/2026-06-01-audit.md`.
+
+#### V1.4.0 — `state.md` release post-hook (was 8.6)
 
 - [x] state.md created at 1.0.1
 - [ ] Release post-hook auto-bumps state.md (version, binary size, test counts)
@@ -457,7 +466,8 @@ language-feature surface — these are durable infrastructure improvements.
 - [ ] Subsequent V1.1.x slots (1.1.1 through 1.1.7) ship as patches against 1.1.
 - [ ] **1.2.0** ships when V1.2.0 (multi-profile distlib) is complete; closeout against the consumer set.
 - [ ] V1.2.x slots may ship in any order; gate is bench parity + audit clean.
-- [ ] V1.3.0 ships when the agnosticos meta-tooling supports the release post-hook.
+- [x] **1.3.0** shipped 2026-06-01 — correctness + refactor/optimization minor (re-scoped from the post-hook plan; pin 6.0.24, 4 buffer/exec fixes, `src/util.cyr` dedup, bench wins). See CHANGELOG `[1.3.0]`.
+- [ ] V1.4.0 ships when the agnosticos meta-tooling supports the state.md release post-hook.
 
 ## Consumer Map (durable)
 

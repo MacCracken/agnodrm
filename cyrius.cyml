@@ -23,6 +23,7 @@ modules = [
     "src/error.cyr",
     "src/syscall.cyr",
     "src/logging.cyr",
+    "src/util.cyr",
     "src/security.cyr",
     "src/mac.cyr",
     "src/audit.cyr",
@@ -55,6 +56,7 @@ modules = [
     "src/error.cyr",
     "src/syscall.cyr",
     "src/logging.cyr",
+    "src/util.cyr",
 ]
 
 [lib.security]

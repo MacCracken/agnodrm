@@ -367,21 +367,12 @@ fn mac_profile_new(agent_type): i64 {
 # cstring support lands.
 fn mac_profile_to_json(p, sb): i64 {
     str_builder_add_cstr(sb, "{\"agent_type\":");
-    _mac_emit_cstr_or_null(sb, mac_profile_agent_type(p));
+    agnosys_json_emit_cstr_or_null(sb, mac_profile_agent_type(p));
     str_builder_add_cstr(sb, ",\"selinux_ctx\":");
-    _mac_emit_cstr_or_null(sb, mac_profile_selinux_ctx(p));
+    agnosys_json_emit_cstr_or_null(sb, mac_profile_selinux_ctx(p));
     str_builder_add_cstr(sb, ",\"apparmor_name\":");
-    _mac_emit_cstr_or_null(sb, mac_profile_apparmor_name(p));
+    agnosys_json_emit_cstr_or_null(sb, mac_profile_apparmor_name(p));
     str_builder_add_cstr(sb, "}");
-    return 0;
-}
-
-fn _mac_emit_cstr_or_null(sb, c): i64 {
-    if (c == 0) {
-        str_builder_add_cstr(sb, "null");
-    } else {
-        str_builder_add_json_str(sb, str_from(c));
-    }
     return 0;
 }
 
@@ -401,27 +392,26 @@ fn mac_default_profile(agent_type): i64 {
     var ctx_suffix = "_t:s0";
     var cplen = 29;
     var cslen = 5;
-    var ctx_buf[128];
-    memcpy(&ctx_buf, ctx_prefix, cplen);
-    memcpy(&ctx_buf + cplen, agent_type, tlen);
-    memcpy(&ctx_buf + cplen + tlen, ctx_suffix, cslen);
-    store8(&ctx_buf + cplen + tlen + cslen, 0);
-    # Copy to heap (caller may hold pointer beyond alloc_reset)
+    # Build straight into the heap allocation (caller may hold the pointer
+    # beyond alloc_reset). Skips a static staging buffer + the extra
+    # buffer→heap copy, and avoids the function-scoped `var buf[N]`
+    # static-data hazard.
     var ctx_total = cplen + tlen + cslen;
     var ctx = alloc(ctx_total + 1);
-    memcpy(ctx, &ctx_buf, ctx_total + 1);
+    memcpy(ctx, ctx_prefix, cplen);
+    memcpy(ctx + cplen, agent_type, tlen);
+    memcpy(ctx + cplen + tlen, ctx_suffix, cslen);
+    store8(ctx + cplen + tlen + cslen, 0);
     mac_profile_set_selinux_ctx(p, ctx);
 
     # Build AppArmor profile: "agnos-agent-<type>"
     var aa_prefix = "agnos-agent-";
     var aplen = 12;
-    var aa_buf[64];
-    memcpy(&aa_buf, aa_prefix, aplen);
-    memcpy(&aa_buf + aplen, agent_type, tlen);
-    store8(&aa_buf + aplen + tlen, 0);
     var aa_total = aplen + tlen;
     var aa = alloc(aa_total + 1);
-    memcpy(aa, &aa_buf, aa_total + 1);
+    memcpy(aa, aa_prefix, aplen);
+    memcpy(aa + aplen, agent_type, tlen);
+    store8(aa + aplen + tlen, 0);
     mac_profile_set_apparmor_name(p, aa);
 
     return p;
@@ -510,9 +500,10 @@ fn mac_apply_agent_profile(agent_type, profiles, profile_count): i64 {
         var ptype = mac_profile_agent_type(p);
         if (streq(ptype, agent_type) == 1) {
             found = p;
-            break;
+            idx = profile_count;  # match found — end the loop (no break in var-loop)
+        } else {
+            idx = idx + 1;
         }
-        idx = idx + 1;
     }
 
     if (found == 0) {

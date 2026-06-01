@@ -320,8 +320,8 @@ fn audit_open(config): i64 {
     if (audit_config_use_proc(config) == 1) {
         var proc_path = audit_config_proc_path(config);
         if (sys_access(proc_path, 0) != 0) {
-            # Proc path does not exist — warn but continue
-            # (non-fatal, just means proc reads will fail)
+            # Non-fatal: netlink still works; proc reads will fail.
+            log_warn("audit proc path not accessible — proc reads will fail");
         }
     }
 
@@ -623,10 +623,15 @@ fn audit_read_proc_events(proc_path): i64 {
     memset(buf, 0, buf_size + 1);
     var total_read = 0;
 
-    while (total_read < buf_size) {
+    var rgo = 1;
+    while (rgo == 1) {
         var n = sys_read(fd, buf + total_read, buf_size - total_read);
-        if (n <= 0) { break; }
-        total_read = total_read + n;
+        if (n <= 0) {
+            rgo = 0;
+        } else {
+            total_read = total_read + n;
+            if (total_read >= buf_size) { rgo = 0; }
+        }
     }
 
     if (total_read == 0) {

@@ -332,17 +332,10 @@ fn udev_get_device_info(syspath): i64 {
 # Dangerous action keys that must be rejected
 # RUN, PROGRAM, IMPORT{program}, IMPORT{builtin}
 
-# Check if a string starts with a given prefix
+# Check if a string starts with a given prefix.
+# Thin wrapper over the shared single-pass predicate (public API stable).
 fn udev_starts_with(str, prefix): i64 {
-    var slen = strlen(str);
-    var plen = strlen(prefix);
-    if (slen < plen) { return 0; }
-    var i = 0;
-    while (i < plen) {
-        if (load8(str + i) != load8(prefix + i)) { return 0; }
-        i = i + 1;
-    }
-    return 1;
+    return agnosys_cstr_starts_with(str, prefix);
 }
 
 # Validate a udev rule.

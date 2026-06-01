@@ -121,25 +121,25 @@ fn _journald_build_argv(filter): i64 {
     vec_push(args, "--output=json");
     vec_push(args, "--no-pager");
 
-    var unit = load64(filter);
+    var unit = journald_filter_unit(filter);
     if (unit != 0) {
         vec_push(args, "--unit");
         vec_push(args, str_cstr(unit));
     }
 
-    var since = load64(filter + 8);
+    var since = journald_filter_since(filter);
     if (since != 0) {
         vec_push(args, "--since");
         vec_push(args, str_cstr(since));
     }
 
-    var until = load64(filter + 16);
+    var until = journald_filter_until(filter);
     if (until != 0) {
         vec_push(args, "--until");
         vec_push(args, str_cstr(until));
     }
 
-    var prio = load64(filter + 24);
+    var prio = journald_filter_priority(filter);
     if (prio >= 0) {
         var pbuf = alloc(24);
         fmt_int_buf(prio, pbuf);
@@ -147,13 +147,13 @@ fn _journald_build_argv(filter): i64 {
         vec_push(args, pbuf);
     }
 
-    var grep = load64(filter + 32);
+    var grep = journald_filter_grep(filter);
     if (grep != 0) {
         vec_push(args, "--grep");
         vec_push(args, str_cstr(grep));
     }
 
-    var lines = load64(filter + 40);
+    var lines = journald_filter_lines(filter);
     if (lines >= 0) {
         var lbuf = alloc(24);
         fmt_int_buf(lines, lbuf);
@@ -161,7 +161,7 @@ fn _journald_build_argv(filter): i64 {
         vec_push(args, lbuf);
     }
 
-    var boot = load64(filter + 48);
+    var boot = journald_filter_boot(filter);
     if (boot != 0) {
         vec_push(args, "--boot");
         vec_push(args, str_cstr(boot));

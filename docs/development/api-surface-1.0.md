@@ -195,7 +195,7 @@
 - `dmverity_format(arg1, arg2, arg3, arg4)` → Format a data device for dm-verity, generating the hash tree. Returns Ok(root_hash_ptr) — the com...
 - `dmverity_hash_algo_str(arg)` → (no behavioral docs)
 - `dmverity_hash_hex_len(arg)` → (no behavioral docs)
-- `dmverity_is_hex_char(arg)` → Check if a byte is a valid hex character
+- `dmverity_is_hex_char(arg)` → Check if a byte is a valid hex character. Thin wrapper over the shared predicate (public API kept...
 - `dmverity_is_name_char(arg)` → Check if a byte is valid for a dm name (alphanum, dash, underscore)
 - `dmverity_open(arg)` → Open (activate) a dm-verity volume. Creates a read-only device mapping at /dev/mapper/{name}. Ret...
 - `dmverity_run_capture(arg1, arg2, arg3)` → (no behavioral docs)
@@ -284,7 +284,7 @@
 - `fuse_mount_set_mountpoint(arg1, arg2)` → (no behavioral docs)
 - `fuse_mount_set_options(arg1, arg2)` → (no behavioral docs)
 - `fuse_parse_proc_mounts(arg1, arg2, arg3)` → Parse /proc/mounts and return FUSE mounts. result_arr: pre-allocated array of FuseMount pointers....
-- `fuse_starts_with(arg1, arg2)` → Check if a string starts with a prefix.
+- `fuse_starts_with(arg1, arg2)` → Check if a string starts with a prefix. Thin wrapper over the shared single-pass predicate (publi...
 - `fuse_unmount(arg)` → Unmount a FUSE filesystem at the given mountpoint. Returns Result: Ok(0) or Err.
 - `fuse_unmount_lazy(arg)` → Lazy unmount via fusermount -uz (for busy mounts).
 - `fuse_validate_mountpoint(arg)` → Validate that a path is suitable as a FUSE mountpoint. Checks: not null, not root, exists, is a d...
@@ -293,7 +293,7 @@
 
 - `ima_action_str(arg)` → (no behavioral docs)
 - `ima_get_status()` → (no behavioral docs)
-- `ima_is_hex_char(arg)` → (no behavioral docs)
+- `ima_is_hex_char(arg)` → Thin wrapper over the shared predicate (public API kept stable).
 - `ima_measurement_filedata_hash(arg)` → (no behavioral docs)
 - `ima_measurement_filename(arg)` → (no behavioral docs)
 - `ima_measurement_new(arg1, arg2, arg3, arg4, arg5)` → (no behavioral docs)
@@ -737,7 +737,7 @@
 - `udev_list_devices(arg1, arg2, arg3)` → List all devices, optionally filtered by subsystem string. subsystem_filter: a null-terminated st...
 - `udev_parse_subsystem(arg)` → Parse a subsystem string into a constant
 - `udev_parse_udevadm_info(arg)` → Parse a block of udevadm info output (P:/N:/S:/E: prefixed lines). text: null-terminated string o...
-- `udev_starts_with(arg1, arg2)` → Check if a string starts with a given prefix
+- `udev_starts_with(arg1, arg2)` → Check if a string starts with a given prefix. Thin wrapper over the shared single-pass predicate ...
 - `udev_validate_rule(arg1, arg2)` → Validate a udev rule. action_keys: array of string pointers to action key names. action_count: nu...
 
 ### `update` (src/update.cyr)

@@ -396,7 +396,7 @@ fn update_state_to_json(s, sb): i64 {
     str_builder_add_cstr(sb, "{\"slot\":");
     str_builder_add_int(sb, update_state_slot(s));
     str_builder_add_cstr(sb, ",\"version\":");
-    _update_emit_cstr_or_null(sb, update_state_version(s));
+    agnosys_json_emit_cstr_or_null(sb, update_state_version(s));
     str_builder_add_cstr(sb, ",\"pending\":");
     str_builder_add_int(sb, update_state_pending(s));
     str_builder_add_cstr(sb, ",\"rollback_available\":");
@@ -404,15 +404,6 @@ fn update_state_to_json(s, sb): i64 {
     str_builder_add_cstr(sb, ",\"boot_count\":");
     str_builder_add_int(sb, update_state_boot_count(s));
     str_builder_add_cstr(sb, "}");
-    return 0;
-}
-
-fn _update_emit_cstr_or_null(sb, c): i64 {
-    if (c == 0) {
-        str_builder_add_cstr(sb, "null");
-    } else {
-        str_builder_add_json_str(sb, str_from(c));
-    }
     return 0;
 }
 
@@ -764,11 +755,7 @@ fn update_verify_manifest(manifest): i64 {
         var hi = 0;
         while (hi < 64) {
             var c = load8(hash + hi);
-            var valid = 0;
-            if (c >= 48 && c <= 57) { valid = 1; }   # 0-9
-            if (c >= 97 && c <= 102) { valid = 1; }   # a-f
-            if (c >= 65 && c <= 70) { valid = 1; }     # A-F
-            if (valid == 0) {
+            if (agnosys_is_hex_char(c) == 0) {
                 return err_invalid_argument("file sha256 contains non-hex character");
             }
             hi = hi + 1;

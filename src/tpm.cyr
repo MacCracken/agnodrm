@@ -97,19 +97,11 @@ fn tpm_sealed_new(context_path, pcr_selection): i64 {
 # ================================================================
 
 fn tpm_run_capture(args, buf, buflen): i64 {
-    var n = exec_capture(args, buf, buflen);
-    if (n < 0) {
-        return err_unknown("tpm2 tool execution failed");
-    }
-    return Ok(n);
+    return agnosys_run_capture(args, buf, buflen, "tpm2 tool execution failed");
 }
 
 fn tpm_run_checked(args): i64 {
-    var rc = exec_vec(args);
-    if (rc != 0) {
-        return err_unknown("tpm2 tool command failed");
-    }
-    return Ok(0);
+    return agnosys_run_checked(args, "tpm2 tool command failed");
 }
 
 # ================================================================
@@ -301,7 +293,7 @@ fn tpm_extend_pcr(bank, index, hash): i64 {
     var hi = 0;
     while (hi < hlen) {
         var ch = load8(hash + hi);
-        if (ch < 48 || (ch > 57 && ch < 65) || (ch > 70 && ch < 97) || ch > 102) {
+        if (agnosys_is_hex_char(ch) == 0) {
             return err_invalid_argument("Hash contains non-hex characters");
         }
         hi = hi + 1;
@@ -485,9 +477,12 @@ fn tpm_get_random(buf, count): i64 {
     vec_push(args, "--hex");
     vec_push(args, &cbuf);
 
-    var hexbuf = alloc(8200);
-    memset(hexbuf, 0, 8200);
-    var cap_res = tpm_run_capture(args, hexbuf, 8199);
+    # Size to the actual hex output (count*2 chars + slop for a trailing
+    # newline) rather than a fixed 8200-byte buffer; the decode loop is
+    # bounded by hexlen, so the buffer needs no zeroing.
+    var hexcap = count * 2 + 8;
+    var hexbuf = alloc(hexcap);
+    var cap_res = tpm_run_capture(args, hexbuf, hexcap - 1);
     if (is_err_result(cap_res) == 1) { return cap_res; }
 
     var hexlen = payload(cap_res);

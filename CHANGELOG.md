@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-06-01
+
+**Cyrius pin 6.0.14 → 6.0.24 + correctness/security pass + refactor &
+optimization closeout.** A real minor: four buffer/exec defects fixed (one
+HIGH), cross-module duplication consolidated into a new `src/util.cyr`, and
+benchmarked hot-path wins. Full audit clean (11/11). See
+[`docs/audit/2026-06-01-audit.md`](docs/audit/2026-06-01-audit.md).
+
+The 6.0.15–6.0.24 upstream window is entirely the native-TLS arc
+(`lib/tls_native.cyr`, "no compiler change"); the agnosys binary is unchanged at
+159,024 B. No language modernization was applicable.
+
+### Security
+
+- **F-11 (HIGH) — `update_check` heap overflow.** The manifest read loop let
+  `total` reach the 16384-byte buffer end, so `store8(buf + total, 0)` wrote one
+  byte past the allocation on any manifest ≥16KB (manifests come from external
+  `file://` input). Fixed by reserving the terminator byte (mirrors
+  `ima_read_measurements`). Regression test added (18KB manifest).
+- **F-12 (MEDIUM) — `update_save_state` fixed-buffer overflow.** JSON was built
+  into a fixed `alloc(512)` from `version`/`pending` fields that can come from a
+  loaded state file. Now sized from the actual field lengths.
+- **F-13 (MEDIUM) — `ima_read_measurements` silent truncation.** The IMA log was
+  truncated at 64KB, hiding measurements from attestation. Now grows to EOF with
+  a 32MB ceiling (errors past it instead of silently dropping the tail).
+- **F-14 (LOW) — `netns` exec hardening.** The `ip`/`nft`/`mkdir` exec path was
+  non-functional (argv array passed as a single arg; bare command names
+  `execve` can't resolve) and PATH-hijackable. Rewrote all 15 sites onto
+  `exec_vec` with **absolute** command paths. Regression test
+  `exec_vec_multiarg` added.
+
+### Added
+
+- **`src/util.cyr`** — shared `agnosys_*` cross-module helpers, in `[lib.core]`
+  (every profile bundle resolves them): `agnosys_json_emit_cstr_or_null`,
+  `agnosys_is_hex_char`, `agnosys_cstr_starts_with`, `agnosys_run_capture`,
+  `agnosys_run_checked`. +5 public fns (additive, non-breaking; 730 → 735).
+- Regression tests: `big_check_*` (F-11), `exec_vec_multiarg` (F-14).
+  Test count 247 → 251.
+- **CLAUDE.md** — benchmarks are now run on **every** version bump
+  (`scripts/bench-history.sh`, with a delta/regression check) as a Work-Loop
+  step and a hard constraint.
+
+### Changed
+
+- **`cyrius.cyml`** — pin 6.0.14 → 6.0.24; `src/util.cyr` added to `[lib]` and
+  `[lib.core]`.
+- **Cross-module dedup (Tier 1)** — 5 byte-identical `_<mod>_emit_cstr_or_null`
+  shims, the hex-char predicate (ima/dmverity/tpm/update), the cstr prefix check
+  (fuse/udev), and the subprocess wrappers (dmverity/luks/tpm `*_run_capture`/
+  `*_run_checked`) collapsed onto the shared helpers. Public names retained as
+  thin wrappers — **no API surface change** beyond the 5 additions.
+- **Hygiene (Tier 3)** — removed `break` from `var`-declaring `while` loops
+  (audit, mac); `journald` filter argv uses generated `journald_filter_*`
+  accessors instead of raw offsets; `audit_open` emits a real `log_warn`.
+- **`dist/agnosys.cyr` + 5 profile bundles** — regenerated at 1.3.0
+  (10,110 → 10,062 lines on the full bundle; dedup outweighs the new module).
+
+### Performance
+
+Benchmarked against the 6.0.24 baseline (`scripts/bench-history.sh`):
+
+- **`agnosys_cstr_starts_with` single-pass** (drops the up-front `strlen` of the
+  subject): `starts_with_hit` **47 → 15ns** (−68%), `starts_with_miss`
+  **31 → 7ns** (−77%).
+- **`mac_default_profile`** builds straight into the heap allocation (removes a
+  static staging buffer, an extra copy, and a `var buf[N]` static-data hazard):
+  **324 → 239ns** (−26%).
+- `tpm_get_random` sizes its hex buffer to `count*2+8` and drops a dead `memset`
+  (allocation reduction; not benchmarked — execs an external tool).
+
 ## [1.2.8] — 2026-05-28
 
 **Cyrius pin bump 6.0.1 → 6.0.14 + workaround audit.**

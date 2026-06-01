@@ -146,21 +146,12 @@ fn drm_verinfo_to_json(v, sb): i64 {
     str_builder_add_cstr(sb, ",\"patch\":");
     str_builder_add_int(sb, drm_verinfo_patch(v));
     str_builder_add_cstr(sb, ",\"name\":");
-    _drm_emit_cstr_or_null(sb, drm_verinfo_name(v));
+    agnosys_json_emit_cstr_or_null(sb, drm_verinfo_name(v));
     str_builder_add_cstr(sb, ",\"date\":");
-    _drm_emit_cstr_or_null(sb, drm_verinfo_date(v));
+    agnosys_json_emit_cstr_or_null(sb, drm_verinfo_date(v));
     str_builder_add_cstr(sb, ",\"desc\":");
-    _drm_emit_cstr_or_null(sb, drm_verinfo_desc(v));
+    agnosys_json_emit_cstr_or_null(sb, drm_verinfo_desc(v));
     str_builder_add_cstr(sb, "}");
-    return 0;
-}
-
-fn _drm_emit_cstr_or_null(sb, c): i64 {
-    if (c == 0) {
-        str_builder_add_cstr(sb, "null");
-    } else {
-        str_builder_add_json_str(sb, str_from(c));
-    }
     return 0;
 }
 

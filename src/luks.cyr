@@ -384,20 +384,12 @@ fn luks_write_keyfile(key_ptr, key_len): i64 {
 
 # Helper: build argv vec and run with exec_capture, return Ok(bytes_read) or Err
 fn luks_run_capture(args, buf, buflen): i64 {
-    var n = exec_capture(args, buf, buflen);
-    if (n < 0) {
-        return err_unknown("command execution failed");
-    }
-    return Ok(n);
+    return agnosys_run_capture(args, buf, buflen, "command execution failed");
 }
 
 # Helper: build argv vec and run, return Ok(exit_code) or Err
 fn luks_run_checked(args): i64 {
-    var rc = exec_vec(args);
-    if (rc != 0) {
-        return err_unknown("command failed with non-zero exit");
-    }
-    return Ok(0);
+    return agnosys_run_checked(args, "command failed with non-zero exit");
 }
 
 # Format a LUKS2 encrypted volume.

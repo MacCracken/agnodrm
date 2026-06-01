@@ -113,7 +113,7 @@ fn dmverity_status_new(name, is_active, is_verified, corruption_detected, root_h
 # replace when cyrius cstring-pointer Serialize lands).
 fn dmverity_status_to_json(s, sb): i64 {
     str_builder_add_cstr(sb, "{\"name\":");
-    _dmverity_emit_cstr_or_null(sb, dmverity_status_name(s));
+    agnosys_json_emit_cstr_or_null(sb, dmverity_status_name(s));
     str_builder_add_cstr(sb, ",\"is_active\":");
     str_builder_add_int(sb, dmverity_status_is_active(s));
     str_builder_add_cstr(sb, ",\"is_verified\":");
@@ -121,17 +121,8 @@ fn dmverity_status_to_json(s, sb): i64 {
     str_builder_add_cstr(sb, ",\"corruption_detected\":");
     str_builder_add_int(sb, dmverity_status_corruption_detected(s));
     str_builder_add_cstr(sb, ",\"root_hash\":");
-    _dmverity_emit_cstr_or_null(sb, dmverity_status_root_hash(s));
+    agnosys_json_emit_cstr_or_null(sb, dmverity_status_root_hash(s));
     str_builder_add_cstr(sb, "}");
-    return 0;
-}
-
-fn _dmverity_emit_cstr_or_null(sb, c): i64 {
-    if (c == 0) {
-        str_builder_add_cstr(sb, "null");
-    } else {
-        str_builder_add_json_str(sb, str_from(c));
-    }
     return 0;
 }
 
@@ -139,12 +130,10 @@ fn _dmverity_emit_cstr_or_null(sb, c): i64 {
 # Validation helpers
 # ================================================================
 
-# Check if a byte is a valid hex character
+# Check if a byte is a valid hex character.
+# Thin wrapper over the shared predicate (public API kept stable).
 fn dmverity_is_hex_char(ch): i64 {
-    if (ch >= 48 && ch <= 57) { return 1; }   # 0-9
-    if (ch >= 65 && ch <= 70) { return 1; }   # A-F
-    if (ch >= 97 && ch <= 102) { return 1; }  # a-f
-    return 0;
+    return agnosys_is_hex_char(ch);
 }
 
 # Validate a hex string. Returns Ok(0) or Err.
@@ -247,19 +236,11 @@ fn dmverity_config_validate(config): i64 {
 # ================================================================
 
 fn dmverity_run_capture(args, buf, buflen): i64 {
-    var n = exec_capture(args, buf, buflen);
-    if (n < 0) {
-        return err_unknown("veritysetup execution failed");
-    }
-    return Ok(n);
+    return agnosys_run_capture(args, buf, buflen, "veritysetup execution failed");
 }
 
 fn dmverity_run_checked(args): i64 {
-    var rc = exec_vec(args);
-    if (rc != 0) {
-        return err_unknown("veritysetup command failed");
-    }
-    return Ok(0);
+    return agnosys_run_checked(args, "veritysetup command failed");
 }
 
 # ================================================================
