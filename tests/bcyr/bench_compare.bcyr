@@ -238,32 +238,18 @@ fn main() {
     bench_streq();
     bench_syscall_name_lookup();
 
-    alloc_reset();
-    alloc_init();
     bench_err_create();
 
-    alloc_reset();
-    alloc_init();
     bench_err_from_errno();
 
-    alloc_reset();
-    alloc_init();
     bench_ok_create();
 
-    alloc_reset();
-    alloc_init();
     bench_wrap_syscall();
 
-    alloc_reset();
-    alloc_init();
     bench_sysinfo();
 
-    alloc_reset();
-    alloc_init();
     bench_hostname();
 
-    alloc_reset();
-    alloc_init();
     bench_seccomp_filter();
 
     println("");

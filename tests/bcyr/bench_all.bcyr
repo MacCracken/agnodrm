@@ -83,11 +83,12 @@ fn bench_syscalls() {
     bench_report(b);
 
     b = do_bench("query_sysinfo");
+    var sibuf = alloc(128);   # query_sysinfo writes into a caller-provided buffer (≥120 B)
     ri = 0;
     while (ri < 100) {
         var start = now_ns();
         var k = 0;
-        while (k < 5000) { query_sysinfo(); k = k + 1; }
+        while (k < 5000) { query_sysinfo(sibuf); k = k + 1; }
         batch_record(b, now_ns() - start, 5000);
         ri = ri + 1;
     }
@@ -488,8 +489,6 @@ fn bench_strings() {
     }
     bench_report(b);
 
-    alloc_reset();
-    alloc_init();
     var m = map_new();
     map_set(m, "key1", 42);
 
@@ -530,34 +529,24 @@ fn main() {
 
     bench_syscalls();
 
-    alloc_reset(); alloc_init();
     bench_errors();
 
-    alloc_reset(); alloc_init();
     bench_security();
 
-    alloc_reset(); alloc_init();
     bench_certpin();
 
-    alloc_reset(); alloc_init();
     bench_bootloader();
 
-    alloc_reset(); alloc_init();
     bench_updates();
 
-    alloc_reset(); alloc_init();
     bench_mac();
 
-    alloc_reset(); alloc_init();
     bench_secureboot();
 
-    alloc_reset(); alloc_init();
     bench_udev();
 
-    alloc_reset(); alloc_init();
     bench_fuse();
 
-    alloc_reset(); alloc_init();
     bench_strings();
 
     println("");

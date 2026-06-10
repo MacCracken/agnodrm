@@ -9,29 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.4.1] — 2026-06-10
 
-**Cyrius pin 6.0.56 → 6.1.23 — toolchain refresh, no agnosys source changes.**
-The first 6.1.x adoption. Unlike the 6.0.25–6.0.52 window (1.3.2, a codegen
-change), the 6.0.56 → 6.1.23 arc is **codegen-neutral for the Linux target**: the
-DCE binary is byte-for-byte identical at 159,392 B with the same 490 unreachable
-fns / 108,466 dead bytes NOPed. Audit clean (11/11); 252 tests, 7 fuzz harnesses;
-API surface unchanged (737 public fns, 7 added since the 1.0 snapshot, all
-non-breaking — no drift). `dist/agnosys.cyr` + the 5 profile bundles regenerated
-(version header only; 1-line drift each).
+**Cyrius pin 6.0.56 → 6.1.23 — first 6.1.x adoption; absorbs the v6.0.64
+thread-safe allocator.** The cyrius stdlib `lib/alloc.cyr` gained a process-wide
+allocation spinlock + vtable allocator at **v6.0.64** (a CLONE_VM/threads
+correctness fix upstream). Adopting it required three agnosys-side changes and
+carries a measured allocation-path regression (below). Audit clean (11/11);
+252 tests, 7 fuzz harnesses; API surface unchanged (737 public fns, no drift).
+Binary **159,392 → 162,784 B (+3,392)** — the new allocator's lock/vtable code.
 
 ### Changed
 
-- cyrius pin `6.0.56` → `6.1.23`. AGNOS-target build path unaffected (the `#ifdef
-  CYRIUS_TARGET_AGNOS` gating added at 1.4.0 still compiles under the new
-  toolchain). `dist/agnosys.cyr` + `dist/agnosys-{core,security,storage,trust,system}.cyr`
-  regenerated at v1.4.1.
+- cyrius pin `6.0.56` → `6.1.23`. `dist/agnosys.cyr` +
+  `dist/agnosys-{core,security,storage,trust,system}.cyr` regenerated at v1.4.1.
+- **`cyrius.cyml [deps] stdlib` += `"atomic"`.** v6.0.64's `alloc.cyr` does
+  `include "lib/atomic.cyr"`; cyrius does **not** resolve transitive stdlib
+  includes, so `atomic` must be declared explicitly or `cyrius deps` won't vendor
+  it and the build breaks on undefined `atomic_cas`/`atomic_fence`.
+
+### Fixed
+
+- **`tests/tcyr/test_integration.tcyr` SIGSEGV under the new allocator.** The test
+  called `alloc_reset(); alloc_init()` between every module group. v6.0.64
+  **memoizes** the process default allocator (`_default_allocator`) as a struct
+  bump-allocated from the heap; `alloc_reset()` rewinds the bump pointer but does
+  **not** clear that cached pointer, so the next allocations overwrite the cached
+  allocator's vtable fnptr → `str_builder` growth dispatched a call through string
+  data → crash (first hit: `certpin_info_to_json`). Removed the inter-group global
+  resets (kept the module-state resets); the functional test allocates trivially
+  so heap growth is a non-issue.
+- **`tests/bcyr/bench_all.bcyr` + `bench_compare.bcyr`** carried the same
+  `alloc_reset()`-between-groups pattern (same dangling-cache hang) **and** called
+  `query_sysinfo()` with no argument — the wrapper takes a caller-provided buffer
+  (`out`), so the missing arg passed a garbage pointer that corrupted allocator
+  state under the new lock (clean exit on the old bump allocator, infinite spin on
+  the locked one). Removed the resets; `bench_all` now passes a real `alloc(128)`
+  buffer to `query_sysinfo`.
 
 ### Performance
 
-Binary is byte-identical to 1.4.0, so codegen is unchanged — the 30-benchmark run
-vs the 1.3.2 baseline shows only sub-3ns movement at nanosecond magnitudes
-(e.g. `is_enforcing` 2→3ns, `strlen_16ch` 22→24ns), which is run-to-run
-quantization noise on identical machine code, **not** a regression. No material
-perf change to report.
+The v6.0.64 allocator serializes every `alloc()` behind a CAS spinlock + ACQUIRE/
+RELEASE fences and dispatches through an allocator vtable. agnosys is
+single-threaded, so this is pure overhead on **allocation-bound** paths. vs the
+1.3.2 baseline (30 benches, x86_64):
+
+| bench | 1.3.2 | 1.4.1 | Δ |
+|---|---|---|---|
+| `ok_create` (Result heap alloc) | 14 ns | 59 ns | **+321%** |
+| `from_errno_eperm` (heap SysError) | 21 ns | 65 ns | **+210%** |
+| `mac_default_profile` | 211 ns | 367 ns | +74% |
+| `validate_ver_good` | 105 ns | 180 ns | +71% |
+| `compare_versions` | 171 ns | 232 ns | +36% |
+| `syserr_pack` (zero-alloc hot path) | 3 ns | 3 ns | 0% |
+| `map_get_hit` | 70 ns | 62 ns | −11% |
+
+The hit is confined to heap-allocating paths — agnosys's design keeps these on
+**cold/diagnostic** routes (packed `syserr_pack` on hot paths is unchanged at
+3 ns; per the "packed errors on hot paths" rule). Non-allocating benches are flat
+or slightly faster. The regression is the documented cost of the upstream
+thread-safety fix, not an agnosys codegen change. **Follow-up:** there is no
+single-thread opt-out in the cyrius stdlib today; eliminating the lock cost needs
+either an upstream `CYRIUS_SINGLE_THREADED` no-op gate or migrating hot
+allocations to the non-locking freelist allocator (the patra pattern). Tracked in
+roadmap.
 
 ### Housekeeping
 

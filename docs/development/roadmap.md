@@ -467,6 +467,23 @@ hygiene. See CHANGELOG `[1.3.0]` and `docs/audit/2026-06-01-audit.md`.
 
 **Rationale:** template's "release post-hook bumps state.md. If the hook doesn't, fix the hook — don't hand-maintain state." Lands when agnosticos meta-tooling supports it (cross-repo concern — hook lives in agnosticos toolchain, not this repo).
 
+#### V1.4.x — allocator lock-cost elimination (opened 2026-06-10 at 1.4.1)
+
+The cyrius v6.0.64 stdlib allocator wraps every `alloc()` in a process-wide CAS
+spinlock + ACQUIRE/RELEASE fences (a real CLONE_VM/threads correctness fix). For
+single-threaded agnosys this is pure overhead — 1.4.1 measured `ok_create` +321%,
+`from_errno` +210%, `mac_default_profile` +74% vs 1.3.2 (alloc-bound paths only;
+zero-alloc `syserr_pack` hot path unchanged). Confined to cold/diagnostic heap
+routes today, but worth removing. Options, in preference order:
+
+- [ ] **Upstream:** request a `CYRIUS_SINGLE_THREADED` (or `CYRIUS_NO_ALLOC_LOCK`)
+  define that compiles `_alloc_lock_acquire/release` to no-ops — cleanest, zero
+  agnosys churn, benefits every single-threaded consumer. File against cyrius.
+- [ ] **Local:** migrate hot allocations to the non-locking freelist/page
+  allocator (`lib/freelist.cyr` — `fl_alloc`/`pg_alloc`), the patra pattern.
+  Larger change; revisit only if upstream declines and the cold-path cost starts
+  mattering to a consumer.
+
 ### V2.0 — Breaking API cleanup
 
 The first major bump folds the API-breaking removals deferred from the 1.3.0
