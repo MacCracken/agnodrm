@@ -657,9 +657,9 @@
 
 - `agnosys_checked_syscall(arg)` → Execute a syscall and return Result: Ok(ret) or Err(syserr). name is a string label for diagnosti...
 - `agnosys_free_memory()` → Get free system memory in bytes. Returns Result.
-- `agnosys_geteuid()` → Get the current effective user ID.
+- `agnosys_geteuid()` → Get the current effective user ID. AGNOS has no separate effective-uid concept (no SYS_GETEUID in...
 - `agnosys_getpid()` → Get the current process ID.
-- `agnosys_gettid()` → Get the current thread ID.
+- `agnosys_gettid()` → Get the current thread ID. AGNOS is single-threaded single-core (no gettid syscall) — the thread ...
 - `agnosys_getuid()` → Get the current user ID.
 - `agnosys_is_root()` → Check if the current process has root privileges.
 - `agnosys_total_memory()` → Get total system memory in bytes. Returns Result.
@@ -667,8 +667,8 @@
 - `agnosys_uptime()` → Get system uptime in seconds. Returns Result.
 - `query_sysinfo(arg)` → Query sysinfo(2) into a caller-provided buffer. out must point to at least 120 bytes. Returns Res...
 - `sysinfo_free_memory(arg)` → Get free RAM in bytes from a sysinfo pointer.
-- `sysinfo_procs(arg)` → Get number of running processes from a sysinfo pointer.
-- `sysinfo_total_memory(arg)` → Get total RAM in bytes from a sysinfo pointer. Uses saturating multiplication to prevent overflow.
+- `sysinfo_procs(arg)` → Get number of running processes from a sysinfo pointer. AGNOS stores procs as a u64; Linux as a u...
+- `sysinfo_total_memory(arg)` → Get total RAM in bytes from a sysinfo pointer. AGNOS reports byte counts directly (no mem_unit fi...
 - `sysinfo_uptime(arg)` → Get uptime in seconds from a sysinfo pointer.
 - `uname_hostname(arg)` → Get hostname from a utsname buffer.
 - `uname_machine(arg)` → Get machine arch from a utsname buffer.

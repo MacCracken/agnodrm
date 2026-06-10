@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] — 2026-06-10
+
+**Cyrius pin 6.0.56 → 6.1.23 — toolchain refresh, no agnosys source changes.**
+The first 6.1.x adoption. Unlike the 6.0.25–6.0.52 window (1.3.2, a codegen
+change), the 6.0.56 → 6.1.23 arc is **codegen-neutral for the Linux target**: the
+DCE binary is byte-for-byte identical at 159,392 B with the same 490 unreachable
+fns / 108,466 dead bytes NOPed. Audit clean (11/11); 252 tests, 7 fuzz harnesses;
+API surface unchanged (737 public fns, 7 added since the 1.0 snapshot, all
+non-breaking — no drift). `dist/agnosys.cyr` + the 5 profile bundles regenerated
+(version header only; 1-line drift each).
+
+### Changed
+
+- cyrius pin `6.0.56` → `6.1.23`. AGNOS-target build path unaffected (the `#ifdef
+  CYRIUS_TARGET_AGNOS` gating added at 1.4.0 still compiles under the new
+  toolchain). `dist/agnosys.cyr` + `dist/agnosys-{core,security,storage,trust,system}.cyr`
+  regenerated at v1.4.1.
+
+### Performance
+
+Binary is byte-identical to 1.4.0, so codegen is unchanged — the 30-benchmark run
+vs the 1.3.2 baseline shows only sub-3ns movement at nanosecond magnitudes
+(e.g. `is_enforcing` 2→3ns, `strlen_16ch` 22→24ns), which is run-to-run
+quantization noise on identical machine code, **not** a regression. No material
+perf change to report.
+
+### Housekeeping
+
+- Regenerated `docs/development/api-surface-1.0.md` and
+  `docs/development/capability-map.md`, both stale since the 1.4.0 AGNOS
+  doc-comment changes (descriptions only; no signature or capability changes).
+
 ## [1.4.0] — 2026-06-06 (AGNOS as a build target — the core syscall layer now supports both Linux and agnos)
 
 ### Added
