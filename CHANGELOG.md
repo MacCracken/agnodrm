@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] — 2026-06-12
+
+**Cyrius pin 6.1.23 → 6.2.1 + daimon-class buffer fix.**
+
+### Fixed
+- **`update_save_state` `bc_buf` boot-count scratch overflow.** The JSON writer
+  formatted `boot_count` (an i64) into a `var bc_buf[8]` = 8-byte buffer via
+  `fmt_int_buf`, which needs up to ~20 digits — a boot_count ≥ 8 digits
+  (≥ 10,000,000) overran the buffer into adjacent stack/static memory. Bumped to
+  `var bc_buf[24]`. Surfaced by the cyrius v6.2.1 address-taken-local-array audit
+  (the daimon byte-vs-slot class). Latent (layout-masked) until now.
+
+### Changed
+- Cyrius pin → **6.2.1** (element-typed-array minor; this fix is a plain byte
+  buffer and is toolchain-agnostic, but the cut tracks the current toolchain).
+
 ## [1.4.1] — 2026-06-10
 
 **Cyrius pin 6.0.56 → 6.1.23 — first 6.1.x adoption; absorbs the v6.0.64
