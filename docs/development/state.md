@@ -2,22 +2,22 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-06-10 (1.4.1)
+**Last refresh:** 2026-06-15 (1.4.3)
 
 ## Version & Toolchain
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.4.1** |
-| `cyrius.cyml [package].cyrius` | **6.1.23** |
-| Min Cyrius (consumer) | 6.1.23 |
-| Last cyrius bump | 6.0.56 → 6.1.23 (2026-06-10; first 6.1.x adoption). Absorbs the **v6.0.64 thread-safe allocator** (`lib/alloc.cyr` global CAS spinlock + vtable). Required: `[deps] stdlib += atomic` (transitive include not auto-resolved), and removing `alloc_reset()`-between-groups from the integration test + benches (incompatible with the new memoized default allocator — dangling cache → SIGSEGV/spin). Binary **159,392 → 162,784 B (+3,392)** from the lock/vtable code. **Perf regression** on alloc-bound paths (`ok_create` +321%, `from_errno` +210%) — single-threaded agnosys pays for the lock; confined to cold/diagnostic heap paths (zero-alloc `syserr_pack` hot path unchanged at 3 ns). Prior bumps: 6.0.52 → 6.0.56 at 1.4.0 (AGNOS-target work), 6.0.24 → 6.0.52 at 1.3.2 (codegen change, +368 B). |
+| `VERSION` | **1.4.3** |
+| `cyrius.cyml [package].cyrius` | **6.2.11** |
+| Min Cyrius (consumer) | 6.2.11 |
+| Last cyrius bump | 6.2.1 → 6.2.11 (2026-06-15; 6.2.x maintenance line, bug-fix/optimization patches only). Pure pin refresh — no `src/*.cyr` edits; validated green from clean deps. Prior: 6.1.23 → 6.2.1 at 1.4.2 (stdlib pin sweep; dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 (2026-06-10; first 6.1.x adoption). Absorbs the **v6.0.64 thread-safe allocator** (`lib/alloc.cyr` global CAS spinlock + vtable). Required: `[deps] stdlib += atomic` (transitive include not auto-resolved), and removing `alloc_reset()`-between-groups from the integration test + benches (incompatible with the new memoized default allocator — dangling cache → SIGSEGV/spin). Binary **159,392 → 162,784 B (+3,392)** from the lock/vtable code. **Perf regression** on alloc-bound paths (`ok_create` +321%, `from_errno` +210%) — single-threaded agnosys pays for the lock; confined to cold/diagnostic heap paths (zero-alloc `syserr_pack` hot path unchanged at 3 ns). Prior bumps: 6.0.52 → 6.0.56 at 1.4.0 (AGNOS-target work), 6.0.24 → 6.0.52 at 1.3.2 (codegen change, +368 B). |
 
 ## Build Metrics
 
 | Metric | Value | Notes |
 |---|---|---|
-| Binary size (DCE) | **162,784 B** | +3,392 B vs 1.4.0 (159,392 B) — the v6.0.64 thread-safe allocator (CAS spinlock + vtable) pulled in by the 6.1.23 pin. Was byte-identical 1.3.2 → 1.4.0 (1.4.0's AGNOS work is `#ifdef`-gated, unreachable on Linux). |
+| Binary size (DCE) | **124,376 B** | Down from 162,784 B (1.4.1) — the 1.4.2 stdlib pin sweep dropped the stale `"json"` dep (carved into bayan at cyrius 6.1.25) and the 6.2.x toolchain trimmed the codegen. 1.4.3 (6.2.11) byte-identical to 1.4.2 — pure pin refresh. DCE NOPed 432 unreachable fns (72,344 B). |
 | `dist/agnosys.cyr` size | ~327 KB / 10,125 lines | +79 lines vs 1.3.2 — the 1.4.0 AGNOS `#ifdef CYRIUS_TARGET_AGNOS` gating in `src/syscall.cyr`. Version header only at 1.4.1 (1-line drift). |
 | Fn-table utilization | 433 / 8,192 (5%) | +9 fns since 1.2.7 (stdlib snapshot growth pulled into the include graph) |
 | Var-table | 342 / 8,192 | |
@@ -113,6 +113,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
+| **1.4.3** | 2026-06-15 | **cyrius pin 6.2.1 → 6.2.11** — 6.2.x maintenance line (bug-fix/optimization patches only, no API change). Pure pin refresh, no `src/*.cyr` edits; validated green from clean deps (`rm -rf lib build && cyrius deps`). DCE build 124,376 B (byte-identical to 1.4.2), 252 tests pass, audit clean (11/11). All 6 `dist/` bundles version-stamped. Bench delta within noise; minor wins on constant-time compares (`ct_streq` −8/−12%). |
+| **1.4.2** | 2026-06-12 | **Daimon-class buffer fix + cyrius pin 6.1.23 → 6.2.1.** `update_save_state` `bc_buf` boot-count scratch overflow fixed (`var bc_buf[8]` → `[24]`; `fmt_int_buf` of an i64 needs ~20 digits — boot_count ≥ 10,000,000 overran into adjacent static memory; surfaced by the 6.2.1 address-taken-local-array audit, latent/layout-masked until now). Pin sweep onto current toolchain required dropping the stale `"json"` `[deps] stdlib` entry — the standalone json stdlib module was carved into bayan at 6.1.25, so 6.2.x ships no `lib/json.cyr`; agnosys rolls its own JSON helpers and calls no stdlib `json_*` symbols. |
 | **1.4.1** | 2026-06-10 | **Cyrius pin 6.0.56 → 6.1.23 — first 6.1.x adoption; absorbs the v6.0.64 thread-safe allocator** (`lib/alloc.cyr` global CAS spinlock + vtable). Required `[deps] stdlib += atomic` (transitive include not auto-resolved) + removing `alloc_reset()`-between-groups from the integration test + benches (dangling memoized-allocator cache → SIGSEGV/spin) + fixing a no-arg `query_sysinfo()` miscall in benches. Binary 159,392 → 162,784 B (+3,392, lock/vtable). **Perf regression** on alloc-bound paths (`ok_create` +321%, `from_errno` +210%, `mac_default_profile` +74%) — single-threaded agnosys pays for the lock; zero-alloc hot path (`syserr_pack` 3 ns) unchanged. Follow-up: upstream single-thread no-op gate or freelist hot-path migration (patra pattern). Audit clean (11/11); 252 tests, 7 fuzz, 30 benches; API surface unchanged. |
 | **1.4.0** | 2026-06-06 | **AGNOS as a build target — `agnosys-core` now compiles under `cyrius build --agnos`.** `agnosys_uname` (syscall #34 + 64-byte sovereign identity struct), `query_sysinfo` (syscall #35 + 40-byte all-u64 struct), `agnosys_gettid`→getpid, `agnosys_geteuid`→getuid, all gated inline with `#ifdef CYRIUS_TARGET_AGNOS` in `src/syscall.cyr`. Linux path unchanged (additive gating; binary 159,392 B unchanged). security/storage/trust/system profiles remain Linux-only; only `core` is agnos-portable. cyrius pin 6.0.52 → 6.0.56. `dist/agnosys.cyr` + core bundle regenerated (+79 lines). |
 | **1.3.2** | 2026-06-03 | **Cyrius pin 6.0.24 → 6.0.52 — toolchain refresh with a real codegen win.** No agnosys source changes. Unlike the pure-TLS 6.0.14 → 6.0.24 window, the 6.0.25–6.0.52 arc carries a codegen change: binary 159,024 → 159,392 B (+368), 490 fns NOPed (108,466 dead bytes). Broad hot-path wins across all 30 benches, **zero regressions**, reproduced on a second run (`update_compare_versions` −25%, `certpin_ct_streq` −24%, `validate_pin_valid` −18%, `validate_cmdline_safe` −16%, `wrap_syscall_ok` −13%). Stdlib snapshot 25 → 29 files (AGNOS-target + macOS/Windows peers now transitive). 6 dist bundles regenerated (version header only). Audit clean (11/11); 252 tests. |

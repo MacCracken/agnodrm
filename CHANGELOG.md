@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.3] — 2026-06-15
+
+**cyrius pin → 6.2.11.**
+
+### Changed
+- **cyrius pin `6.2.1` → `6.2.11`**, tracking the 6.2.x maintenance line
+  (bug-fix / optimization patches only, no API surface change). Pure toolchain
+  refresh — no `src/*.cyr` edits. Validated green from clean (`rm -rf lib build
+  && cyrius deps`): DCE build OK (432 unreachable fns NOPed, 124,376 B), all 252
+  tests pass, full `scripts/audit.sh` clean (11/11). All 6 `dist/` bundles
+  regenerated to stamp the v1.4.3 header (1-line drift each). Bench delta vs
+  1.4.2 within run-to-run noise; minor improvements on the constant-time
+  comparison paths (`ct_streq` −8/−12%, `is_dangerous_token` −8/−12%).
+
 ## [1.4.2] — 2026-06-12
 
 **Daimon-class buffer fix + cyrius pin → 6.2.1.**
