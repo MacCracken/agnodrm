@@ -283,14 +283,16 @@ fn wrap_syscall(ret): i64 {
 
 # --- util.cyr ---
 
-# agnosys — shared cross-module utilities
+# agnodrm — shared cross-module utilities
 #
 # Small helpers that several modules need identically. Kept here (rather
 # than copied per-module) so a single definition is audited and tested
 # once. Public `agnodrm_*` prefix per the project's prefix discipline.
 #
-# Placed in [lib.core] so every profile bundle (core + domain) resolves
-# these — consumers span security/storage/trust/system profiles.
+# Placed in [lib.core] so the device-model bundle resolves these. (Several
+# of these were shared with the trust/security modules that moved out in
+# the agnosys → agnodrm decomposition; udev/drm + the deferred group still
+# use them.)
 
 # Emit a JSON value for a possibly-null C string into a str_builder:
 # `null` when the pointer is 0, otherwise a JSON-quoted/escaped string.
