@@ -1,21 +1,29 @@
 name: Consumer Integration
 
-# V1.2.3 — Nightly downstream rebuild + drift detection. Each scheduled
-# run vendors agnosys main into each consumer's `lib/agnosys.cyr` and
-# runs the consumer's audit/test suite. Failures open a `consumer-break`
-# issue here so an agnosys patch that breaks (e.g.) sigil's TPM caller
-# is noticed before that consumer notices.
+# PAUSED during the agnosys → agnodrm decomposition (2026-06-19).
 #
-# **Deliberately separate from .github/workflows/ci.yml** — this is
-# nightly + workflow_dispatch only, never on push or PR. It does not
-# gate the primary build/test pipeline. Failures here are signal, not
-# blocker — agnosys's own audit gates remain authoritative for the tag.
+# This workflow vendored agnodrm (née agnosys) main into downstream
+# consumers and ran their audits, opening a `consumer-break` issue on
+# failure. It is paused because the consumer set is mid-transition:
+#   - kavach + sigil severed their agnosys dep entirely (internalized
+#     the modules they used).
+#   - kybernet + libro still dep agnosys but BREAK against the trimmed
+#     agnodrm-main — they call tpm / storage / syscall / logging symbols
+#     that moved to sigil / cyrius / sakshi — until they rewire. Testing
+#     them now is a known transitional failure, not a signal.
+#   - agnodrm's eventual consumers are ai-hwaccel + mabda (the device
+#     model). The matrix below will be reconceived for them once the
+#     downstream rewire lands. See the agnosticos decomposition plan.
+#
+# The nightly `schedule` is disabled and the job is gated off
+# (`if: false`) until then. When live it was nightly + workflow_dispatch
+# only, never on push/PR — signal, not blocker.
 
 on:
-  schedule:
-    # 06:00 UTC nightly = 23:00 PT / 02:00 ET. Off-peak; gives most of
-    # the day for triage if a fail rolls in.
-    - cron: '0 6 * * *'
+  # schedule disabled during the agnosys → agnodrm transition (see header).
+  # Re-enable once the matrix is reconceived for ai-hwaccel / mabda.
+  # schedule:
+  #   - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       consumer:
@@ -25,8 +33,8 @@ on:
         type: choice
         options:
           - all
-          - kavach
-          - sigil
+          - kybernet
+          - libro
 
 # This workflow doesn't share a concurrency key with ci.yml — agnosys
 # CI on push and a nightly consumer run can overlap freely.
@@ -40,7 +48,11 @@ permissions:
 
 jobs:
   integrate:
-    name: ${{ matrix.consumer }} (agnosys main)
+    name: ${{ matrix.consumer }} (agnodrm main)
+    # Gated off during the agnosys → agnodrm transition (see header): the
+    # current consumers break against trimmed agnodrm-main until they
+    # rewire. Remove this `if` when re-enabling with the new matrix.
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Don't fail-fast — let every consumer report independently so a

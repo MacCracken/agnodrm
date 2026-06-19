@@ -20,15 +20,9 @@ include "lib/fs.cyr"
 include "lib/bench.cyr"
 
 include "src/error.cyr"
-include "src/syscall.cyr"
-include "src/logging.cyr"
 include "src/util.cyr"
-include "src/security.cyr"
-include "src/certpin.cyr"
-include "src/secureboot.cyr"
 include "src/bootloader.cyr"
 include "src/update.cyr"
-include "src/mac.cyr"
 include "src/fuse.cyr"
 include "src/udev.cyr"
 
@@ -42,60 +36,6 @@ fn batch_record(b, elapsed, iters) {
 }
 
 fn do_bench(name) { return bench_new(name); }
-
-# ================================================================
-# 1. syscall
-# ================================================================
-
-fn bench_syscalls() {
-    println("-- syscall --");
-    var b = do_bench("getpid");
-    var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { agnosys_getpid(); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("getuid");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { agnosys_getuid(); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("is_root");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { agnosys_is_root(); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("query_sysinfo");
-    var sibuf = alloc(128);   # query_sysinfo writes into a caller-provided buffer (≥120 B)
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 5000) { query_sysinfo(sibuf); k = k + 1; }
-        batch_record(b, now_ns() - start, 5000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    return 0;
-}
 
 # ================================================================
 # 2. error
@@ -141,94 +81,7 @@ fn bench_errors() {
     while (ri < 100) {
         var start = now_ns();
         var k = 0;
-        while (k < 10000) { wrap_syscall(agnosys_getpid()); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    return 0;
-}
-
-# ================================================================
-# 3. security
-# ================================================================
-
-fn bench_security() {
-    println("-- security --");
-    var b = do_bench("syscall_name_to_nr_hit");
-    var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { security_syscall_name_to_nr("read"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("syscall_name_to_nr_miss");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { security_syscall_name_to_nr("nonexistent"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    return 0;
-}
-
-# ================================================================
-# 4. certpin
-# ================================================================
-
-fn bench_certpin() {
-    println("-- certpin --");
-    var pin = "YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg=";
-    var other = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
-
-    var b = do_bench("validate_pin_valid");
-    var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { certpin_validate_pin_format(pin); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("validate_pin_invalid");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { certpin_validate_pin_format("bad"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("ct_streq_equal");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { certpin_ct_streq(pin, pin); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("ct_streq_diff");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { certpin_ct_streq(pin, other); k = k + 1; }
+        while (k < 10000) { wrap_syscall(syscall(SYS_GETPID)); k = k + 1; }
         batch_record(b, now_ns() - start, 10000);
         ri = ri + 1;
     }
@@ -318,79 +171,6 @@ fn bench_updates() {
         var start = now_ns();
         var k = 0;
         while (k < 10000) { update_other_slot(SLOT_A); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    return 0;
-}
-
-# ================================================================
-# 7. mac
-# ================================================================
-
-fn bench_mac() {
-    println("-- mac --");
-    var b = do_bench("mac_file_exists_hit");
-    var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { mac_file_exists("/proc/self/status"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("mac_file_exists_miss");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { mac_file_exists("/sys/nonexistent"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("mac_default_profile");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 5000) { mac_default_profile("service"); k = k + 1; }
-        batch_record(b, now_ns() - start, 5000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    return 0;
-}
-
-# ================================================================
-# 8. secureboot
-# ================================================================
-
-fn bench_secureboot() {
-    println("-- secureboot --");
-    var b = do_bench("is_enforcing");
-    var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { secureboot_is_enforcing(SB_ENABLED); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
-        ri = ri + 1;
-    }
-    bench_report(b);
-
-    b = do_bench("state_str");
-    ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
-        var k = 0;
-        while (k < 10000) { secureboot_state_str(SB_ENABLED); k = k + 1; }
         batch_record(b, now_ns() - start, 10000);
         ri = ri + 1;
     }
@@ -524,24 +304,14 @@ fn bench_strings() {
 fn main() {
     alloc_init();
     println("================================================================");
-    println("  agnosys bench — 12 modules, batch-amortized (10K x 100)");
+    println("  agnodrm bench — device model + deferred, batch-amortized (10K x 100)");
     println("================================================================");
 
-    bench_syscalls();
-
     bench_errors();
-
-    bench_security();
-
-    bench_certpin();
 
     bench_bootloader();
 
     bench_updates();
-
-    bench_mac();
-
-    bench_secureboot();
 
     bench_udev();
 
@@ -551,7 +321,7 @@ fn main() {
 
     println("");
     println("================================================================");
-    println("  done — 11 groups, 30 benchmarks");
+    println("  done — 6 groups");
     println("================================================================");
     return 0;
 }

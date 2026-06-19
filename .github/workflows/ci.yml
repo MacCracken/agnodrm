@@ -109,17 +109,18 @@ jobs:
         run: cyrius vet src/main.cyr
 
       - name: Verify dist bundles are in sync with src/
-        # V1.2.0+: full bundle + 5 profile bundles (core / security
-        # / storage / trust / system). Each `cyrius distlib <profile>`
-        # invocation reads the matching `[lib.<profile>]` section in
-        # cyrius.cyml. Yukti uses the same pattern (`cyrius distlib core`).
+        # Post-decomposition (2026-06-19): full bundle + the single
+        # `core` profile (error/util support + udev/drm). The old
+        # security / storage / trust / system profiles were removed with
+        # their modules. Each `cyrius distlib <profile>` reads the
+        # matching `[lib.<profile>]` section in cyrius.cyml.
         run: |
           cyrius distlib
-          for profile in core security storage trust system; do
+          for profile in core; do
             cyrius distlib "$profile"
           done
           fail=0
-          for bundle in dist/agnosys.cyr dist/agnosys-core.cyr dist/agnosys-security.cyr dist/agnosys-storage.cyr dist/agnosys-trust.cyr dist/agnosys-system.cyr; do
+          for bundle in dist/agnodrm.cyr dist/agnodrm-core.cyr; do
             if ! git diff --quiet "$bundle"; then
               echo "ERROR: $bundle is stale. Run 'cyrius distlib [<profile>]' and commit the result."
               git --no-pager diff "$bundle" | head -40
@@ -127,20 +128,20 @@ jobs:
             fi
           done
           [ $fail -eq 0 ] || exit 1
-          echo "all 6 dist bundles match src/"
+          echo "all 2 dist bundles match src/"
 
       - name: Build (DCE)
         run: |
           mkdir -p build
-          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnosys
-          echo "agnosys: $(wc -c < build/agnosys) bytes"
+          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm
+          echo "agnodrm: $(wc -c < build/agnodrm) bytes"
 
       - name: Verify ELF
-        run: xxd -l 4 build/agnosys | grep -q "7f45 4c46"
+        run: xxd -l 4 build/agnodrm | grep -q "7f45 4c46"
 
       - name: Cross-build aarch64
         # The toolchain translates x86_64 syscall numbers to aarch64
-        # at codegen — no agnosys source changes needed. Requires
+        # at codegen — no agnodrm source changes needed. Requires
         # cycc_aarch64 (renamed from cc5_aarch64 in Cyrius 6.0) in
         # the toolchain bin dir; tarball location is covered in the
         # install step above. If the toolchain release didn't bundle
@@ -150,23 +151,23 @@ jobs:
             echo "::warning::cycc_aarch64 not shipped with Cyrius $CYRIUS_VERSION — skipping aarch64 cross-build"
             exit 0
           fi
-          CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnosys-aarch64
+          CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnodrm-aarch64
           for f in fuzz/*.fcyr; do
             [ -f "$f" ] || continue
             name=$(basename "$f" .fcyr)
             CYRIUS_DCE=1 cyrius build --aarch64 "$f" "build/${name}-aarch64"
           done
-          for bin in build/agnosys-aarch64 build/*-aarch64; do
+          for bin in build/agnodrm-aarch64 build/*-aarch64; do
             [ -f "$bin" ] || continue
             file "$bin" | grep -q "aarch64" || {
               echo "ERROR: $bin is not an aarch64 ELF"; exit 1; }
           done
-          echo "agnosys-aarch64: $(wc -c < build/agnosys-aarch64) bytes"
+          echo "agnodrm-aarch64: $(wc -c < build/agnodrm-aarch64) bytes"
 
       - name: Smoke test
         run: |
-          ./build/agnosys | tee /tmp/smoke_output
-          grep -q "agnosys ready" /tmp/smoke_output
+          ./build/agnodrm | tee /tmp/smoke_output
+          grep -q "agnodrm ready" /tmp/smoke_output
 
       - name: Integration tests
         run: |
@@ -223,7 +224,7 @@ jobs:
           scan "raw execve"     'syscall( *59'
           # Direct shadow file access
           scan "shadow access"  '"/etc/shadow"'
-          # Writes to system paths that agnosys shouldn't touch
+          # Writes to system paths that agnodrm shouldn't touch
           scan "writes to /bin"  '"/bin/'
           scan "writes to /sbin" '"/sbin/'
           # Unbounded fn-scope buffers (cyrius emits `var buf[N]` inside

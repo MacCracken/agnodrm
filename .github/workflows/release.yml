@@ -73,18 +73,18 @@ jobs:
       - name: Build (DCE)
         run: |
           mkdir -p build
-          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnosys
-          echo "agnosys: $(wc -c < build/agnosys) bytes"
+          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm
+          echo "agnodrm: $(wc -c < build/agnodrm) bytes"
 
       - name: Cross-build aarch64 (best-effort)
-        # Produces build/agnosys-aarch64 when the toolchain bundle
+        # Produces build/agnodrm-aarch64 when the toolchain bundle
         # includes cycc_aarch64 (renamed from cc5_aarch64 in Cyrius
         # 6.0; tarball location is covered in the install step above).
         # Archive step ships both x86 + aarch64 binaries when present.
         run: |
           if [ -x "$HOME/.cyrius/bin/cycc_aarch64" ]; then
-            CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnosys-aarch64
-            echo "agnosys-aarch64: $(wc -c < build/agnosys-aarch64) bytes"
+            CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnodrm-aarch64
+            echo "agnodrm-aarch64: $(wc -c < build/agnodrm-aarch64) bytes"
           else
             echo "::warning::cycc_aarch64 not in toolchain — aarch64 binary skipped in release"
           fi
@@ -111,11 +111,11 @@ jobs:
           done
 
       - name: Regenerate dist bundles
-        # V1.2.0+: full bundle + 5 profile bundles (core / security
-        # / storage / trust / system).
+        # Post-decomposition (2026-06-19): full bundle + the single
+        # `core` profile. The old domain profiles were removed.
         run: |
           cyrius distlib
-          for profile in core security storage trust system; do
+          for profile in core; do
             cyrius distlib "$profile"
           done
 
@@ -125,29 +125,29 @@ jobs:
       - name: Archive
         run: |
           TAG="${GITHUB_REF_NAME#v}"
-          git archive --format=tar.gz --prefix="agnosys-${TAG}/" -o "agnosys-${TAG}-src.tar.gz" HEAD
-          cp dist/agnosys.cyr "agnosys-${TAG}.cyr"
-          # V1.2.0+: ship every profile bundle alongside the full one.
-          for profile in core security storage trust system; do
-            cp "dist/agnosys-${profile}.cyr" "agnosys-${TAG}-${profile}.cyr"
+          git archive --format=tar.gz --prefix="agnodrm-${TAG}/" -o "agnodrm-${TAG}-src.tar.gz" HEAD
+          cp dist/agnodrm.cyr "agnodrm-${TAG}.cyr"
+          # Ship the core profile bundle alongside the full one.
+          for profile in core; do
+            cp "dist/agnodrm-${profile}.cyr" "agnodrm-${TAG}-${profile}.cyr"
           done
           # Ship prebuilt binaries alongside source + bundle so
           # consumers can grab a statically-linked ELF per arch.
-          if [ -f build/agnosys ]; then
-            cp build/agnosys "agnosys-${TAG}-x86_64-linux"
+          if [ -f build/agnodrm ]; then
+            cp build/agnodrm "agnodrm-${TAG}-x86_64-linux"
           fi
-          if [ -f build/agnosys-aarch64 ]; then
-            cp build/agnosys-aarch64 "agnosys-${TAG}-aarch64-linux"
+          if [ -f build/agnodrm-aarch64 ]; then
+            cp build/agnodrm-aarch64 "agnodrm-${TAG}-aarch64-linux"
           fi
-          sha256sum agnosys-*.tar.gz agnosys-*.cyr agnosys-*-linux 2>/dev/null > SHA256SUMS
+          sha256sum agnodrm-*.tar.gz agnodrm-*.cyr agnodrm-*-linux 2>/dev/null > SHA256SUMS
 
       - uses: actions/upload-artifact@v4
         with:
           name: release-artifacts
           path: |
-            agnosys-*.tar.gz
-            agnosys-*.cyr
-            agnosys-*-linux
+            agnodrm-*.tar.gz
+            agnodrm-*.cyr
+            agnodrm-*-linux
             cyrius.lock
             SHA256SUMS
 
@@ -166,12 +166,12 @@ jobs:
           awk "/^## \\[${TAG}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/body.md
       - uses: softprops/action-gh-release@v2
         with:
-          name: "agnosys ${{ github.ref_name }}"
+          name: "agnodrm ${{ github.ref_name }}"
           body_path: /tmp/body.md
           prerelease: ${{ startsWith(github.ref_name, '0.') || startsWith(github.ref_name, 'v0.') }}
           files: |
-            agnosys-*.tar.gz
-            agnosys-*.cyr
-            agnosys-*-linux
+            agnodrm-*.tar.gz
+            agnodrm-*.cyr
+            agnodrm-*-linux
             cyrius.lock
             SHA256SUMS

@@ -7,8 +7,8 @@
 #   2. API surface     — snapshot diff + prose-doc diff
 #   3. Capability map  — diff docs/development/capability-map.md vs. src/
 #   4. Capacity        — cyrius capacity --check src/main.cyr (<85% all tables)
-#   5. Build           — src/main.cyr → build/agnosys, verify ELF
-#   6. Smoke           — ./build/agnosys prints "agnosys ready"
+#   5. Build           — src/main.cyr → build/agnodrm, verify ELF
+#   6. Smoke           — ./build/agnodrm prints "agnodrm ready"
 #   7. Tests           — cyrius test (tests/tcyr/*.tcyr)
 #   8. Lint            — cyrius lint every src/*.cyr
 #   9. Vet             — cyrius vet src/main.cyr (include-graph audit)
@@ -42,7 +42,7 @@ pass "all tables under 85%"
 
 stage 5/11 "build"
 mkdir -p build
-cyrius build src/main.cyr build/agnosys > /tmp/audit_build.log 2>&1 || { cat /tmp/audit_build.log; fail "build"; }
+cyrius build src/main.cyr build/agnodrm > /tmp/audit_build.log 2>&1 || { cat /tmp/audit_build.log; fail "build"; }
 # cyrius's match-coverage check fires as a build-time warning (5.8.22+).
 # Promote it to a hard gate here so missing enum-handler additions
 # can't slip through CI silently.
@@ -50,25 +50,25 @@ grep -q "non-exhaustive" /tmp/audit_build.log && {
     grep "non-exhaustive" /tmp/audit_build.log
     fail "non-exhaustive match"
 }
-xxd -l 4 build/agnosys | grep -q "7f45 4c46" || fail "ELF magic"
+xxd -l 4 build/agnodrm | grep -q "7f45 4c46" || fail "ELF magic"
 # Also cross-build for aarch64 if the toolchain is present locally.
 # CI runs this same gate; catching it locally avoids "passes audit
 # but breaks CI" surprises (per the 1.1.8 → 1.1.9 sub-8-byte
 # struct-field-load incident; full diagnosis at
 # docs/development/issues/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md).
 if command -v cycc_aarch64 >/dev/null 2>&1 || [ -x "$HOME/.cyrius/bin/cycc_aarch64" ]; then
-    cyrius build --aarch64 src/main.cyr build/agnosys-aarch64 > /tmp/audit_build_aarch64.log 2>&1 \
+    cyrius build --aarch64 src/main.cyr build/agnodrm-aarch64 > /tmp/audit_build_aarch64.log 2>&1 \
         || { cat /tmp/audit_build_aarch64.log; fail "aarch64 build"; }
     grep -q "non-exhaustive" /tmp/audit_build_aarch64.log && {
         grep "non-exhaustive" /tmp/audit_build_aarch64.log
         fail "aarch64 non-exhaustive match"
     }
 fi
-pass "build/agnosys ($(wc -c < build/agnosys) bytes)"
+pass "build/agnodrm ($(wc -c < build/agnodrm) bytes)"
 
 stage 6/11 "smoke"
-./build/agnosys 2>&1 | grep -q "agnosys ready" || fail "smoke"
-pass "agnosys ready"
+./build/agnodrm 2>&1 | grep -q "agnodrm ready" || fail "smoke"
+pass "agnodrm ready"
 
 stage 7/11 "tests"
 cyrius test > /tmp/audit_test.log 2>&1 || { cat /tmp/audit_test.log; fail "tests"; }

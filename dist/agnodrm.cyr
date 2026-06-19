@@ -386,6 +386,28 @@ fn agnosys_read_fd_to_str(fd, cap): i64 {
     return str_new(buf, total);
 }
 
+# Thin syscall wrappers, formerly in src/syscall.cyr (the per-arch syscall
+# layer moved to cyrius in the agnosys → agnodrm decomposition). update.cyr
+# needs these two for atomic-write durability (write tmp → fsync → rename);
+# kept here so the deferred module stays self-contained. The syscall numbers
+# are inlined (Linux x86_64) so this module passes the standalone per-file
+# `cyrius check` without pulling lib/syscalls.cyr — update.cyr is in the
+# deferred Linux-eccentric group, so an aarch64 peer isn't tracked.
+# Distinct names (UTIL_ prefix) so they don't collide with lib/syscalls.cyr's
+# own SYS_FSYNC / SYS_RENAME when both are in scope in a full build.
+enum UtilSyscall {
+    UTIL_SYS_FSYNC = 74;
+    UTIL_SYS_RENAME = 82;
+}
+
+fn agnosys_fsync(fd): i64 {
+    return syscall(UTIL_SYS_FSYNC, fd);
+}
+
+fn agnosys_rename(oldpath, newpath): i64 {
+    return syscall(UTIL_SYS_RENAME, oldpath, newpath);
+}
+
 # --- udev.cyr ---
 
 # udev.cyr — udev device enumeration and rule validation

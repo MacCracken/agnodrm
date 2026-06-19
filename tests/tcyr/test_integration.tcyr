@@ -1,4 +1,8 @@
-# test_integration.tcyr — integration tests for all 20 agnosys modules
+# test_integration.tcyr — integration tests for the agnodrm modules
+# (device model: error/util/udev/drm + deferred: journald/netns/
+# bootloader/update/fuse). The trust/security/syscall/logging modules
+# moved out in the agnosys → agnodrm decomposition; their tests went
+# with them.
 #
 # Run: cyrius test tests/test_integration.tcyr
 
@@ -21,20 +25,8 @@ include "lib/fnptr.cyr"
 include "lib/assert.cyr"
 
 include "src/error.cyr"
-include "src/syscall.cyr"
-include "src/logging.cyr"
 include "src/util.cyr"
-include "src/security.cyr"
-include "src/mac.cyr"
-include "src/audit.cyr"
-include "src/pam.cyr"
 include "src/journald.cyr"
-include "src/luks.cyr"
-include "src/dmverity.cyr"
-include "src/ima.cyr"
-include "src/tpm.cyr"
-include "src/certpin.cyr"
-include "src/secureboot.cyr"
 include "src/udev.cyr"
 include "src/drm.cyr"
 include "src/netns.cyr"
@@ -75,111 +67,6 @@ fn test_error() {
     assert(is_err_result(err_unknown("x")) == 1, "euk");
     assert(is_err_result(err_io(EIO, "x")) == 1, "eio");
     assert(is_err_result(err_module_not_loaded("x")) == 1, "eml");
-    return 0;
-}
-
-# ================================================================
-# syscall (11 assertions)
-# ================================================================
-
-fn test_syscall() {
-    println("-- syscall --");
-    assert_eq(agnosys_getpid(), agnosys_getpid(), "pid_eq");
-    assert_gt(agnosys_getpid(), 0, "pid_pos");
-    assert_gt(agnosys_gettid(), 0, "tid_pos");
-    var euid = agnosys_geteuid();
-    if (euid == 0) { assert_eq(agnosys_is_root(), 1, "root_y"); }
-    else { assert_eq(agnosys_is_root(), 0, "root_n"); }
-    var sibuf[120];
-    var sres = query_sysinfo(&sibuf);
-    assert(is_ok(sres) == 1, "sysinfo");
-    var info = payload(sres);
-    assert_gt(sysinfo_uptime(info), 0, "uptime");
-    assert_gt(sysinfo_total_memory(info), 0, "ram");
-    assert_gt(sysinfo_procs(info), 0 - 1, "procs");
-    assert(is_ok(agnosys_checked_syscall(0)) == 1, "chk_ok");
-    assert(is_err_result(agnosys_checked_syscall(0 - 1)) == 1, "chk_err");
-    assert_eq(payload(agnosys_checked_syscall(42)), 42, "chk_v");
-    return 0;
-}
-
-# ================================================================
-# logging (7 assertions)
-# ================================================================
-
-fn test_logging() {
-    println("-- logging --");
-    assert_eq(log_get_level(), LOG_INFO, "log_def");
-    log_set_level(LOG_DEBUG);
-    assert_eq(log_get_level(), LOG_DEBUG, "log_dbg");
-    log_set_level(LOG_ERROR);
-    assert_eq(log_get_level(), LOG_ERROR, "log_err");
-    log_set_level(LOG_INFO);
-    assert_eq(log_get_level(), LOG_INFO, "log_rst");
-    assert(streq(log_level_prefix(LOG_TRACE), "[TRACE] ") == 1, "pfx_t");
-    assert(streq(log_level_prefix(LOG_INFO), "[INFO]  ") == 1, "pfx_i");
-    assert(streq(log_level_prefix(LOG_ERROR), "[ERROR] ") == 1, "pfx_e");
-    return 0;
-}
-
-# ================================================================
-# security (11 assertions)
-# ================================================================
-
-fn test_security() {
-    println("-- security --");
-    var fres = security_create_basic_seccomp_filter();
-    assert(is_ok(fres) == 1, "seccomp");
-    var fi = payload(fres);
-    assert_eq(security_seccomp_filter_len(fi), 184, "sc_len");
-    assert(security_seccomp_filter_ptr(fi) != 0, "sc_ptr");
-    assert_eq(security_syscall_name_to_nr("read"), 0, "nr_read");
-    assert_eq(security_syscall_name_to_nr("write"), 1, "nr_write");
-    assert_eq(security_syscall_name_to_nr("close"), 3, "nr_close");
-    assert_eq(security_syscall_name_to_nr("getpid"), 39, "nr_pid");
-    assert_eq(security_syscall_name_to_nr("exit"), 60, "nr_exit");
-    assert_eq(security_syscall_name_to_nr("xxx"), 0 - 1, "nr_miss");
-    assert_eq(security_fs_rule_access(security_fs_rule_read_only("/t")), FS_READ_ONLY, "fs_ro");
-    assert_eq(security_fs_rule_access(security_fs_rule_read_write("/t")), FS_READ_WRITE, "fs_rw");
-    # H-2 (1.1.14): exercise construct paths so the surface is integration-tested
-    # even when the runtime doesn't apply the policies (kavach's job).
-    var rule = security_fs_rule_new("/etc", FS_READ_ONLY);
-    assert(streq(security_fs_rule_path(rule), "/etc") == 1, "fs_path");
-    security_syscall_map_reset();
-    assert_eq(security_syscall_name_to_nr("read"), 0, "map_reset_rebuild");
-    return 0;
-}
-
-# ================================================================
-# certpin (13 assertions)
-# ================================================================
-
-fn test_certpin() {
-    println("-- certpin --");
-    var p = "YLh1dUR9y6Kja30RrAn7JKnbQG/uEtLMkBgFF2Fuihg=";
-    assert_eq(certpin_validate_pin_format(p), 1, "pin_ok");
-    assert_eq(certpin_validate_pin_format("bad"), 0, "pin_bad");
-    assert_eq(certpin_validate_pin_format(""), 0, "pin_empty");
-    assert_eq(certpin_ct_streq(p, p), 1, "ct_eq");
-    assert_eq(certpin_ct_streq(p, "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="), 0, "ct_ne");
-    assert_eq(certpin_ct_streq("abc", "abc"), 1, "ct_short");
-    assert_eq(certpin_ct_streq("abc", "abd"), 0, "ct_diff");
-    var e = certpin_entry_new("example.com", 1700000000);
-    assert(streq(certpin_entry_host(e), "example.com") == 1, "ce_host");
-    assert_eq(certpin_entry_expires(e), 1700000000, "ce_exp");
-    assert_eq(certpin_entry_pin_count(e), 0, "ce_pc0");
-    assert_eq(certpin_check_pin_expiry(e, 1600000000), 0, "not_exp");
-    assert_eq(certpin_check_pin_expiry(e, 1800000000), 1, "exp");
-    var ci = certpin_info_new();
-    certpin_info_set_subject(ci, "CN=test");
-    assert(streq(certpin_info_subject(ci), "CN=test") == 1, "ci_sub");
-    var sb = str_builder_new();
-    certpin_info_to_json(ci, sb);
-    var json = str_builder_build(sb);
-    var sb_exp = str_builder_new();
-    str_builder_add_cstr(sb_exp, "{\"subject\":\"CN=test\",\"issuer\":null,\"serial\":null,");
-    str_builder_add_cstr(sb_exp, "\"not_before\":0,\"not_after\":0,\"sha256_fp\":null,\"spki_sha256\":null}");
-    assert(str_eq(json, str_builder_build(sb_exp)) == 1, "ci_json");
     return 0;
 }
 
@@ -258,219 +145,6 @@ fn test_bootloader() {
     bootloader_config_set_timeout(bc, 5);
     assert_eq(bootloader_config_type(bc), BOOT_SYSTEMD_BOOT, "bc_t");
     assert_eq(bootloader_config_timeout(bc), 5, "bc_to");
-    return 0;
-}
-
-# ================================================================
-# audit (12 assertions)
-# ================================================================
-
-fn test_audit() {
-    println("-- audit --");
-    var r1 = audit_rule_file_watch("/etc/passwd", "pw");
-    assert_eq(audit_rule_type(r1), AUDIT_RULE_FILE_WATCH, "fw_t");
-    assert(streq(audit_rule_path(r1), "/etc/passwd") == 1, "fw_p");
-    assert(streq(audit_rule_key(r1), "pw") == 1, "fw_k");
-    assert(is_ok(audit_rule_validate(r1)) == 1, "fw_v");
-    var r2 = audit_rule_syscall_watch(59, "ex");
-    assert_eq(audit_rule_type(r2), AUDIT_RULE_SYSCALL_WATCH, "sw_t");
-    assert_eq(audit_rule_syscall(r2), 59, "sw_nr");
-    assert(is_ok(audit_rule_validate(r2)) == 1, "sw_v");
-    var r3 = audit_rule_file_watch("../etc/passwd", "bad");
-    assert(is_err_result(audit_rule_validate(r3)) == 1, "fw_trav");
-    var r4 = audit_rule_file_watch("etc/passwd", "bad");
-    assert(is_err_result(audit_rule_validate(r4)) == 1, "fw_rel");
-    var st = audit_status_new();
-    assert_eq(audit_status_enabled(st), 0, "as_en");
-    assert_eq(audit_status_lost(st), 0, "as_lost");
-    audit_status_set_enabled(st, 1);
-    audit_status_set_pid(st, 42);
-    var sb = str_builder_new();
-    audit_status_to_json(st, sb);
-    var json = str_builder_build(sb);
-    var sb_exp = str_builder_new();
-    str_builder_add_cstr(sb_exp, "{\"enabled\":1,\"failure_action\":1,\"pid\":42,");
-    str_builder_add_cstr(sb_exp, "\"backlog_limit\":8192,\"lost\":0,\"backlog\":0}");
-    assert(str_eq(json, str_builder_build(sb_exp)) == 1, "as_json");
-    return 0;
-}
-
-# ================================================================
-# pam (16 assertions)
-# ================================================================
-
-fn test_pam() {
-    println("-- pam --");
-    assert(is_ok(pam_validate_username("testuser")) == 1, "usr_ok");
-    assert(is_ok(pam_validate_username("_svc")) == 1, "usr_usc");
-    assert(is_err_result(pam_validate_username("")) == 1, "usr_empty");
-    assert(streq(pam_service_name(PAM_SVC_LOGIN), "login") == 1, "svc_l");
-    assert(streq(pam_service_name(PAM_SVC_SUDO), "sudo") == 1, "svc_s");
-    assert(streq(pam_service_name(PAM_SVC_SSHD), "sshd") == 1, "svc_ss");
-    assert(streq(pam_rule_type_name(PAM_TYPE_AUTH), "auth") == 1, "rt_a");
-    assert(streq(pam_rule_type_name(PAM_TYPE_SESSION), "session") == 1, "rt_s");
-    assert(streq(pam_control_name(PAM_CTL_REQUIRED), "required") == 1, "ctl_r");
-    assert(streq(pam_control_name(PAM_CTL_OPTIONAL), "optional") == 1, "ctl_o");
-    var rule = pam_rule_new(PAM_TYPE_AUTH, PAM_CTL_REQUIRED, "pam_unix.so", "");
-    assert_eq(pam_rule_type(rule), PAM_TYPE_AUTH, "pr_t");
-    assert_eq(pam_rule_control(rule), PAM_CTL_REQUIRED, "pr_c");
-    var u = pam_user_alloc();
-    pam_user_set(u, "alice", 1000, 1000, "/home/alice", "/bin/bash");
-    assert_eq(pam_user_uid(u), 1000, "pu_uid");
-    assert(streq(pam_user_username(u), "alice") == 1, "pu_n");
-
-    # Regression (1.3.1): agnosys_read_fd_to_str (shared by the pam readers)
-    # must not overflow when the file fills the buffer — the per-module copies
-    # alloc'd `cap` and wrote the NUL at offset `cap`, one byte past the end.
-    var rfpath = "/tmp/agnos-readfd-test";
-    var rfbuf = alloc(100);
-    memset(rfbuf, 65, 100);
-    file_write_all(rfpath, rfbuf, 100);
-    var rfd = sys_open(rfpath, 0, 0);
-    var rfs = agnosys_read_fd_to_str(rfd, 50);
-    sys_close(rfd);
-    assert(str_len(rfs) == 50, "readfd_cap");
-    sys_unlink(rfpath);
-    return 0;
-}
-
-# ================================================================
-# mac (5 assertions)
-# ================================================================
-
-fn test_mac() {
-    println("-- mac --");
-    var p = mac_default_profile("svc");
-    assert(mac_profile_selinux_ctx(p) != 0, "sel");
-    assert(mac_profile_apparmor_name(p) != 0, "aa");
-    assert(streq(mac_profile_agent_type(p), "svc") == 1, "ma_at");
-    var p2 = mac_profile_new("test");
-    mac_profile_set_selinux_ctx(p2, "user:role:type:level");
-    assert(streq(mac_profile_selinux_ctx(p2), "user:role:type:level") == 1, "mp_se");
-    mac_profile_set_apparmor_name(p2, "test-profile");
-    assert(streq(mac_profile_apparmor_name(p2), "test-profile") == 1, "mp_aa");
-    var sb = str_builder_new();
-    mac_profile_to_json(p2, sb);
-    var json = str_builder_build(sb);
-    var sb_exp = str_builder_new();
-    str_builder_add_cstr(sb_exp, "{\"agent_type\":\"test\",\"selinux_ctx\":\"user:role:type:level\",");
-    str_builder_add_cstr(sb_exp, "\"apparmor_name\":\"test-profile\"}");
-    assert(str_eq(json, str_builder_build(sb_exp)) == 1, "mp_json");
-    var p3 = mac_profile_new("min");
-    var sb3 = str_builder_new();
-    mac_profile_to_json(p3, sb3);
-    var json3 = str_builder_build(sb3);
-    var sb3_exp = str_builder_new();
-    str_builder_add_cstr(sb3_exp, "{\"agent_type\":\"min\",\"selinux_ctx\":null,");
-    str_builder_add_cstr(sb3_exp, "\"apparmor_name\":null}");
-    assert(str_eq(json3, str_builder_build(sb3_exp)) == 1, "mp_json_null");
-    return 0;
-}
-
-# ================================================================
-# dmverity (8 assertions)
-# ================================================================
-
-fn test_dmverity() {
-    println("-- dmverity --");
-    var h = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-    assert(is_ok(dmverity_validate_root_hash(h, VERITY_SHA256)) == 1, "h_ok");
-    assert(is_err_result(dmverity_validate_root_hash("short", VERITY_SHA256)) == 1, "h_short");
-    assert(is_err_result(dmverity_validate_root_hash("", VERITY_SHA256)) == 1, "h_empty");
-    assert(streq(dmverity_hash_algo_str(VERITY_SHA256), "sha256") == 1, "a256");
-    assert_eq(dmverity_hash_hex_len(VERITY_SHA256), 64, "hl256");
-    var st = dmverity_status_new("test-vol", 1, 1, 0, h);
-    assert(streq(dmverity_status_name(st), "test-vol") == 1, "vs_n");
-    assert_eq(dmverity_status_is_active(st), 1, "vs_a");
-    assert_eq(dmverity_status_corruption_detected(st), 0, "vs_c");
-    var sb = str_builder_new();
-    dmverity_status_to_json(st, sb);
-    var json = str_builder_build(sb);
-    var sb_exp = str_builder_new();
-    str_builder_add_cstr(sb_exp, "{\"name\":\"test-vol\",\"is_active\":1,\"is_verified\":1,");
-    str_builder_add_cstr(sb_exp, "\"corruption_detected\":0,\"root_hash\":\"");
-    str_builder_add_cstr(sb_exp, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}");
-    assert(str_eq(json, str_builder_build(sb_exp)) == 1, "vs_json");
-    return 0;
-}
-
-# ================================================================
-# luks (10 assertions)
-# ================================================================
-
-fn test_luks() {
-    println("-- luks --");
-    var cfg = luks_config_default("vol", "/tmp/t.img", "/mnt/t");
-    assert(is_ok(luks_config_validate(cfg)) == 1, "cfg_v");
-    assert(streq(luks_fs_as_str(LUKS_FS_EXT4), "ext4") == 1, "ext4");
-    assert(streq(luks_fs_as_str(LUKS_FS_XFS), "xfs") == 1, "xfs");
-    assert(streq(luks_fs_as_str(LUKS_FS_BTRFS), "btrfs") == 1, "btrfs");
-    assert(streq(luks_pbkdf_as_str(LUKS_PBKDF_ARGON2ID), "argon2id") == 1, "argon");
-    assert(streq(luks_pbkdf_as_str(LUKS_PBKDF_PBKDF2), "pbkdf2") == 1, "pbkdf");
-    assert(streq(luks_config_name(cfg), "vol") == 1, "lc_n");
-    assert_eq(luks_config_size_mb(cfg), LUKS_DEFAULT_SIZE_MB, "lc_sz");
-    assert_eq(luks_is_name_char(97), 1, "nc_a");
-    assert_eq(luks_is_name_char(33), 0, "nc_ex");
-    return 0;
-}
-
-# ================================================================
-# ima (10 assertions)
-# ================================================================
-
-fn test_ima() {
-    println("-- ima --");
-    assert(streq(ima_action_str(IMA_MEASURE), "measure") == 1, "act_m");
-    assert(streq(ima_action_str(IMA_APPRAISE), "appraise") == 1, "act_a");
-    assert(streq(ima_target_str(IMA_BPRM_CHECK), "BPRM_CHECK") == 1, "tgt_b");
-    assert(streq(ima_target_str(IMA_FILE_CHECK), "FILE_CHECK") == 1, "tgt_f");
-    var r = ima_rule_new(IMA_MEASURE, IMA_BPRM_CHECK);
-    assert_eq(ima_rule_action(r), IMA_MEASURE, "ir_a");
-    assert_eq(ima_rule_target(r), IMA_BPRM_CHECK, "ir_t");
-    ima_rule_set_uid(r, 0);
-    assert_eq(ima_rule_uid(r), 0, "ir_uid");
-    ima_rule_set_fowner(r, 1000);
-    assert_eq(ima_rule_fowner(r), 1000, "ir_fo");
-    var st = ima_status_new(1, 42, 1);
-    assert_eq(ima_status_active(st), 1, "is_a");
-    assert_eq(ima_status_measurement_count(st), 42, "is_mc");
-    var sb = str_builder_new();
-    ima_status_to_json(st, sb);
-    var json = str_builder_build(sb);
-    assert(str_eq_cstr(json, "{\"active\":1,\"measurement_count\":42,\"policy_loaded\":1}") == 1, "is_json");
-    return 0;
-}
-
-# ================================================================
-# tpm (9 assertions)
-# ================================================================
-
-fn test_tpm() {
-    println("-- tpm --");
-    assert(tpm_detect() == 0 || tpm_detect() == 1, "tpm_d");
-    assert(streq(tpm_bank_str(TPM_SHA1), "sha1") == 1, "bk_1");
-    assert(streq(tpm_bank_str(TPM_SHA256), "sha256") == 1, "bk_256");
-    assert(streq(tpm_bank_str(TPM_SHA512), "sha512") == 1, "bk_512");
-    assert_eq(tpm_bank_hex_len(TPM_SHA256), TPM_SHA256_HEX_LEN, "hl_256");
-    var pv = tpm_pcr_value_new(7, TPM_SHA256, "abcdef");
-    assert_eq(tpm_pcr_value_index(pv), 7, "pv_i");
-    assert_eq(tpm_pcr_value_bank(pv), TPM_SHA256, "pv_b");
-    var ss = tpm_sealed_new("/tmp/ctx", "sha256:0,1,7");
-    assert(streq(tpm_sealed_context(ss), "/tmp/ctx") == 1, "ss_c");
-    return 0;
-}
-
-# ================================================================
-# secureboot (5 assertions)
-# ================================================================
-
-fn test_secureboot() {
-    println("-- secureboot --");
-    assert_eq(secureboot_is_enforcing(SB_ENABLED), 1, "sb_e");
-    assert_eq(secureboot_is_enforcing(SB_DISABLED), 0, "sb_d");
-    assert_eq(secureboot_is_enforcing(SB_SETUP_MODE), 0, "sb_sm");
-    assert(streq(secureboot_state_str(SB_ENABLED), "enabled") == 1, "ss_e");
-    assert(streq(secureboot_state_str(SB_DISABLED), "disabled") == 1, "ss_d");
     return 0;
 }
 
@@ -604,139 +278,23 @@ fn test_journald() {
 }
 
 # ================================================================
-# audit regressions (12 assertions) — pinned exploit vectors from
-# the 2026-04-26 P(-1) audit. Fuzz harnesses cover input families;
-# these assertions pin the specific behaviors so a future refactor
-# can't silently undo a finding's fix.
-# ================================================================
-
-fn test_audit_regressions() {
-    println("-- audit regressions --");
-
-    # F-1 — journald filter values must round-trip verbatim through
-    # set/get. The whole point of the argv-based exec rewrite is that
-    # shell metacharacters land in argv[i] unchanged for journalctl
-    # to consume verbatim. If a setter ever starts escaping or
-    # splitting, this breaks first.
-    var f = journald_filter_new();
-    var hostile = "; rm -rf /; #";
-    journald_filter_set_grep(f, hostile);
-    assert(streq(journald_filter_grep(f), hostile) == 1, "f1_grep_verbatim");
-    journald_filter_set_unit(f, "sshd.service; touch /tmp/pwn");
-    assert(streq(journald_filter_unit(f), "sshd.service; touch /tmp/pwn") == 1, "f1_unit_verbatim");
-
-    # F-2 — LUKS cipher allowlist. cipher_null and any "null" substring
-    # (case-insensitive) must reject; off-allowlist algos/modes must
-    # reject; the four allowed algos × four allowed modes must accept.
-    assert(is_err_result(luks_validate_cipher("cipher_null", "ecb")) == 1, "f2_null_lower");
-    assert(is_err_result(luks_validate_cipher("Cipher_Null", "ecb")) == 1, "f2_null_mixed");
-    assert(is_err_result(luks_validate_cipher("aes", "xts-NULL")) == 1, "f2_null_in_mode");
-    assert(is_err_result(luks_validate_cipher("chacha20", "xts-plain64")) == 1, "f2_off_algo");
-    assert(is_err_result(luks_validate_cipher("aes", "ecb")) == 1, "f2_off_mode");
-    assert(is_ok(luks_validate_cipher("aes", "xts-plain64")) == 1, "f2_aes_xts");
-    assert(is_ok(luks_validate_cipher("serpent", "cbc-essiv:sha256")) == 1, "f2_serpent_cbc");
-
-    # F-3 — LUKS keyfile path must include the /tmp/.agnos-luks- prefix
-    # AND two consecutive calls must return distinct paths (the random
-    # 16-hex suffix from getrandom defeats prediction). If getrandom
-    # ever degrades to fixed bytes, both calls return the same string.
-    var p1_res = luks_keyfile_path();
-    assert(is_ok(p1_res) == 1, "f3_p1_ok");
-    var p1 = payload(p1_res);
-    var p2_res = luks_keyfile_path();
-    assert(is_ok(p2_res) == 1, "f3_p2_ok");
-    var p2 = payload(p2_res);
-    assert(streq(p1, p2) == 0, "f3_unique");
-
-    return 0;
-}
-
-# ================================================================
-# edge cases (24 assertions) — boundary/error paths that the
-# per-module tests above don't reach, validated pre-1.0 freeze.
-# ================================================================
-
-fn test_edge_cases() {
-    println("-- edge cases --");
-
-    # update_validate_version — year/month boundaries
-    assert(is_ok(update_validate_version("2024.1.1")) == 1, "uvv_lo_y");
-    assert(is_ok(update_validate_version("2100.12.31")) == 1, "uvv_hi_y");
-    assert(is_err_result(update_validate_version("2023.6.1")) == 1, "uvv_u_y");
-    assert(is_err_result(update_validate_version("2101.6.1")) == 1, "uvv_o_y");
-    assert(is_err_result(update_validate_version("2025.0.1")) == 1, "uvv_u_m");
-    assert(is_err_result(update_validate_version("2025.13.1")) == 1, "uvv_o_m");
-
-    # update_compare_versions — both-malformed falls through to lex compare
-    assert_eq(update_compare_versions("abc", "abd"), VER_LESS, "ucv_lex_l");
-    assert_eq(update_compare_versions("abc", "abc"), VER_EQUAL, "ucv_lex_eq");
-    assert_eq(update_compare_versions("abcd", "abc"), VER_GREATER, "ucv_lex_g");
-
-    # pam_validate_username — length + first-char + body-char rules
-    assert(is_ok(pam_validate_username("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == 1, "usr_32");  # 32 chars
-    assert(is_err_result(pam_validate_username("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")) == 1, "usr_33");  # 33 chars
-    assert(is_err_result(pam_validate_username("1abc")) == 1, "usr_digit_first");
-    assert(is_err_result(pam_validate_username("Alice")) == 1, "usr_upper");
-    assert(is_err_result(pam_validate_username("bad name")) == 1, "usr_space");
-    assert(is_err_result(pam_validate_username("root$")) == 1, "usr_dollar");
-
-    # bootloader_validate_kernel_cmdline — known-dangerous tokens
-    assert(is_err_result(bootloader_validate_kernel_cmdline("root=/dev/sda1 rd.break")) == 1, "cmd_rdbrk");
-    assert(is_err_result(bootloader_validate_kernel_cmdline("root=/dev/sda1 single")) == 1, "cmd_single");
-    bootloader_danger_reset();
-
-    # certpin_validate_pin_format — length boundaries (44 exactly required)
-    assert_eq(certpin_validate_pin_format("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), 0, "pin_43");    # 43
-    assert_eq(certpin_validate_pin_format("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), 0, "pin_45"); # 45
-    assert_eq(certpin_validate_pin_format("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), 1, "pin_44"); # 44 all A
-    assert_eq(certpin_validate_pin_format("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#AAAA"), 0, "pin_bad_ch"); # bad byte
-
-    # err_from_errno — distinct errno values map to distinct error kinds
-    var e_perm = err_from_errno(EPERM);
-    var e_inval = err_from_errno(EINVAL);
-    assert(is_err_result(e_perm) == 1, "efe_perm");
-    assert(is_err_result(e_inval) == 1, "efe_inval");
-    assert(syserr_errno(payload(e_perm)) == EPERM, "efe_perm_e");
-    assert(syserr_errno(payload(e_inval)) == EINVAL, "efe_inval_e");
-
-    return 0;
-}
-
-# ================================================================
 # Main
 # ================================================================
 
 fn main() {
     alloc_init();
     println("================================================================");
-    println("  agnosys integration tests — all 20 modules");
+    println("  agnodrm integration tests — device model + deferred modules");
     println("================================================================");
     test_error();
-    security_syscall_map_reset(); bootloader_danger_reset();
-    test_syscall();
-    test_logging();
-    test_security();
-    security_syscall_map_reset();
-    test_certpin();
     test_update();
     test_bootloader();
     bootloader_danger_reset();
-    test_audit();
-    test_pam();
-    test_mac();
-    test_dmverity();
-    test_luks();
-    test_ima();
-    test_tpm();
-    test_secureboot();
     test_fuse();
     test_udev();
     test_drm();
     test_netns();
     test_journald();
-    bootloader_danger_reset();
-    test_audit_regressions();
-    test_edge_cases();
     println("");
     var f = assert_summary();
     if (f > 0) { return 1; }
