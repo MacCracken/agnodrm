@@ -5,12 +5,20 @@
 # and query the journal via journalctl subprocess.
 #
 # Requires: lib/string.cyr, lib/str.cyr, lib/vec.cyr, lib/process.cyr,
-#           lib/syscalls.cyr, src/error.cyr, src/syscall_arch.cyr
+#           lib/syscalls.cyr, src/error.cyr
 #
 # All structs are bags of i64 fields accessed via store64/load64.
 # Strings are Str (fat pointer: data + length) from lib/str.cyr.
 
-include "src/syscall_arch.cyr"
+# Socket-syscall numbers, formerly from src/syscall_arch.cyr (deleted in the
+# agnosys → agnodrm decomposition — the per-arch syscall layer moved to cyrius).
+# journald is in the deferred Linux-eccentric group (post-v1, no consumer), so
+# the two x86_64 numbers are inlined to keep it self-contained. (Linux x86_64
+# only — journald is systemd-journal-specific; an aarch64 peer isn't tracked.)
+enum JournaldSyscall {
+    SYS_SOCKET_NR = 41;
+    SYS_SENDTO_NR = 44;
+}
 
 # ================================================================
 # Constants
@@ -25,8 +33,8 @@ enum JournalConst {
     JOURNAL_SOCKET_PATH_LEN = 33;
 }
 
-# Socket-syscall numbers (SYS_SOCKET_NR, SYS_SENDTO_NR) come from
-# src/syscall_arch.cyr's per-arch peer.
+# Socket-syscall numbers (SYS_SOCKET_NR, SYS_SENDTO_NR) are inlined at the top
+# of this file (x86_64) — they were in src/syscall_arch.cyr before the rename.
 
 # Syslog priority levels
 enum JournalPriority {
