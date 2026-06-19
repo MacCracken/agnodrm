@@ -1,95 +1,53 @@
 [package]
-name = "agnosys"
+name = "agnodrm"
 version = "${file:VERSION}"
-description = "agnosys — AGNOS kernel interface library"
+description = "agnodrm — AGNOS device / DRM model (udev enumeration + DRM/KMS device-node access)"
 license = "GPL-3.0-only"
 language = "cyrius"
 cyrius = "6.2.11"
-repository = "https://github.com/MacCracken/agnosys"
+repository = "https://github.com/MacCracken/agnodrm"
 
 [build]
 entry = "src/main.cyr"
-output = "agnosys"
+output = "agnodrm"
 
-# `[lib]` exists so `cyrius distlib` knows what to concatenate into
-# dist/agnosys.cyr. Don't move `modules` into `[build]` — it makes
+# `[lib]` lists the modules `cyrius distlib` concatenates into
+# dist/agnodrm.cyr. Don't move `modules` into `[build]` — it makes
 # `cyrius build` prepend them before src/main.cyr, which then
-# re-includes them via src/main.cyr's `include` directives and
-# inflates the binary.
+# re-includes them and inflates the binary.
+#
+# agnodrm is the device/DRM model surviving the agnosys → agnodrm
+# decomposition (2026-06-19): error + util support, the udev/drm device
+# core, plus the deferred Linux-eccentric group (journald/netns/
+# bootloader/update/fuse) parked here post-v1 — no agnos story yet,
+# revisit then. The trust/security/storage/syscall/logging modules
+# moved to their proper homes (sigil / kavach / aegis / cyrius / sakshi)
+# and were removed. See the agnosticos decomposition plan.
 [lib]
 modules = [
-    "src/syscall_x86_64_linux.cyr",
-    "src/syscall_aarch64_linux.cyr",
     "src/error.cyr",
-    "src/syscall.cyr",
-    "src/logging.cyr",
     "src/util.cyr",
-    "src/security.cyr",
-    "src/mac.cyr",
-    "src/audit.cyr",
-    "src/pam.cyr",
-    "src/journald.cyr",
-    "src/luks.cyr",
-    "src/dmverity.cyr",
-    "src/ima.cyr",
-    "src/tpm.cyr",
-    "src/certpin.cyr",
-    "src/secureboot.cyr",
     "src/udev.cyr",
     "src/drm.cyr",
+    # Deferred Linux-eccentric group (post-v1; orphaned, no agnos story).
+    "src/journald.cyr",
     "src/netns.cyr",
     "src/bootloader.cyr",
     "src/update.cyr",
-    "src/fuse.cyr"
-]
-
-# V1.2.0 profile bundles. `cyrius distlib <profile>` reads the
-# matching `[lib.<profile>]` section and writes
-# `dist/agnosys-<profile>.cyr`. Consumers pulling a single domain
-# include core + their profile (e.g. kavach: core + security).
-# Yukti uses the same pattern — `cyrius distlib core`.
-
-[lib.core]
-modules = [
-    "src/syscall_x86_64_linux.cyr",
-    "src/syscall_aarch64_linux.cyr",
-    "src/error.cyr",
-    "src/syscall.cyr",
-    "src/logging.cyr",
-    "src/util.cyr",
-]
-
-[lib.security]
-modules = [
-    "src/security.cyr",
-    "src/mac.cyr",
-    "src/audit.cyr",
-    "src/pam.cyr",
-]
-
-[lib.storage]
-modules = [
-    "src/luks.cyr",
-    "src/dmverity.cyr",
     "src/fuse.cyr",
 ]
 
-[lib.trust]
+# Profile bundle. `cyrius distlib core` reads `[lib.core]` and writes
+# `dist/agnodrm-core.cyr`. core = the device-access surface (error/util
+# support + udev/drm) that ai-hwaccel + mabda consume. The old domain
+# profiles (security/storage/trust/system) were removed — those modules
+# moved out in the decomposition.
+[lib.core]
 modules = [
-    "src/tpm.cyr",
-    "src/ima.cyr",
-    "src/secureboot.cyr",
-    "src/certpin.cyr",
-]
-
-[lib.system]
-modules = [
-    "src/journald.cyr",
-    "src/bootloader.cyr",
+    "src/error.cyr",
+    "src/util.cyr",
     "src/udev.cyr",
     "src/drm.cyr",
-    "src/netns.cyr",
-    "src/update.cyr",
 ]
 
 [deps]

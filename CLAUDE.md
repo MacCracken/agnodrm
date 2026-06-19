@@ -1,4 +1,4 @@
-# Agnosys — Claude Code Instructions
+# Agnodrm — Claude Code Instructions
 
 > **Core rule**: this file is **preferences, process, and procedures** — durable rules that change rarely. Volatile state (current version, binary sizes, test counts, in-flight work, consumer status, verification hosts) lives in [`docs/development/state.md`](docs/development/state.md), refreshed every release. Do not inline state here — inlined state rots within a minor.
 
@@ -6,7 +6,7 @@
 
 ## Project Identity
 
-**Agnosys** (agi + nosys — the gnosis of AGI at the system level) — the AGNOS kernel interface library. Cyrius bindings for Linux kernel syscalls and security primitives. Consumers include only the modules they need, or include `dist/agnosys.cyr` for the full bundle.
+**Agnodrm** (agnos + DRM) — the AGNOS device / DRM model: udev device enumeration + DRM/KMS device-node access, on a small error + util support layer. Consumers include only the modules they need, or include `dist/agnodrm.cyr` for the full bundle. Born from **agnosys** (the former AGNOS kernel-interface library); the trust / security / syscall / logging subsystems decomposed out 2026-06-19 to sigil / kavach / aegis / cyrius / sakshi (see the agnosticos decomposition plan). The udev/drm device model survives here, plus a deferred Linux-eccentric group (bootloader / update / netns / fuse / journald) parked post-v1.
 
 - **Type**: Shared library (flat, single-include modules + bundled distlib)
 - **License**: GPL-3.0-only

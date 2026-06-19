@@ -48,23 +48,31 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Start with the two highest-module-surface consumers per the
-        # V1.2.3 spec. Expand the list as confidence grows.
+        # The two highest-module-surface consumers that STILL depend on
+        # agnosys. kavach + sigil were removed 2026-06-19: both severed
+        # their agnosys dep in the agnosys → agnodrm decomposition
+        # (kavach 3.5.0 internalized security/mac/audit; sigil 3.8.1
+        # internalized the trust stack), so vendoring agnosys into them
+        # tested a dependency that no longer exists — the source of the
+        # consumer-integration failure.
         # `modules_used` and `audit_cmd` declared per-consumer via
         # `include`; the workflow reads agnosys's cyrius pin in step 2
         # and force-sets the consumer's pin to match before building
         # (tests "what happens if the consumer bumped their pin to
         # match agnosys main").
+        # NOTE: at the agnodrm rename, libro's tpm rewires to sigil (it
+        # exits this list) and kybernet's trust/storage move to sigil
+        # while core stays in agnodrm — revisit the matrix then.
         consumer:
-          - kavach
-          - sigil
+          - kybernet
+          - libro
         include:
-          - consumer: kavach
-            modules_used: "security"
-            audit_cmd: "cyrius test"   # kavach has no scripts/audit.sh today; tests are the canonical signal
-          - consumer: sigil
-            modules_used: "trust (tpm + ima + secureboot + certpin)"
-            audit_cmd: "scripts/check.sh"
+          - consumer: kybernet
+            modules_used: "core + storage + trust (profile bundles)"
+            audit_cmd: "cyrius test src/test.cyr"   # explicit test entry — bare `cyrius test` finds no .tcyr (no-op)
+          - consumer: libro
+            modules_used: "trust (tpm seal/unseal)"
+            audit_cmd: "cyrius build src/main.cyr libro"   # libro has no .tcyr; a clean compile against agnosys main is the signal
 
     steps:
       - name: Checkout agnosys (this repo)

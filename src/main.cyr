@@ -1,9 +1,11 @@
-# agnosys — AGNOS kernel interface
-# Cyrius bindings for Linux syscalls and security primitives
-#
-# 20 modules ship under src/*.cyr. Consumers include only what
-# they need (feature-gating), or include dist/agnosys.cyr for
-# the full bundle. This main.cyr demonstrates the core modules.
+# agnodrm — AGNOS device / DRM model
+# udev device enumeration + DRM/KMS device-node access, on error + util
+# support. The trust / security / syscall / logging modules that once
+# shipped here moved to their proper homes (sigil / kavach / aegis /
+# cyrius / sakshi) in the agnosys → agnodrm decomposition (2026-06-19);
+# the deferred Linux-eccentric group (journald / netns / bootloader /
+# update / fuse) is parked in src/ post-v1. This main.cyr is a build
+# smoke over the surviving device-model modules.
 
 #define LINUX
 
@@ -26,21 +28,22 @@ include "lib/ct.cyr"
 include "lib/slice.cyr"
 
 # ================================================================
-# Agnosys core modules
+# agnodrm modules (error + util support, then the udev/drm device model)
 # ================================================================
 
 include "src/error.cyr"
-include "src/syscall.cyr"
-include "src/security.cyr"
+include "src/util.cyr"
+include "src/udev.cyr"
+include "src/drm.cyr"
 
 # ================================================================
-# Main — self-test
+# Main — build smoke
 # ================================================================
 
 fn main(): i64 {
     alloc_init();
 
-    # -- error module --
+    # -- error --
     var e = err_invalid_argument("test error");
     if (is_err_result(e) == 1) { println("error: ok"); }
 
@@ -49,58 +52,19 @@ fn main(): i64 {
         if (syserr_kind(payload(e2)) == ERR_PERMISSION_DENIED) { println("errno mapping: ok"); }
     }
 
-    # -- syscall module --
-    sys_write(1, "pid: ", 5);
-    print_num(agnosys_getpid());
-    sys_write(1, ", uid: ", 7);
-    print_num(agnosys_getuid());
-    sys_write(1, "\n", 1);
+    # -- util (pure helper) --
+    if (agnosys_is_hex_char(97) == 1) { println("util hex-char: ok"); }
 
-    if (agnosys_is_root() == 1) { println("running as root"); }
-    else { println("running as user"); }
+    # -- udev (pure parse) --
+    if (udev_starts_with("block", "blo") == 1) { println("udev parse: ok"); }
 
-    var uts[392];
-    var ures = agnosys_uname(&uts);
-    if (is_ok(ures) == 1) {
-        var h = uname_hostname(&uts);
-        sys_write(1, "hostname: ", 10);
-        sys_write(1, h, strlen(h));
-        sys_write(1, "\n", 1);
-    }
+    # -- drm (verinfo constructor) --
+    var v = drm_verinfo_new(1, 2, 3, "test", "20260619", "smoke");
+    if (v != 0) { println("drm verinfo: ok"); }
 
-    var sibuf[120];
-    var sres = query_sysinfo(&sibuf);
-    if (is_ok(sres) == 1) {
-        sys_write(1, "uptime: ", 8);
-        print_num(sysinfo_uptime(&sibuf));
-        sys_write(1, "s, ram: ", 8);
-        print_num(sysinfo_total_memory(&sibuf));
-        sys_write(1, " bytes, procs: ", 15);
-        print_num(sysinfo_procs(&sibuf));
-        sys_write(1, "\n", 1);
-    }
-
-    if (is_ok(ures) == 1) {
-        var rel = uname_release(&uts);
-        sys_write(1, "kernel: ", 8);
-        sys_write(1, rel, strlen(rel));
-        sys_write(1, "\n", 1);
-    }
-
-    # -- security module --
-    if (security_syscall_name_to_nr("getpid") == 39) { println("security_syscall_name_to_nr: ok"); }
-
-    var fres = security_create_basic_seccomp_filter();
-    if (is_ok(fres) == 1) {
-        var fi = payload(fres);
-        sys_write(1, "seccomp filter: ", 16);
-        print_num(security_seccomp_filter_len(fi));
-        sys_write(1, " bytes\n", 7);
-    }
-
-    println("agnosys ready — 20 modules ported");
+    println("agnodrm ready — device model (udev + drm) on error + util support");
     return 0;
 }
 
-var r = main();
-syscall(SYS_EXIT, r);
+fn _entry(): i64 { var r = main(); syscall(SYS_EXIT, r); return 0; }
+_entry();

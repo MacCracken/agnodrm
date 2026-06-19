@@ -1,10 +1,10 @@
-# Agnosys
+# Agnodrm
 
-> **Agnosys** (agnos + sys — toward knowledge of the system) — AGNOS kernel interface
+> **Agnodrm** (agnos + DRM) — the AGNOS device / DRM model
 
-Cyrius bindings for Linux kernel syscalls and security primitives. Consumers include only the modules they need, or include the single `dist/agnosys.cyr` bundle for the full surface area. The foundation layer that every AGNOS program depends on.
+udev device enumeration + DRM/KMS device-node access, on a small error + util support layer. Consumers include only the modules they need, or include the single `dist/agnodrm.cyr` bundle. Born from **agnosys** (the former AGNOS kernel-interface library), which decomposed 2026-06-19: its trust / security / syscall / logging subsystems moved to their proper homes (sigil / kavach / aegis / cyrius / sakshi); the udev/drm device model survives here, alongside a deferred Linux-eccentric group (bootloader / update / netns / fuse / journald) parked post-v1.
 
-**1.2.5 · Cyrius 5.10.44 · 20 modules · 730 public fns · ~10 300 src lines · 153 KB binary (DCE) · ~170 ms compile · 0 runtime deps**
+_Current version, module count, sizes, and in-flight work live in [`docs/development/state.md`](docs/development/state.md)._
 
 ## Architecture
 
