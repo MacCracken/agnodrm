@@ -20,7 +20,7 @@
 ### `bootloader` (src/bootloader.cyr)
 
 - `bootloader_config_default_id(arg)` → (no behavioral docs)
-- `bootloader_config_entries(arg)` → 1.0 API preservation — `entries` getter + 3-arg `set_entries` delegate through the derive-generat...
+- `bootloader_config_entries(arg)` → 1.0 API preservation — `entries` getter + 3-arg `set_entries` delegate through the derive-gener...
 - `bootloader_config_entries_arr(arg)` → (no behavioral docs)
 - `bootloader_config_entry_count(arg)` → (no behavioral docs)
 - `bootloader_config_new()` → (no behavioral docs)
@@ -83,28 +83,28 @@
 
 ### `error` (src/error.cyr)
 
-- `err_from_errno(arg)` → (no behavioral docs)
-- `err_from_syscall_ret(arg)` → (no behavioral docs)
-- `err_invalid_argument(arg)` → (no behavioral docs)
-- `err_invalid_argument_nr()` → (no behavioral docs)
-- `err_io(arg1, arg2)` → (no behavioral docs)
-- `err_module_not_loaded(arg)` → (no behavioral docs)
-- `err_not_supported(arg)` → (no behavioral docs)
-- `err_not_supported_nr()` → (no behavioral docs)
-- `err_permission_denied(arg)` → (no behavioral docs)
-- `err_permission_denied_nr(arg)` → (no behavioral docs)
-- `err_syscall_failed(arg1, arg2)` → (no behavioral docs)
-- `err_syscall_failed_nr(arg)` → (no behavioral docs)
-- `err_unknown(arg)` → (no behavioral docs)
-- `err_would_block()` → (no behavioral docs)
+- `drm_err_from_errno(arg)` → (no behavioral docs)
+- `drm_err_from_syscall_ret(arg)` → (no behavioral docs)
+- `drm_err_invalid_argument(arg)` → (no behavioral docs)
+- `drm_err_invalid_argument_nr()` → (no behavioral docs)
+- `drm_err_io(arg1, arg2)` → (no behavioral docs)
+- `drm_err_module_not_loaded(arg)` → (no behavioral docs)
+- `drm_err_not_supported(arg)` → (no behavioral docs)
+- `drm_err_not_supported_nr()` → (no behavioral docs)
+- `drm_err_permission_denied(arg)` → (no behavioral docs)
+- `drm_err_permission_denied_nr(arg)` → (no behavioral docs)
+- `drm_err_syscall_failed(arg1, arg2)` → (no behavioral docs)
+- `drm_err_syscall_failed_nr(arg)` → (no behavioral docs)
+- `drm_err_unknown(arg)` → (no behavioral docs)
+- `drm_err_would_block()` → (no behavioral docs)
+- `drm_syserr_errno(arg)` → Get errno value (works for both packed and heap errors)
+- `drm_syserr_kind(arg)` → Get error kind (works for both packed and heap errors)
+- `drm_syserr_message(arg)` → Get error message pointer (0 for packed errors)
+- `drm_syserr_new(arg1, arg2, arg3)` → Create a new error with message (heap-allocated, cold path)
+- `drm_syserr_pack(arg1, arg2)` → Pack kind + errno into a single integer (zero allocation)
+- `drm_syserr_print(arg)` → (no behavioral docs)
 - `is_syscall_err(arg)` → Check if a syscall return value indicates error (negative = errno)
 - `result_print_err(arg)` → Print error from a Result if it's Err, then return the error code. Returns 0 if the Result is Ok.
-- `syserr_errno(arg)` → Get errno value (works for both packed and heap errors)
-- `syserr_kind(arg)` → Get error kind (works for both packed and heap errors)
-- `syserr_message(arg)` → Get error message pointer (0 for packed errors)
-- `syserr_new(arg1, arg2, arg3)` → Create a new error with message (heap-allocated, cold path)
-- `syserr_pack(arg1, arg2)` → Pack kind + errno into a single integer (zero allocation)
-- `syserr_print(arg)` → (no behavioral docs)
 - `wrap_syscall(arg)` → Wrap a raw syscall return: Ok(ret) if >= 0, Err(from_errno) if < 0
 
 ### `fuse` (src/fuse.cyr)
@@ -170,7 +170,7 @@
 - `journald_make_sockaddr()` → Build a sockaddr_un pointing to /run/systemd/journal/socket. Returns pointer to the struct (110 b...
 - `journald_parse_json(arg)` → Parse a single JSON line from journalctl output into a JournalEntry. Returns Result: Ok(entry_ptr...
 - `journald_query(arg)` → Query the systemd journal using journalctl and parse JSON output. filter: JournalFilter pointer (...
-- `journald_send(arg1, arg2, arg3)` → Send a structured log message to the journald socket. message: C string — the log message text. p...
+- `journald_send(arg1, arg2, arg3)` → Send a structured log message to the journald socket. message: C string — the log message text....
 - `journald_send_fields(arg1, arg2, arg3, arg4, arg5)` → Send a structured log with extra key-value fields. fields_keys: vec of C string pointers (field n...
 - `journald_warning(arg)` → Send a warning-level message to the journal.
 
