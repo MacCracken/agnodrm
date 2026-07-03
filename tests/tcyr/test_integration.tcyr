@@ -44,7 +44,8 @@ fn test_error() {
     assert_eq(drm_syserr_errno(drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, EPERM)), EPERM, "pack_e");
     assert_eq(drm_syserr_kind(drm_syserr_pack(DRM_ERR_IO, EIO)), DRM_ERR_IO, "pack_io_k");
     assert_eq(drm_syserr_errno(drm_syserr_pack(DRM_ERR_IO, EIO)), EIO, "pack_io_e");
-    assert_eq(drm_syserr_kind(drm_syserr_pack(DRM_ERR_PERMISSION_DENIED, EACCES)), DRM_ERR_PERMISSION_DENIED, "pack_pd");
+    var pd = drm_syserr_pack(DRM_ERR_PERMISSION_DENIED, EACCES);
+    assert_eq(drm_syserr_kind(pd), DRM_ERR_PERMISSION_DENIED, "pack_pd");
     var h = drm_syserr_new(DRM_ERR_IO, EIO, "test");
     assert_eq(drm_syserr_kind(h), DRM_ERR_IO, "heap_k");
     assert_eq(drm_syserr_errno(h), EIO, "heap_e");
