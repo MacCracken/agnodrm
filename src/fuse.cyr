@@ -123,7 +123,7 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
     # Read /proc/mounts
     var fd = sys_open("/proc/mounts", 0, 0);  # O_RDONLY
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open /proc/mounts");
+        return drm_err_io(0 - fd, "failed to open /proc/mounts");
     }
     defer { sys_close(fd); }
 
@@ -190,12 +190,12 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
 # extra_opts: additional mount options string, or 0 for none.
 # Returns Result: Ok(0) or Err.
 fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
-    if (device == 0) { return err_invalid_argument("fuse device is null"); }
-    if (mountpoint == 0) { return err_invalid_argument("fuse mountpoint is null"); }
-    if (fuse_type == 0) { return err_invalid_argument("fuse type is null"); }
+    if (device == 0) { return drm_err_invalid_argument("fuse device is null"); }
+    if (mountpoint == 0) { return drm_err_invalid_argument("fuse mountpoint is null"); }
+    if (fuse_type == 0) { return drm_err_invalid_argument("fuse type is null"); }
 
-    if (strlen(device) == 0) { return err_invalid_argument("fuse device is empty"); }
-    if (strlen(mountpoint) == 0) { return err_invalid_argument("fuse mountpoint is empty"); }
+    if (strlen(device) == 0) { return drm_err_invalid_argument("fuse device is empty"); }
+    if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("fuse mountpoint is empty"); }
 
     # Use the fuse type command directly (e.g., sshfs, ntfs-3g)
     # Or fusermount for generic mounts
@@ -228,8 +228,8 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
 # Unmount a FUSE filesystem at the given mountpoint.
 # Returns Result: Ok(0) or Err.
 fn fuse_unmount(mountpoint): i64 {
-    if (mountpoint == 0) { return err_invalid_argument("unmount mountpoint is null"); }
-    if (strlen(mountpoint) == 0) { return err_invalid_argument("unmount mountpoint is empty"); }
+    if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
+    if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("unmount mountpoint is empty"); }
 
     var cmd = "fusermount";
     var argv = alloc(24);
@@ -248,7 +248,7 @@ fn fuse_unmount(mountpoint): i64 {
 
 # Lazy unmount via fusermount -uz (for busy mounts).
 fn fuse_unmount_lazy(mountpoint): i64 {
-    if (mountpoint == 0) { return err_invalid_argument("unmount mountpoint is null"); }
+    if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
 
     var cmd = "fusermount";
     var argv = alloc(24);
@@ -280,12 +280,12 @@ fn fuse_is_available(): i64 {
 # Returns Result: Ok(0) or Err.
 fn fuse_validate_mountpoint(path): i64 {
     if (path == 0 || strlen(path) == 0) {
-        return err_invalid_argument("mountpoint path is empty");
+        return drm_err_invalid_argument("mountpoint path is empty");
     }
 
     # Must not be filesystem root
     if (strlen(path) == 1 && load8(path) == 47) {
-        return err_invalid_argument("cannot use filesystem root as mountpoint");
+        return drm_err_invalid_argument("cannot use filesystem root as mountpoint");
     }
 
     # Check path exists and is a directory
@@ -293,13 +293,13 @@ fn fuse_validate_mountpoint(path): i64 {
     var statbuf = alloc(144);
     var ret = sys_stat(path, statbuf);
     if (ret < 0) {
-        return err_invalid_argument("mountpoint does not exist");
+        return drm_err_invalid_argument("mountpoint does not exist");
     }
 
     var mode = load32(statbuf + 24);
     # S_IFDIR = 0x4000 = 16384
     if ((mode & 0xF000) != 0x4000) {
-        return err_invalid_argument("mountpoint is not a directory");
+        return drm_err_invalid_argument("mountpoint is not a directory");
     }
 
     return Ok(0);
@@ -341,7 +341,7 @@ enum FuseStatus {
 # Returns Result: Ok(FuseStatus) or Err.
 fn fuse_get_status(mountpoint): i64 {
     if (mountpoint == 0 || strlen(mountpoint) == 0) {
-        return err_invalid_argument("mountpoint is empty");
+        return drm_err_invalid_argument("mountpoint is empty");
     }
 
     var arr = alloc(1024);

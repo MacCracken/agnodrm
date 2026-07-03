@@ -40,15 +40,15 @@ include "src/fuse.cyr"
 
 fn test_error() {
     println("-- error --");
-    assert_eq(syserr_kind(syserr_pack(ERR_SYSCALL_FAILED, EPERM)), ERR_SYSCALL_FAILED, "pack_k");
-    assert_eq(syserr_errno(syserr_pack(ERR_SYSCALL_FAILED, EPERM)), EPERM, "pack_e");
-    assert_eq(syserr_kind(syserr_pack(ERR_IO, EIO)), ERR_IO, "pack_io_k");
-    assert_eq(syserr_errno(syserr_pack(ERR_IO, EIO)), EIO, "pack_io_e");
-    assert_eq(syserr_kind(syserr_pack(ERR_PERMISSION_DENIED, EACCES)), ERR_PERMISSION_DENIED, "pack_pd");
-    var h = syserr_new(ERR_IO, EIO, "test");
-    assert_eq(syserr_kind(h), ERR_IO, "heap_k");
-    assert_eq(syserr_errno(h), EIO, "heap_e");
-    assert(syserr_message(h) != 0, "heap_m");
+    assert_eq(drm_syserr_kind(drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, EPERM)), DRM_ERR_SYSCALL_FAILED, "pack_k");
+    assert_eq(drm_syserr_errno(drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, EPERM)), EPERM, "pack_e");
+    assert_eq(drm_syserr_kind(drm_syserr_pack(DRM_ERR_IO, EIO)), DRM_ERR_IO, "pack_io_k");
+    assert_eq(drm_syserr_errno(drm_syserr_pack(DRM_ERR_IO, EIO)), EIO, "pack_io_e");
+    assert_eq(drm_syserr_kind(drm_syserr_pack(DRM_ERR_PERMISSION_DENIED, EACCES)), DRM_ERR_PERMISSION_DENIED, "pack_pd");
+    var h = drm_syserr_new(DRM_ERR_IO, EIO, "test");
+    assert_eq(drm_syserr_kind(h), DRM_ERR_IO, "heap_k");
+    assert_eq(drm_syserr_errno(h), EIO, "heap_e");
+    assert(drm_syserr_message(h) != 0, "heap_m");
     assert_eq(is_syscall_err(0 - 1), 1, "err_neg");
     assert_eq(is_syscall_err(0 - 999), 1, "err_neg2");
     assert_eq(is_syscall_err(0), 0, "err_zero");
@@ -57,16 +57,16 @@ fn test_error() {
     assert_eq(payload(wrap_syscall(42)), 42, "wrap_v");
     assert(is_err_result(wrap_syscall(0 - 1)) == 1, "wrap_e");
     assert(is_ok(wrap_syscall(0)) == 1, "wrap_0");
-    assert(is_err_result(err_from_errno(EPERM)) == 1, "errno_perm");
-    assert(is_err_result(err_from_errno(EACCES)) == 1, "errno_acces");
-    assert(is_err_result(err_from_errno(EINVAL)) == 1, "errno_inval");
-    assert(is_err_result(err_from_errno(ENOSYS)) == 1, "errno_nosys");
-    assert(is_err_result(err_invalid_argument("x")) == 1, "eia");
-    assert(is_err_result(err_permission_denied("x")) == 1, "epd");
-    assert(is_err_result(err_not_supported("x")) == 1, "ens");
-    assert(is_err_result(err_unknown("x")) == 1, "euk");
-    assert(is_err_result(err_io(EIO, "x")) == 1, "eio");
-    assert(is_err_result(err_module_not_loaded("x")) == 1, "eml");
+    assert(is_err_result(drm_err_from_errno(EPERM)) == 1, "errno_perm");
+    assert(is_err_result(drm_err_from_errno(EACCES)) == 1, "errno_acces");
+    assert(is_err_result(drm_err_from_errno(EINVAL)) == 1, "errno_inval");
+    assert(is_err_result(drm_err_from_errno(ENOSYS)) == 1, "errno_nosys");
+    assert(is_err_result(drm_err_invalid_argument("x")) == 1, "eia");
+    assert(is_err_result(drm_err_permission_denied("x")) == 1, "epd");
+    assert(is_err_result(drm_err_not_supported("x")) == 1, "ens");
+    assert(is_err_result(drm_err_unknown("x")) == 1, "euk");
+    assert(is_err_result(drm_err_io(EIO, "x")) == 1, "eio");
+    assert(is_err_result(drm_err_module_not_loaded("x")) == 1, "eml");
     return 0;
 }
 

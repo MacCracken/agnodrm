@@ -24,14 +24,14 @@
 # ================================================================
 
 enum SysErrorKind {
-    ERR_SYSCALL_FAILED = 1;
-    ERR_INVALID_ARGUMENT = 2;
-    ERR_PERMISSION_DENIED = 3;
-    ERR_WOULD_BLOCK = 4;
-    ERR_MODULE_NOT_LOADED = 5;
-    ERR_NOT_SUPPORTED = 6;
-    ERR_UNKNOWN = 7;
-    ERR_IO = 8;
+    DRM_ERR_SYSCALL_FAILED = 1;
+    DRM_ERR_INVALID_ARGUMENT = 2;
+    DRM_ERR_PERMISSION_DENIED = 3;
+    DRM_ERR_WOULD_BLOCK = 4;
+    DRM_ERR_MODULE_NOT_LOADED = 5;
+    DRM_ERR_NOT_SUPPORTED = 6;
+    DRM_ERR_UNKNOWN = 7;
+    DRM_ERR_IO = 8;
 }
 
 # ================================================================
@@ -82,15 +82,15 @@ enum Errno {
 # Packed error: kind << 16 | errno (no message, no heap, value < 0x100000)
 # Heap error:   pointer to { kind, errno, message_ptr } (24 bytes, value >= 0x100000)
 #
-# syserr_kind/errno/message dispatch on the value automatically.
+# drm_syserr_kind/errno/message dispatch on the value automatically.
 
 # Pack kind + errno into a single integer (zero allocation)
-fn syserr_pack(kind, errno): i64 {
+fn drm_syserr_pack(kind, errno): i64 {
     return kind << 16 | errno;
 }
 
 # Create a new error with message (heap-allocated, cold path)
-fn syserr_new(kind, errno, message): i64 {
+fn drm_syserr_new(kind, errno, message): i64 {
     var e = alloc(24);
     store64(e, kind);
     store64(e + 8, errno);
@@ -99,19 +99,19 @@ fn syserr_new(kind, errno, message): i64 {
 }
 
 # Get error kind (works for both packed and heap errors)
-fn syserr_kind(e): i64 {
+fn drm_syserr_kind(e): i64 {
     if (e < 0x100000) { return e >> 16; }
     return load64(e);
 }
 
 # Get errno value (works for both packed and heap errors)
-fn syserr_errno(e): i64 {
+fn drm_syserr_errno(e): i64 {
     if (e < 0x100000) { return e & 0xFFFF; }
     return load64(e + 8);
 }
 
 # Get error message pointer (0 for packed errors)
-fn syserr_message(e): i64 {
+fn drm_syserr_message(e): i64 {
     if (e < 0x100000) { return 0; }
     return load64(e + 16);
 }
@@ -120,83 +120,83 @@ fn syserr_message(e): i64 {
 # Error constructors — packed (fast, no alloc)
 # ================================================================
 
-fn err_syscall_failed_nr(errno): i64 {
-    return Err(syserr_pack(ERR_SYSCALL_FAILED, errno));
+fn drm_err_syscall_failed_nr(errno): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, errno));
 }
 
-fn err_permission_denied_nr(errno): i64 {
-    return Err(syserr_pack(ERR_PERMISSION_DENIED, errno));
+fn drm_err_permission_denied_nr(errno): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_PERMISSION_DENIED, errno));
 }
 
-fn err_would_block(): i64 {
-    return Err(syserr_pack(ERR_WOULD_BLOCK, EAGAIN));
+fn drm_err_would_block(): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_WOULD_BLOCK, EAGAIN));
 }
 
-fn err_invalid_argument_nr(): i64 {
-    return Err(syserr_pack(ERR_INVALID_ARGUMENT, EINVAL));
+fn drm_err_invalid_argument_nr(): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_INVALID_ARGUMENT, EINVAL));
 }
 
-fn err_not_supported_nr(): i64 {
-    return Err(syserr_pack(ERR_NOT_SUPPORTED, ENOSYS));
+fn drm_err_not_supported_nr(): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_NOT_SUPPORTED, ENOSYS));
 }
 
 # ================================================================
 # Error constructors — with message (heap, cold path)
 # ================================================================
 
-fn err_syscall_failed(errno, message): i64 {
-    return Err(syserr_new(ERR_SYSCALL_FAILED, errno, message));
+fn drm_err_syscall_failed(errno, message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_SYSCALL_FAILED, errno, message));
 }
 
-fn err_invalid_argument(message): i64 {
-    return Err(syserr_new(ERR_INVALID_ARGUMENT, EINVAL, message));
+fn drm_err_invalid_argument(message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_INVALID_ARGUMENT, EINVAL, message));
 }
 
-fn err_permission_denied(operation): i64 {
-    return Err(syserr_new(ERR_PERMISSION_DENIED, EPERM, operation));
+fn drm_err_permission_denied(operation): i64 {
+    return Err(drm_syserr_new(DRM_ERR_PERMISSION_DENIED, EPERM, operation));
 }
 
-fn err_module_not_loaded(module): i64 {
-    return Err(syserr_new(ERR_MODULE_NOT_LOADED, ENODEV, module));
+fn drm_err_module_not_loaded(module): i64 {
+    return Err(drm_syserr_new(DRM_ERR_MODULE_NOT_LOADED, ENODEV, module));
 }
 
-fn err_not_supported(feature): i64 {
-    return Err(syserr_new(ERR_NOT_SUPPORTED, ENOSYS, feature));
+fn drm_err_not_supported(feature): i64 {
+    return Err(drm_syserr_new(DRM_ERR_NOT_SUPPORTED, ENOSYS, feature));
 }
 
-fn err_unknown(message): i64 {
-    return Err(syserr_new(ERR_UNKNOWN, 0, message));
+fn drm_err_unknown(message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_UNKNOWN, 0, message));
 }
 
-fn err_io(errno, message): i64 {
-    return Err(syserr_new(ERR_IO, errno, message));
+fn drm_err_io(errno, message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_IO, errno, message));
 }
 
 # ================================================================
 # Errno-based error creation — packed (zero alloc, hot path)
 # ================================================================
 
-fn err_from_errno(errno): i64 {
-    if (errno == EPERM) { return err_permission_denied_nr(EPERM); }
-    if (errno == EACCES) { return err_permission_denied_nr(EACCES); }
-    if (errno == EAGAIN) { return err_would_block(); }
-    if (errno == EINVAL) { return err_invalid_argument_nr(); }
-    if (errno == ENOSYS) { return err_not_supported_nr(); }
-    return err_syscall_failed_nr(errno);
+fn drm_err_from_errno(errno): i64 {
+    if (errno == EPERM) { return drm_err_permission_denied_nr(EPERM); }
+    if (errno == EACCES) { return drm_err_permission_denied_nr(EACCES); }
+    if (errno == EAGAIN) { return drm_err_would_block(); }
+    if (errno == EINVAL) { return drm_err_invalid_argument_nr(); }
+    if (errno == ENOSYS) { return drm_err_not_supported_nr(); }
+    return drm_err_syscall_failed_nr(errno);
 }
 
-fn err_from_syscall_ret(ret): i64 {
+fn drm_err_from_syscall_ret(ret): i64 {
     var errno = 0 - ret;
-    return err_from_errno(errno);
+    return drm_err_from_errno(errno);
 }
 
 # ================================================================
 # Error printing
 # ================================================================
 
-fn syserr_print(e): i64 {
-    var kind = syserr_kind(e);
-    var msg = syserr_message(e);
+fn drm_syserr_print(e): i64 {
+    var kind = drm_syserr_kind(e);
+    var msg = drm_syserr_message(e);
     var msglen = 0;
     if (msg != 0) { msglen = strlen(msg); }
 
@@ -205,41 +205,41 @@ fn syserr_print(e): i64 {
     # `_ =>` opt-out: a missing variant should fail loud (fall through
     # to the trailing newline + return) rather than silently degrade.
     match kind {
-        ERR_SYSCALL_FAILED => {
+        DRM_ERR_SYSCALL_FAILED => {
             sys_write(2, "syscall failed (errno ", 22);
             var ebuf[24];
-            var elen = fmt_int_buf(syserr_errno(e), &ebuf);
+            var elen = fmt_int_buf(drm_syserr_errno(e), &ebuf);
             sys_write(2, &ebuf, elen);
             sys_write(2, "): ", 3);
             sys_write(2, msg, msglen);
         }
-        ERR_INVALID_ARGUMENT => {
+        DRM_ERR_INVALID_ARGUMENT => {
             sys_write(2, "invalid argument: ", 18);
             sys_write(2, msg, msglen);
         }
-        ERR_PERMISSION_DENIED => {
+        DRM_ERR_PERMISSION_DENIED => {
             sys_write(2, "permission denied: ", 19);
             sys_write(2, msg, msglen);
         }
-        ERR_WOULD_BLOCK => {
+        DRM_ERR_WOULD_BLOCK => {
             sys_write(2, "resource temporarily unavailable", 32);
         }
-        ERR_MODULE_NOT_LOADED => {
+        DRM_ERR_MODULE_NOT_LOADED => {
             sys_write(2, "kernel module not loaded: ", 25);
             sys_write(2, msg, msglen);
         }
-        ERR_NOT_SUPPORTED => {
+        DRM_ERR_NOT_SUPPORTED => {
             sys_write(2, "feature not supported: ", 23);
             sys_write(2, msg, msglen);
         }
-        ERR_UNKNOWN => {
+        DRM_ERR_UNKNOWN => {
             sys_write(2, "unknown error: ", 15);
             sys_write(2, msg, msglen);
         }
-        ERR_IO => {
+        DRM_ERR_IO => {
             sys_write(2, "io error (errno ", 16);
             var ibuf[24];
-            var ilen = fmt_int_buf(syserr_errno(e), &ibuf);
+            var ilen = fmt_int_buf(drm_syserr_errno(e), &ibuf);
             sys_write(2, &ibuf, ilen);
             sys_write(2, "): ", 3);
             sys_write(2, msg, msglen);
@@ -254,8 +254,8 @@ fn syserr_print(e): i64 {
 fn result_print_err(res): i64 {
     if (is_ok(res) == 1) { return 0; }
     var e = payload(res);
-    syserr_print(e);
-    return syserr_errno(e);
+    drm_syserr_print(e);
+    return drm_syserr_errno(e);
 }
 
 # ================================================================
@@ -277,7 +277,7 @@ fn is_syscall_err(ret): i64 {
 
 # Wrap a raw syscall return: Ok(ret) if >= 0, Err(from_errno) if < 0
 fn wrap_syscall(ret): i64 {
-    if (ret < 0) { return err_from_syscall_ret(ret); }
+    if (ret < 0) { return drm_err_from_syscall_ret(ret); }
     return Ok(ret);
 }
 
@@ -350,7 +350,7 @@ fn agnodrm_cstr_starts_with(str, prefix): i64 {
 fn agnodrm_run_capture(args, buf, buflen, errmsg): i64 {
     var n = exec_capture(args, buf, buflen);
     if (n < 0) {
-        return err_unknown(errmsg);
+        return drm_err_unknown(errmsg);
     }
     return Ok(n);
 }
@@ -361,7 +361,7 @@ fn agnodrm_run_capture(args, buf, buflen, errmsg): i64 {
 fn agnodrm_run_checked(args, errmsg): i64 {
     var rc = exec_vec(args);
     if (rc != 0) {
-        return err_unknown(errmsg);
+        return drm_err_unknown(errmsg);
     }
     return Ok(0);
 }
@@ -480,7 +480,7 @@ fn udev_devinfo_set_props(d, keys, vals, count): i64 {
 # Returns Result: Ok(devinfo_ptr) or Err.
 fn udev_parse_udevadm_info(text): i64 {
     if (text == 0) {
-        return err_invalid_argument("udevadm output is null");
+        return drm_err_invalid_argument("udevadm output is null");
     }
 
     var devpath = 0;
@@ -582,7 +582,7 @@ fn udev_parse_udevadm_info(text): i64 {
     }
 
     if (devpath == 0) {
-        return err_invalid_argument("udevadm output missing P: (devpath) line");
+        return drm_err_invalid_argument("udevadm output missing P: (devpath) line");
     }
 
     # Build syspath = "/sys" + devpath
@@ -711,10 +711,10 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
 
 fn udev_get_device_info(syspath): i64 {
     if (syspath == 0) {
-        return err_invalid_argument("syspath is null");
+        return drm_err_invalid_argument("syspath is null");
     }
     if (strlen(syspath) == 0) {
-        return err_invalid_argument("syspath cannot be empty");
+        return drm_err_invalid_argument("syspath cannot be empty");
     }
 
     var cmd = "udevadm";
@@ -763,16 +763,16 @@ fn udev_validate_rule(action_keys, action_count): i64 {
         var key = load64(action_keys + i * 8);
         # Reject dangerous action keys
         if (streq(key, "RUN") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: RUN");
+            return drm_err_invalid_argument("udev rule contains dangerous key: RUN");
         }
         if (streq(key, "PROGRAM") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: PROGRAM");
+            return drm_err_invalid_argument("udev rule contains dangerous key: PROGRAM");
         }
         if (udev_starts_with(key, "IMPORT{program}") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: IMPORT{program}");
+            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{program}");
         }
         if (udev_starts_with(key, "IMPORT{builtin}") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: IMPORT{builtin}");
+            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{builtin}");
         }
         i = i + 1;
     }
@@ -805,6 +805,10 @@ fn udev_parse_subsystem(s): i64 {
 # Requires: src/error.cyr, lib/syscalls.cyr
 
 #define LINUX
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
 
 # ================================================================
 # DRM ioctl constants
@@ -961,7 +965,7 @@ fn drm_list_devices(result_arr, max_cards): i64 {
     # O_RDONLY | O_DIRECTORY = 0x10000
     var fd = sys_open(dri_path, 0x10000, 0);
     if (fd < 0) {
-        return err_not_supported("DRM (/dev/dri not found)");
+        return drm_err_not_supported("DRM (/dev/dri not found)");
     }
     defer { sys_close(fd); }
 
@@ -1004,12 +1008,12 @@ fn drm_list_devices(result_arr, max_cards): i64 {
 # Open a DRM device by path. Returns Result: Ok(fd) or Err.
 fn drm_open(path): i64 {
     if (path == 0) {
-        return err_invalid_argument("drm device path is null");
+        return drm_err_invalid_argument("drm device path is null");
     }
     # O_RDWR | O_CLOEXEC = 0x80002
     var fd = sys_open(path, 0x80002, 0);
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open DRM device");
+        return drm_err_io(0 - fd, "failed to open DRM device");
     }
     return Ok(fd);
 }
@@ -1033,7 +1037,7 @@ fn drm_get_driver_version(fd): i64 {
 
     var ret = syscall(SYS_IOCTL, fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (lengths) failed");
+        return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (lengths) failed");
     }
 
     # Read reported lengths (cap at 4096)
@@ -1062,7 +1066,7 @@ fn drm_get_driver_version(fd): i64 {
 
     ret = syscall(SYS_IOCTL, fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (fill) failed");
+        return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (fill) failed");
     }
 
     var major = load32(ver + DRM_VER_MAJOR);
@@ -1091,7 +1095,7 @@ fn drm_get_capability(fd, cap): i64 {
         var errno = 0 - ret;
         # EINVAL means capability not supported, return 0
         if (errno == EINVAL) { return Ok(0); }
-        return err_syscall_failed(errno, "DRM_IOCTL_GET_CAP failed");
+        return drm_err_syscall_failed(errno, "DRM_IOCTL_GET_CAP failed");
     }
 
     var value = load64(getcap + 8);

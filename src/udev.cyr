@@ -65,7 +65,7 @@ fn udev_devinfo_set_props(d, keys, vals, count): i64 {
 # Returns Result: Ok(devinfo_ptr) or Err.
 fn udev_parse_udevadm_info(text): i64 {
     if (text == 0) {
-        return err_invalid_argument("udevadm output is null");
+        return drm_err_invalid_argument("udevadm output is null");
     }
 
     var devpath = 0;
@@ -167,7 +167,7 @@ fn udev_parse_udevadm_info(text): i64 {
     }
 
     if (devpath == 0) {
-        return err_invalid_argument("udevadm output missing P: (devpath) line");
+        return drm_err_invalid_argument("udevadm output missing P: (devpath) line");
     }
 
     # Build syspath = "/sys" + devpath
@@ -296,10 +296,10 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
 
 fn udev_get_device_info(syspath): i64 {
     if (syspath == 0) {
-        return err_invalid_argument("syspath is null");
+        return drm_err_invalid_argument("syspath is null");
     }
     if (strlen(syspath) == 0) {
-        return err_invalid_argument("syspath cannot be empty");
+        return drm_err_invalid_argument("syspath cannot be empty");
     }
 
     var cmd = "udevadm";
@@ -348,16 +348,16 @@ fn udev_validate_rule(action_keys, action_count): i64 {
         var key = load64(action_keys + i * 8);
         # Reject dangerous action keys
         if (streq(key, "RUN") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: RUN");
+            return drm_err_invalid_argument("udev rule contains dangerous key: RUN");
         }
         if (streq(key, "PROGRAM") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: PROGRAM");
+            return drm_err_invalid_argument("udev rule contains dangerous key: PROGRAM");
         }
         if (udev_starts_with(key, "IMPORT{program}") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: IMPORT{program}");
+            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{program}");
         }
         if (udev_starts_with(key, "IMPORT{builtin}") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: IMPORT{builtin}");
+            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{builtin}");
         }
         i = i + 1;
     }

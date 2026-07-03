@@ -390,12 +390,12 @@ fn _bootloader_danger_init(): i64 {
 # Returns Result: Ok(0) if valid, Err if dangerous or malformed.
 fn bootloader_validate_kernel_cmdline(options): i64 {
     if (options == 0) {
-        return err_invalid_argument("kernel cmdline is null");
+        return drm_err_invalid_argument("kernel cmdline is null");
     }
 
     var optlen = strlen(options);
     if (optlen > 4096) {
-        return err_invalid_argument("kernel command line exceeds 4096-character limit");
+        return drm_err_invalid_argument("kernel command line exceeds 4096-character limit");
     }
 
     # Single pass: validate chars + extract space-delimited tokens + check dangerous list.
@@ -410,10 +410,10 @@ fn bootloader_validate_kernel_cmdline(options): i64 {
         # Check printable ASCII (space=32..tilde=126)
         if (i < optlen) {
             if (c < 32) {
-                return err_invalid_argument("kernel cmdline contains non-printable characters");
+                return drm_err_invalid_argument("kernel cmdline contains non-printable characters");
             }
             if (c > 126) {
-                return err_invalid_argument("kernel cmdline contains non-ASCII characters");
+                return drm_err_invalid_argument("kernel cmdline contains non-ASCII characters");
             }
         }
 
@@ -434,7 +434,7 @@ fn bootloader_validate_kernel_cmdline(options): i64 {
                     ti = ti + 1;
                 }
                 if (map_has(_bootloader_danger_map, &tok) == 1) {
-                    return err_invalid_argument("kernel cmdline contains dangerous parameter");
+                    return drm_err_invalid_argument("kernel cmdline contains dangerous parameter");
                 }
             }
             tok_start = i + 1;

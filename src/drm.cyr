@@ -169,7 +169,7 @@ fn drm_list_devices(result_arr, max_cards): i64 {
     # O_RDONLY | O_DIRECTORY = 0x10000
     var fd = sys_open(dri_path, 0x10000, 0);
     if (fd < 0) {
-        return err_not_supported("DRM (/dev/dri not found)");
+        return drm_err_not_supported("DRM (/dev/dri not found)");
     }
     defer { sys_close(fd); }
 
@@ -212,12 +212,12 @@ fn drm_list_devices(result_arr, max_cards): i64 {
 # Open a DRM device by path. Returns Result: Ok(fd) or Err.
 fn drm_open(path): i64 {
     if (path == 0) {
-        return err_invalid_argument("drm device path is null");
+        return drm_err_invalid_argument("drm device path is null");
     }
     # O_RDWR | O_CLOEXEC = 0x80002
     var fd = sys_open(path, 0x80002, 0);
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open DRM device");
+        return drm_err_io(0 - fd, "failed to open DRM device");
     }
     return Ok(fd);
 }
@@ -241,7 +241,7 @@ fn drm_get_driver_version(fd): i64 {
 
     var ret = syscall(SYS_IOCTL, fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (lengths) failed");
+        return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (lengths) failed");
     }
 
     # Read reported lengths (cap at 4096)
@@ -270,7 +270,7 @@ fn drm_get_driver_version(fd): i64 {
 
     ret = syscall(SYS_IOCTL, fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (fill) failed");
+        return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (fill) failed");
     }
 
     var major = load32(ver + DRM_VER_MAJOR);
@@ -299,7 +299,7 @@ fn drm_get_capability(fd, cap): i64 {
         var errno = 0 - ret;
         # EINVAL means capability not supported, return 0
         if (errno == EINVAL) { return Ok(0); }
-        return err_syscall_failed(errno, "DRM_IOCTL_GET_CAP failed");
+        return drm_err_syscall_failed(errno, "DRM_IOCTL_GET_CAP failed");
     }
 
     var value = load64(getcap + 8);

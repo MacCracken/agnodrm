@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.5] — 2026-07-03
+
+### Changed
+
+- **Namespaced the error family** to end symbol collisions when this bundle is
+  co-included with sibling libs that define their own `ERR_*` (notably agnostik):
+  `ERR_*` → `DRM_ERR_*`, `err_*` → `drm_err_*`, `syserr_*` → `drm_syserr_*`.
+  `dist/agnodrm.cyr` + `dist/agnodrm-core.cyr` regenerated. Downstream consumers
+  must migrate their references (known consumer: aegis).
+
 ## [1.4.4] — 2026-06-19
 
 **Renamed `agnosys` → `agnodrm`; decomposed to the device / DRM model.** The

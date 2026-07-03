@@ -50,10 +50,10 @@ var VER_GREATER = 1;
 # Returns Result: Ok(0) or Err.
 fn update_atomic_write(path, data, data_len): i64 {
     if (path == 0) {
-        return err_invalid_argument("atomic_write path is null");
+        return drm_err_invalid_argument("atomic_write path is null");
     }
     if (data_len < 0) {
-        return err_invalid_argument("atomic_write data_len is negative");
+        return drm_err_invalid_argument("atomic_write data_len is negative");
     }
 
     # Create temp path: path + ".tmp"
@@ -67,7 +67,7 @@ fn update_atomic_write(path, data, data_len): i64 {
     # O_WRONLY | O_CREAT | O_TRUNC = 0x241, mode 0644 = 0x1A4
     var fd = sys_open(tmppath, 0x241, 0x1A4);
     if (fd < 0) {
-        return err_io(0 - fd, "atomic_write: failed to create temp file");
+        return drm_err_io(0 - fd, "atomic_write: failed to create temp file");
     }
     defer { sys_close(fd); }
 
@@ -78,7 +78,7 @@ fn update_atomic_write(path, data, data_len): i64 {
         var ret = sys_write(fd, data + written, chunk);
         if (ret < 0) {
             sys_unlink(tmppath);
-            return err_io(0 - ret, "atomic_write: write failed");
+            return drm_err_io(0 - ret, "atomic_write: write failed");
         }
         written = written + ret;
     }
@@ -87,14 +87,14 @@ fn update_atomic_write(path, data, data_len): i64 {
     var ret = agnodrm_fsync(fd);  # SYS_FSYNC
     if (ret < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - ret, "atomic_write: fsync failed");
+        return drm_err_io(0 - ret, "atomic_write: fsync failed");
     }
 
     # Rename temp to target: syscall 82 = SYS_RENAME
     ret = agnodrm_rename(tmppath, path);
     if (ret < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - ret, "atomic_write: rename failed");
+        return drm_err_io(0 - ret, "atomic_write: rename failed");
     }
 
     return Ok(0);
@@ -107,13 +107,13 @@ fn update_atomic_write(path, data, data_len): i64 {
 # Atomically copy src to dst (via temp + rename).
 # Returns Result: Ok(bytes_copied) or Err.
 fn update_atomic_copy(src, dst): i64 {
-    if (src == 0) { return err_invalid_argument("atomic_copy src is null"); }
-    if (dst == 0) { return err_invalid_argument("atomic_copy dst is null"); }
+    if (src == 0) { return drm_err_invalid_argument("atomic_copy src is null"); }
+    if (dst == 0) { return drm_err_invalid_argument("atomic_copy dst is null"); }
 
     # Open source
     var src_fd = sys_open(src, 0, 0);  # O_RDONLY
     if (src_fd < 0) {
-        return err_io(0 - src_fd, "atomic_copy: failed to open source");
+        return drm_err_io(0 - src_fd, "atomic_copy: failed to open source");
     }
     defer { sys_close(src_fd); }
 
@@ -126,7 +126,7 @@ fn update_atomic_copy(src, dst): i64 {
 
     var dst_fd = sys_open(tmppath, 0x241, 0x1A4);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
     if (dst_fd < 0) {
-        return err_io(0 - dst_fd, "atomic_copy: failed to create temp dest");
+        return drm_err_io(0 - dst_fd, "atomic_copy: failed to create temp dest");
     }
     defer { sys_close(dst_fd); }
 
@@ -140,7 +140,7 @@ fn update_atomic_copy(src, dst): i64 {
             var ret = sys_write(dst_fd, buf + nwritten, nread - nwritten);
             if (ret < 0) {
                 sys_unlink(tmppath);
-                return err_io(0 - ret, "atomic_copy: write failed");
+                return drm_err_io(0 - ret, "atomic_copy: write failed");
             }
             nwritten = nwritten + ret;
         }
@@ -150,7 +150,7 @@ fn update_atomic_copy(src, dst): i64 {
 
     if (nread < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - nread, "atomic_copy: read failed");
+        return drm_err_io(0 - nread, "atomic_copy: read failed");
     }
 
     # fsync (fd closed by defer)
@@ -160,7 +160,7 @@ fn update_atomic_copy(src, dst): i64 {
     var ret = agnodrm_rename(tmppath, dst);
     if (ret < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - ret, "atomic_copy: rename failed");
+        return drm_err_io(0 - ret, "atomic_copy: rename failed");
     }
 
     return Ok(total);
@@ -240,22 +240,22 @@ fn update_parse_version(version): i64 {
 fn update_validate_version(version): i64 {
     var v = update_parse_version(version);
     if (v == 0) {
-        return err_invalid_argument("version must have exactly 3 parts (YYYY.M.D)");
+        return drm_err_invalid_argument("version must have exactly 3 parts (YYYY.M.D)");
     }
     var year = load64(v);
     var month = load64(v + 8);
 
     if (year < 2024) {
-        return err_invalid_argument("version year out of range (2024-2100)");
+        return drm_err_invalid_argument("version year out of range (2024-2100)");
     }
     if (year > 2100) {
-        return err_invalid_argument("version year out of range (2024-2100)");
+        return drm_err_invalid_argument("version year out of range (2024-2100)");
     }
     if (month < 1) {
-        return err_invalid_argument("version month out of range (1-12)");
+        return drm_err_invalid_argument("version month out of range (1-12)");
     }
     if (month > 12) {
-        return err_invalid_argument("version month out of range (1-12)");
+        return drm_err_invalid_argument("version month out of range (1-12)");
     }
     return Ok(0);
 }
@@ -503,7 +503,7 @@ fn update_get_current_slot(): i64 {
                 var val = load8(cmdbuf + pos + 11);
                 if (val == 97 || val == 65) { return Ok(SLOT_A); }
                 if (val == 98 || val == 66) { return Ok(SLOT_B); }
-                return err_invalid_argument("Unknown slot in cmdline");
+                return drm_err_invalid_argument("Unknown slot in cmdline");
             }
         }
     }
@@ -539,8 +539,8 @@ fn update_get_current_slot(): i64 {
 # Save update state to a JSON file.
 # Returns Result: Ok(0) or Err.
 fn update_save_state(state, path): i64 {
-    if (state == 0) { return err_invalid_argument("state is null"); }
-    if (path == 0) { return err_invalid_argument("path is null"); }
+    if (state == 0) { return drm_err_invalid_argument("state is null"); }
+    if (path == 0) { return drm_err_invalid_argument("path is null"); }
 
     # Build JSON manually. Size the buffer from the actual variable-length
     # fields (version, pending) plus fixed scaffolding, so a large field
@@ -619,18 +619,18 @@ fn update_save_state(state, path): i64 {
 # Load update state from a JSON file.
 # Returns Result: Ok(state_ptr) or Err.
 fn update_load_state(path): i64 {
-    if (path == 0) { return err_invalid_argument("state path is null"); }
+    if (path == 0) { return drm_err_invalid_argument("state path is null"); }
 
     var fd = sys_open(path, 0, 0);
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open update state file");
+        return drm_err_io(0 - fd, "failed to open update state file");
     }
     defer { sys_close(fd); }
 
     var buf = alloc(4096);
     var n = sys_read(fd, buf, 4095);
     if (n <= 0) {
-        return err_io(0, "failed to read update state file");
+        return drm_err_io(0, "failed to read update state file");
     }
     store8(buf + n, 0);
 
@@ -722,21 +722,21 @@ fn update_load_state(path): i64 {
 # Note: SHA-256 digest verification requires a SHA-256 implementation
 # which is not yet available in Cyrius stdlib. Structural checks only.
 fn update_verify_manifest(manifest): i64 {
-    if (manifest == 0) { return err_invalid_argument("manifest is null"); }
+    if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
 
     var ver = update_manifest_version(manifest);
     if (ver == 0 || strlen(ver) == 0) {
-        return err_invalid_argument("manifest version must not be empty");
+        return drm_err_invalid_argument("manifest version must not be empty");
     }
 
     var files = update_manifest_files(manifest);
     if (files == 0 || vec_len(files) == 0) {
-        return err_invalid_argument("manifest must contain at least one file");
+        return drm_err_invalid_argument("manifest must contain at least one file");
     }
 
     var rd = update_manifest_release_date(manifest);
     if (rd == 0 || strlen(rd) == 0) {
-        return err_invalid_argument("manifest release_date must not be empty");
+        return drm_err_invalid_argument("manifest release_date must not be empty");
     }
 
     # Validate version format
@@ -749,14 +749,14 @@ fn update_verify_manifest(manifest): i64 {
         var f = vec_get(files, fi);
         var hash = update_file_sha256(f);
         if (hash == 0 || strlen(hash) != 64) {
-            return err_invalid_argument("file has invalid sha256 (expected 64 hex chars)");
+            return drm_err_invalid_argument("file has invalid sha256 (expected 64 hex chars)");
         }
         # Verify all chars are hex
         var hi = 0;
         while (hi < 64) {
             var c = load8(hash + hi);
             if (agnodrm_is_hex_char(c) == 0) {
-                return err_invalid_argument("file sha256 contains non-hex character");
+                return drm_err_invalid_argument("file sha256 contains non-hex character");
             }
             hi = hi + 1;
         }
@@ -779,8 +779,8 @@ fn update_verify_manifest(manifest): i64 {
 # Supports local file paths and file:// URLs only.
 # Future: Mac/Windows will need platform-specific fetch (NSURLSession, WinHTTP).
 fn update_check(config, current_version): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
-    if (current_version == 0) { return err_invalid_argument("current_version is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
+    if (current_version == 0) { return drm_err_invalid_argument("current_version is null"); }
 
     var url = update_config_url(config);
     var path = url;
@@ -792,13 +792,13 @@ fn update_check(config, current_version): i64 {
 
     # Only support local file paths for now
     if (load8(path) != 47) {  # '/'
-        return err_not_supported("network update check not yet implemented");
+        return drm_err_not_supported("network update check not yet implemented");
     }
 
     # Read manifest file
     var fd = sys_open(path, 0, 0);
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open manifest file");
+        return drm_err_io(0 - fd, "failed to open manifest file");
     }
     defer { sys_close(fd); }
 
@@ -819,7 +819,7 @@ fn update_check(config, current_version): i64 {
     # Look for "version":"X.Y.Z"
     var vidx = strstr(buf, "\"version\"");
     if (vidx < 0) {
-        return err_invalid_argument("manifest missing version field");
+        return drm_err_invalid_argument("manifest missing version field");
     }
     var qi = vidx + 9;
     while (qi < total && load8(buf + qi) != 34) { qi = qi + 1; }
@@ -850,12 +850,12 @@ fn update_check(config, current_version): i64 {
 # Write update image to the inactive slot's block device.
 # Returns Result: Ok(0) or Err.
 fn update_apply(config, manifest): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
-    if (manifest == 0) { return err_invalid_argument("manifest is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
+    if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
 
     var files = update_manifest_files(manifest);
     if (files == 0 || vec_len(files) == 0) {
-        return err_invalid_argument("manifest contains no files to apply");
+        return drm_err_invalid_argument("manifest contains no files to apply");
     }
 
     var current_res = update_get_current_slot();
@@ -867,21 +867,21 @@ fn update_apply(config, manifest): i64 {
 
     var image = update_file_path(vec_get(files, 0));
     if (image == 0 || strlen(image) == 0) {
-        return err_invalid_argument("update image path is empty");
+        return drm_err_invalid_argument("update image path is empty");
     }
 
     # Validate image path: must be absolute, no traversal
     if (load8(image) != 47) {
-        return err_invalid_argument("update image path must be absolute");
+        return drm_err_invalid_argument("update image path must be absolute");
     }
     if (strstr(image, "..") >= 0) {
-        return err_invalid_argument("update image path must not contain '..'");
+        return drm_err_invalid_argument("update image path must not contain '..'");
     }
 
     # Validate within staging directory
     var staging = "/var/lib/agnos/updates/";
     if (memeq(image, staging, strlen(staging)) != 1) {
-        return err_invalid_argument("update image must be within /var/lib/agnos/updates/");
+        return drm_err_invalid_argument("update image must be within /var/lib/agnos/updates/");
     }
 
     # Write via dd
@@ -930,7 +930,7 @@ fn update_apply(config, manifest): i64 {
 # Writes slot marker for argonaut and optionally sets EFI boot entry.
 # Returns Result: Ok(0) or Err.
 fn update_switch_slot(config, slot): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     # Write slot marker file
     var marker = "/var/lib/agnos/next-slot";
@@ -974,7 +974,7 @@ fn update_switch_slot(config, slot): i64 {
 # Roll back to the previous slot.
 # Returns Result: Ok(0) or Err.
 fn update_rollback(config): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
     var load_res = update_load_state(state_file);
@@ -982,7 +982,7 @@ fn update_rollback(config): i64 {
     var state = payload(load_res);
 
     if (update_state_rollback_available(state) == 0) {
-        return err_invalid_argument("no rollback image available");
+        return drm_err_invalid_argument("no rollback image available");
     }
 
     var previous = update_other_slot(update_state_slot(state));
@@ -1013,7 +1013,7 @@ fn update_rollback(config): i64 {
 # Increments boot counter, clears pending update flag.
 # Returns Result: Ok(0) or Err.
 fn update_mark_boot_successful(config): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
     var load_res = update_load_state(state_file);

@@ -44,12 +44,12 @@ fn main(): i64 {
     alloc_init();
 
     # -- error --
-    var e = err_invalid_argument("test error");
+    var e = drm_err_invalid_argument("test error");
     if (is_err_result(e) == 1) { println("error: ok"); }
 
-    var e2 = err_from_errno(EPERM);
+    var e2 = drm_err_from_errno(EPERM);
     if (is_err_result(e2) == 1) {
-        if (syserr_kind(payload(e2)) == ERR_PERMISSION_DENIED) { println("errno mapping: ok"); }
+        if (drm_syserr_kind(payload(e2)) == DRM_ERR_PERMISSION_DENIED) { println("errno mapping: ok"); }
     }
 
     # -- util (pure helper) --

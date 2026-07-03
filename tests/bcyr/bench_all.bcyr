@@ -43,12 +43,12 @@ fn do_bench(name) { return bench_new(name); }
 
 fn bench_errors() {
     println("-- error --");
-    var b = do_bench("syserr_pack");
+    var b = do_bench("drm_syserr_pack");
     var ri = 0;
     while (ri < 100) {
         var start = now_ns();
         var k = 0;
-        while (k < 10000) { syserr_pack(ERR_SYSCALL_FAILED, EPERM); k = k + 1; }
+        while (k < 10000) { drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, EPERM); k = k + 1; }
         batch_record(b, now_ns() - start, 10000);
         ri = ri + 1;
     }
@@ -59,7 +59,7 @@ fn bench_errors() {
     while (ri < 100) {
         var start = now_ns();
         var k = 0;
-        while (k < 10000) { err_from_errno(EPERM); k = k + 1; }
+        while (k < 10000) { drm_err_from_errno(EPERM); k = k + 1; }
         batch_record(b, now_ns() - start, 10000);
         ri = ri + 1;
     }

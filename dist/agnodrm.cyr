@@ -23,14 +23,14 @@
 # ================================================================
 
 enum SysErrorKind {
-    ERR_SYSCALL_FAILED = 1;
-    ERR_INVALID_ARGUMENT = 2;
-    ERR_PERMISSION_DENIED = 3;
-    ERR_WOULD_BLOCK = 4;
-    ERR_MODULE_NOT_LOADED = 5;
-    ERR_NOT_SUPPORTED = 6;
-    ERR_UNKNOWN = 7;
-    ERR_IO = 8;
+    DRM_ERR_SYSCALL_FAILED = 1;
+    DRM_ERR_INVALID_ARGUMENT = 2;
+    DRM_ERR_PERMISSION_DENIED = 3;
+    DRM_ERR_WOULD_BLOCK = 4;
+    DRM_ERR_MODULE_NOT_LOADED = 5;
+    DRM_ERR_NOT_SUPPORTED = 6;
+    DRM_ERR_UNKNOWN = 7;
+    DRM_ERR_IO = 8;
 }
 
 # ================================================================
@@ -81,15 +81,15 @@ enum Errno {
 # Packed error: kind << 16 | errno (no message, no heap, value < 0x100000)
 # Heap error:   pointer to { kind, errno, message_ptr } (24 bytes, value >= 0x100000)
 #
-# syserr_kind/errno/message dispatch on the value automatically.
+# drm_syserr_kind/errno/message dispatch on the value automatically.
 
 # Pack kind + errno into a single integer (zero allocation)
-fn syserr_pack(kind, errno): i64 {
+fn drm_syserr_pack(kind, errno): i64 {
     return kind << 16 | errno;
 }
 
 # Create a new error with message (heap-allocated, cold path)
-fn syserr_new(kind, errno, message): i64 {
+fn drm_syserr_new(kind, errno, message): i64 {
     var e = alloc(24);
     store64(e, kind);
     store64(e + 8, errno);
@@ -98,19 +98,19 @@ fn syserr_new(kind, errno, message): i64 {
 }
 
 # Get error kind (works for both packed and heap errors)
-fn syserr_kind(e): i64 {
+fn drm_syserr_kind(e): i64 {
     if (e < 0x100000) { return e >> 16; }
     return load64(e);
 }
 
 # Get errno value (works for both packed and heap errors)
-fn syserr_errno(e): i64 {
+fn drm_syserr_errno(e): i64 {
     if (e < 0x100000) { return e & 0xFFFF; }
     return load64(e + 8);
 }
 
 # Get error message pointer (0 for packed errors)
-fn syserr_message(e): i64 {
+fn drm_syserr_message(e): i64 {
     if (e < 0x100000) { return 0; }
     return load64(e + 16);
 }
@@ -119,83 +119,83 @@ fn syserr_message(e): i64 {
 # Error constructors — packed (fast, no alloc)
 # ================================================================
 
-fn err_syscall_failed_nr(errno): i64 {
-    return Err(syserr_pack(ERR_SYSCALL_FAILED, errno));
+fn drm_err_syscall_failed_nr(errno): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, errno));
 }
 
-fn err_permission_denied_nr(errno): i64 {
-    return Err(syserr_pack(ERR_PERMISSION_DENIED, errno));
+fn drm_err_permission_denied_nr(errno): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_PERMISSION_DENIED, errno));
 }
 
-fn err_would_block(): i64 {
-    return Err(syserr_pack(ERR_WOULD_BLOCK, EAGAIN));
+fn drm_err_would_block(): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_WOULD_BLOCK, EAGAIN));
 }
 
-fn err_invalid_argument_nr(): i64 {
-    return Err(syserr_pack(ERR_INVALID_ARGUMENT, EINVAL));
+fn drm_err_invalid_argument_nr(): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_INVALID_ARGUMENT, EINVAL));
 }
 
-fn err_not_supported_nr(): i64 {
-    return Err(syserr_pack(ERR_NOT_SUPPORTED, ENOSYS));
+fn drm_err_not_supported_nr(): i64 {
+    return Err(drm_syserr_pack(DRM_ERR_NOT_SUPPORTED, ENOSYS));
 }
 
 # ================================================================
 # Error constructors — with message (heap, cold path)
 # ================================================================
 
-fn err_syscall_failed(errno, message): i64 {
-    return Err(syserr_new(ERR_SYSCALL_FAILED, errno, message));
+fn drm_err_syscall_failed(errno, message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_SYSCALL_FAILED, errno, message));
 }
 
-fn err_invalid_argument(message): i64 {
-    return Err(syserr_new(ERR_INVALID_ARGUMENT, EINVAL, message));
+fn drm_err_invalid_argument(message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_INVALID_ARGUMENT, EINVAL, message));
 }
 
-fn err_permission_denied(operation): i64 {
-    return Err(syserr_new(ERR_PERMISSION_DENIED, EPERM, operation));
+fn drm_err_permission_denied(operation): i64 {
+    return Err(drm_syserr_new(DRM_ERR_PERMISSION_DENIED, EPERM, operation));
 }
 
-fn err_module_not_loaded(module): i64 {
-    return Err(syserr_new(ERR_MODULE_NOT_LOADED, ENODEV, module));
+fn drm_err_module_not_loaded(module): i64 {
+    return Err(drm_syserr_new(DRM_ERR_MODULE_NOT_LOADED, ENODEV, module));
 }
 
-fn err_not_supported(feature): i64 {
-    return Err(syserr_new(ERR_NOT_SUPPORTED, ENOSYS, feature));
+fn drm_err_not_supported(feature): i64 {
+    return Err(drm_syserr_new(DRM_ERR_NOT_SUPPORTED, ENOSYS, feature));
 }
 
-fn err_unknown(message): i64 {
-    return Err(syserr_new(ERR_UNKNOWN, 0, message));
+fn drm_err_unknown(message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_UNKNOWN, 0, message));
 }
 
-fn err_io(errno, message): i64 {
-    return Err(syserr_new(ERR_IO, errno, message));
+fn drm_err_io(errno, message): i64 {
+    return Err(drm_syserr_new(DRM_ERR_IO, errno, message));
 }
 
 # ================================================================
 # Errno-based error creation — packed (zero alloc, hot path)
 # ================================================================
 
-fn err_from_errno(errno): i64 {
-    if (errno == EPERM) { return err_permission_denied_nr(EPERM); }
-    if (errno == EACCES) { return err_permission_denied_nr(EACCES); }
-    if (errno == EAGAIN) { return err_would_block(); }
-    if (errno == EINVAL) { return err_invalid_argument_nr(); }
-    if (errno == ENOSYS) { return err_not_supported_nr(); }
-    return err_syscall_failed_nr(errno);
+fn drm_err_from_errno(errno): i64 {
+    if (errno == EPERM) { return drm_err_permission_denied_nr(EPERM); }
+    if (errno == EACCES) { return drm_err_permission_denied_nr(EACCES); }
+    if (errno == EAGAIN) { return drm_err_would_block(); }
+    if (errno == EINVAL) { return drm_err_invalid_argument_nr(); }
+    if (errno == ENOSYS) { return drm_err_not_supported_nr(); }
+    return drm_err_syscall_failed_nr(errno);
 }
 
-fn err_from_syscall_ret(ret): i64 {
+fn drm_err_from_syscall_ret(ret): i64 {
     var errno = 0 - ret;
-    return err_from_errno(errno);
+    return drm_err_from_errno(errno);
 }
 
 # ================================================================
 # Error printing
 # ================================================================
 
-fn syserr_print(e): i64 {
-    var kind = syserr_kind(e);
-    var msg = syserr_message(e);
+fn drm_syserr_print(e): i64 {
+    var kind = drm_syserr_kind(e);
+    var msg = drm_syserr_message(e);
     var msglen = 0;
     if (msg != 0) { msglen = strlen(msg); }
 
@@ -204,41 +204,41 @@ fn syserr_print(e): i64 {
     # `_ =>` opt-out: a missing variant should fail loud (fall through
     # to the trailing newline + return) rather than silently degrade.
     match kind {
-        ERR_SYSCALL_FAILED => {
+        DRM_ERR_SYSCALL_FAILED => {
             sys_write(2, "syscall failed (errno ", 22);
             var ebuf[24];
-            var elen = fmt_int_buf(syserr_errno(e), &ebuf);
+            var elen = fmt_int_buf(drm_syserr_errno(e), &ebuf);
             sys_write(2, &ebuf, elen);
             sys_write(2, "): ", 3);
             sys_write(2, msg, msglen);
         }
-        ERR_INVALID_ARGUMENT => {
+        DRM_ERR_INVALID_ARGUMENT => {
             sys_write(2, "invalid argument: ", 18);
             sys_write(2, msg, msglen);
         }
-        ERR_PERMISSION_DENIED => {
+        DRM_ERR_PERMISSION_DENIED => {
             sys_write(2, "permission denied: ", 19);
             sys_write(2, msg, msglen);
         }
-        ERR_WOULD_BLOCK => {
+        DRM_ERR_WOULD_BLOCK => {
             sys_write(2, "resource temporarily unavailable", 32);
         }
-        ERR_MODULE_NOT_LOADED => {
+        DRM_ERR_MODULE_NOT_LOADED => {
             sys_write(2, "kernel module not loaded: ", 25);
             sys_write(2, msg, msglen);
         }
-        ERR_NOT_SUPPORTED => {
+        DRM_ERR_NOT_SUPPORTED => {
             sys_write(2, "feature not supported: ", 23);
             sys_write(2, msg, msglen);
         }
-        ERR_UNKNOWN => {
+        DRM_ERR_UNKNOWN => {
             sys_write(2, "unknown error: ", 15);
             sys_write(2, msg, msglen);
         }
-        ERR_IO => {
+        DRM_ERR_IO => {
             sys_write(2, "io error (errno ", 16);
             var ibuf[24];
-            var ilen = fmt_int_buf(syserr_errno(e), &ibuf);
+            var ilen = fmt_int_buf(drm_syserr_errno(e), &ibuf);
             sys_write(2, &ibuf, ilen);
             sys_write(2, "): ", 3);
             sys_write(2, msg, msglen);
@@ -253,8 +253,8 @@ fn syserr_print(e): i64 {
 fn result_print_err(res): i64 {
     if (is_ok(res) == 1) { return 0; }
     var e = payload(res);
-    syserr_print(e);
-    return syserr_errno(e);
+    drm_syserr_print(e);
+    return drm_syserr_errno(e);
 }
 
 # ================================================================
@@ -276,7 +276,7 @@ fn is_syscall_err(ret): i64 {
 
 # Wrap a raw syscall return: Ok(ret) if >= 0, Err(from_errno) if < 0
 fn wrap_syscall(ret): i64 {
-    if (ret < 0) { return err_from_syscall_ret(ret); }
+    if (ret < 0) { return drm_err_from_syscall_ret(ret); }
     return Ok(ret);
 }
 
@@ -349,7 +349,7 @@ fn agnodrm_cstr_starts_with(str, prefix): i64 {
 fn agnodrm_run_capture(args, buf, buflen, errmsg): i64 {
     var n = exec_capture(args, buf, buflen);
     if (n < 0) {
-        return err_unknown(errmsg);
+        return drm_err_unknown(errmsg);
     }
     return Ok(n);
 }
@@ -360,7 +360,7 @@ fn agnodrm_run_capture(args, buf, buflen, errmsg): i64 {
 fn agnodrm_run_checked(args, errmsg): i64 {
     var rc = exec_vec(args);
     if (rc != 0) {
-        return err_unknown(errmsg);
+        return drm_err_unknown(errmsg);
     }
     return Ok(0);
 }
@@ -479,7 +479,7 @@ fn udev_devinfo_set_props(d, keys, vals, count): i64 {
 # Returns Result: Ok(devinfo_ptr) or Err.
 fn udev_parse_udevadm_info(text): i64 {
     if (text == 0) {
-        return err_invalid_argument("udevadm output is null");
+        return drm_err_invalid_argument("udevadm output is null");
     }
 
     var devpath = 0;
@@ -581,7 +581,7 @@ fn udev_parse_udevadm_info(text): i64 {
     }
 
     if (devpath == 0) {
-        return err_invalid_argument("udevadm output missing P: (devpath) line");
+        return drm_err_invalid_argument("udevadm output missing P: (devpath) line");
     }
 
     # Build syspath = "/sys" + devpath
@@ -710,10 +710,10 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
 
 fn udev_get_device_info(syspath): i64 {
     if (syspath == 0) {
-        return err_invalid_argument("syspath is null");
+        return drm_err_invalid_argument("syspath is null");
     }
     if (strlen(syspath) == 0) {
-        return err_invalid_argument("syspath cannot be empty");
+        return drm_err_invalid_argument("syspath cannot be empty");
     }
 
     var cmd = "udevadm";
@@ -762,16 +762,16 @@ fn udev_validate_rule(action_keys, action_count): i64 {
         var key = load64(action_keys + i * 8);
         # Reject dangerous action keys
         if (streq(key, "RUN") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: RUN");
+            return drm_err_invalid_argument("udev rule contains dangerous key: RUN");
         }
         if (streq(key, "PROGRAM") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: PROGRAM");
+            return drm_err_invalid_argument("udev rule contains dangerous key: PROGRAM");
         }
         if (udev_starts_with(key, "IMPORT{program}") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: IMPORT{program}");
+            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{program}");
         }
         if (udev_starts_with(key, "IMPORT{builtin}") == 1) {
-            return err_invalid_argument("udev rule contains dangerous key: IMPORT{builtin}");
+            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{builtin}");
         }
         i = i + 1;
     }
@@ -804,6 +804,10 @@ fn udev_parse_subsystem(s): i64 {
 # Requires: src/error.cyr, lib/syscalls.cyr
 
 #define LINUX
+include "lib/string.cyr"
+include "lib/alloc.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
 
 # ================================================================
 # DRM ioctl constants
@@ -960,7 +964,7 @@ fn drm_list_devices(result_arr, max_cards): i64 {
     # O_RDONLY | O_DIRECTORY = 0x10000
     var fd = sys_open(dri_path, 0x10000, 0);
     if (fd < 0) {
-        return err_not_supported("DRM (/dev/dri not found)");
+        return drm_err_not_supported("DRM (/dev/dri not found)");
     }
     defer { sys_close(fd); }
 
@@ -1003,12 +1007,12 @@ fn drm_list_devices(result_arr, max_cards): i64 {
 # Open a DRM device by path. Returns Result: Ok(fd) or Err.
 fn drm_open(path): i64 {
     if (path == 0) {
-        return err_invalid_argument("drm device path is null");
+        return drm_err_invalid_argument("drm device path is null");
     }
     # O_RDWR | O_CLOEXEC = 0x80002
     var fd = sys_open(path, 0x80002, 0);
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open DRM device");
+        return drm_err_io(0 - fd, "failed to open DRM device");
     }
     return Ok(fd);
 }
@@ -1032,7 +1036,7 @@ fn drm_get_driver_version(fd): i64 {
 
     var ret = syscall(SYS_IOCTL, fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (lengths) failed");
+        return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (lengths) failed");
     }
 
     # Read reported lengths (cap at 4096)
@@ -1061,7 +1065,7 @@ fn drm_get_driver_version(fd): i64 {
 
     ret = syscall(SYS_IOCTL, fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (fill) failed");
+        return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (fill) failed");
     }
 
     var major = load32(ver + DRM_VER_MAJOR);
@@ -1090,7 +1094,7 @@ fn drm_get_capability(fd, cap): i64 {
         var errno = 0 - ret;
         # EINVAL means capability not supported, return 0
         if (errno == EINVAL) { return Ok(0); }
-        return err_syscall_failed(errno, "DRM_IOCTL_GET_CAP failed");
+        return drm_err_syscall_failed(errno, "DRM_IOCTL_GET_CAP failed");
     }
 
     var value = load64(getcap + 8);
@@ -1317,13 +1321,13 @@ fn journald_make_sockaddr(): i64 {
 # Returns Result: Ok(0) on success, Err on failure.
 fn journald_send(message, priority, identifier): i64 {
     if (message == 0) {
-        return err_invalid_argument("journal message cannot be null");
+        return drm_err_invalid_argument("journal message cannot be null");
     }
     if (priority < 0) {
-        return err_invalid_argument("journal priority must be 0-7");
+        return drm_err_invalid_argument("journal priority must be 0-7");
     }
     if (priority > 7) {
-        return err_invalid_argument("journal priority must be 0-7");
+        return drm_err_invalid_argument("journal priority must be 0-7");
     }
 
     # Build the datagram payload: KEY=VALUE\n pairs
@@ -1352,7 +1356,7 @@ fn journald_send(message, priority, identifier): i64 {
 
     var fd = syscall(SYS_SOCKET_NR, AF_UNIX, 2, 0);  # SOCK_DGRAM = 2
     if (fd < 0) {
-        return err_syscall_failed(0 - fd, "failed to create unix socket");
+        return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
     }
     defer { sys_close(fd); }
 
@@ -1362,7 +1366,7 @@ fn journald_send(message, priority, identifier): i64 {
     # sendto(fd, buf, len, flags, dest_addr, addrlen)
     var ret = syscall(SYS_SENDTO_NR, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "sendto journal socket failed");
+        return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
     }
 
     return Ok(0);
@@ -1374,13 +1378,13 @@ fn journald_send(message, priority, identifier): i64 {
 # Returns Result: Ok(0) or Err.
 fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals): i64 {
     if (message == 0) {
-        return err_invalid_argument("journal message cannot be null");
+        return drm_err_invalid_argument("journal message cannot be null");
     }
     if (priority < 0) {
-        return err_invalid_argument("journal priority must be 0-7");
+        return drm_err_invalid_argument("journal priority must be 0-7");
     }
     if (priority > 7) {
-        return err_invalid_argument("journal priority must be 0-7");
+        return drm_err_invalid_argument("journal priority must be 0-7");
     }
 
     var sb = str_builder_new();
@@ -1427,14 +1431,14 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
 
     var fd = syscall(SYS_SOCKET_NR, AF_UNIX, 2, 0);
     if (fd < 0) {
-        return err_syscall_failed(0 - fd, "failed to create unix socket");
+        return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
     }
     defer { sys_close(fd); }
 
     var sa = journald_make_sockaddr();
     var ret = syscall(SYS_SENDTO_NR, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
     if (ret < 0) {
-        return err_syscall_failed(0 - ret, "sendto journal socket failed");
+        return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
     }
 
     return Ok(0);
@@ -1506,12 +1510,12 @@ fn journald_json_get_str(json, key): i64 {
 fn journald_parse_json(json_line): i64 {
     var jlen = str_len(json_line);
     if (jlen == 0) {
-        return err_invalid_argument("empty journal JSON line");
+        return drm_err_invalid_argument("empty journal JSON line");
     }
 
     # Check it starts with open brace (ASCII 123)
     if (load8(str_data(json_line)) != 123) {
-        return err_invalid_argument("journal JSON is not an object");
+        return drm_err_invalid_argument("journal JSON is not an object");
     }
 
     # Extract known fields
@@ -1561,7 +1565,7 @@ fn journald_query(filter): i64 {
     var buf = alloc(131072);  # 128KB capture buffer
     var nbytes = exec_capture(args, buf, 131072);
     if (nbytes < 0) {
-        return err_unknown("failed to execute journalctl");
+        return drm_err_unknown("failed to execute journalctl");
     }
 
     store8(buf + nbytes, 0);
@@ -1601,10 +1605,10 @@ fn journald_query(filter): i64 {
 # Returns Result: Ok(vec_of_entry_ptrs) or Err.
 fn journald_get_unit_logs(unit_name, lines): i64 {
     if (unit_name == 0) {
-        return err_invalid_argument("unit name cannot be null");
+        return drm_err_invalid_argument("unit name cannot be null");
     }
     if (strlen(unit_name) == 0) {
-        return err_invalid_argument("unit name cannot be empty");
+        return drm_err_invalid_argument("unit name cannot be empty");
     }
 
     var filter = journald_filter_new();
@@ -1839,20 +1843,20 @@ fn netns_config_for_agent(name): i64 {
 
 fn netns_validate_config(config): i64 {
     var name = netns_config_name(config);
-    if (name == 0) { return err_invalid_argument("namespace name is null"); }
-    if (strlen(name) == 0) { return err_invalid_argument("namespace name cannot be empty"); }
-    if (strlen(name) > 64) { return err_invalid_argument("namespace name too long (max 64)"); }
+    if (name == 0) { return drm_err_invalid_argument("namespace name is null"); }
+    if (strlen(name) == 0) { return drm_err_invalid_argument("namespace name cannot be empty"); }
+    if (strlen(name) > 64) { return drm_err_invalid_argument("namespace name too long (max 64)"); }
 
     var aip = netns_config_agent_ip(config);
     var hip = netns_config_host_ip(config);
-    if (aip == 0) { return err_invalid_argument("agent IP is null"); }
-    if (hip == 0) { return err_invalid_argument("host IP is null"); }
-    if (strlen(aip) == 0) { return err_invalid_argument("agent IP cannot be empty"); }
-    if (strlen(hip) == 0) { return err_invalid_argument("host IP cannot be empty"); }
+    if (aip == 0) { return drm_err_invalid_argument("agent IP is null"); }
+    if (hip == 0) { return drm_err_invalid_argument("host IP is null"); }
+    if (strlen(aip) == 0) { return drm_err_invalid_argument("agent IP cannot be empty"); }
+    if (strlen(hip) == 0) { return drm_err_invalid_argument("host IP cannot be empty"); }
 
     var plen = netns_config_prefix_len(config);
-    if (plen == 0) { return err_invalid_argument("invalid prefix length: 0"); }
-    if (plen > 32) { return err_invalid_argument("invalid prefix length: > 32"); }
+    if (plen == 0) { return drm_err_invalid_argument("invalid prefix length: 0"); }
+    if (plen > 32) { return drm_err_invalid_argument("invalid prefix length: > 32"); }
 
     return Ok(0);
 }
@@ -1887,7 +1891,7 @@ fn netns_truncate_veth(base): i64 {
 # path, not a bare "ip".)
 fn netns_run_ip(args): i64 {
     var rc = exec_vec(args);
-    if (rc != 0) { return err_io(0, "ip command failed"); }
+    if (rc != 0) { return drm_err_io(0, "ip command failed"); }
     return Ok(0);
 }
 
@@ -2209,7 +2213,7 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     # Write ruleset to file
     var fd = sys_open(tmp_path, 0x241, 0x1A4);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
     if (fd < 0) {
-        return err_io(0 - fd, "failed to create nft temp file");
+        return drm_err_io(0 - fd, "failed to create nft temp file");
     }
     var rlen = strlen(ruleset);
     sys_write(fd, ruleset, rlen);
@@ -2622,12 +2626,12 @@ fn _bootloader_danger_init(): i64 {
 # Returns Result: Ok(0) if valid, Err if dangerous or malformed.
 fn bootloader_validate_kernel_cmdline(options): i64 {
     if (options == 0) {
-        return err_invalid_argument("kernel cmdline is null");
+        return drm_err_invalid_argument("kernel cmdline is null");
     }
 
     var optlen = strlen(options);
     if (optlen > 4096) {
-        return err_invalid_argument("kernel command line exceeds 4096-character limit");
+        return drm_err_invalid_argument("kernel command line exceeds 4096-character limit");
     }
 
     # Single pass: validate chars + extract space-delimited tokens + check dangerous list.
@@ -2642,10 +2646,10 @@ fn bootloader_validate_kernel_cmdline(options): i64 {
         # Check printable ASCII (space=32..tilde=126)
         if (i < optlen) {
             if (c < 32) {
-                return err_invalid_argument("kernel cmdline contains non-printable characters");
+                return drm_err_invalid_argument("kernel cmdline contains non-printable characters");
             }
             if (c > 126) {
-                return err_invalid_argument("kernel cmdline contains non-ASCII characters");
+                return drm_err_invalid_argument("kernel cmdline contains non-ASCII characters");
             }
         }
 
@@ -2666,7 +2670,7 @@ fn bootloader_validate_kernel_cmdline(options): i64 {
                     ti = ti + 1;
                 }
                 if (map_has(_bootloader_danger_map, &tok) == 1) {
-                    return err_invalid_argument("kernel cmdline contains dangerous parameter");
+                    return drm_err_invalid_argument("kernel cmdline contains dangerous parameter");
                 }
             }
             tok_start = i + 1;
@@ -2738,10 +2742,10 @@ var VER_GREATER = 1;
 # Returns Result: Ok(0) or Err.
 fn update_atomic_write(path, data, data_len): i64 {
     if (path == 0) {
-        return err_invalid_argument("atomic_write path is null");
+        return drm_err_invalid_argument("atomic_write path is null");
     }
     if (data_len < 0) {
-        return err_invalid_argument("atomic_write data_len is negative");
+        return drm_err_invalid_argument("atomic_write data_len is negative");
     }
 
     # Create temp path: path + ".tmp"
@@ -2755,7 +2759,7 @@ fn update_atomic_write(path, data, data_len): i64 {
     # O_WRONLY | O_CREAT | O_TRUNC = 0x241, mode 0644 = 0x1A4
     var fd = sys_open(tmppath, 0x241, 0x1A4);
     if (fd < 0) {
-        return err_io(0 - fd, "atomic_write: failed to create temp file");
+        return drm_err_io(0 - fd, "atomic_write: failed to create temp file");
     }
     defer { sys_close(fd); }
 
@@ -2766,7 +2770,7 @@ fn update_atomic_write(path, data, data_len): i64 {
         var ret = sys_write(fd, data + written, chunk);
         if (ret < 0) {
             sys_unlink(tmppath);
-            return err_io(0 - ret, "atomic_write: write failed");
+            return drm_err_io(0 - ret, "atomic_write: write failed");
         }
         written = written + ret;
     }
@@ -2775,14 +2779,14 @@ fn update_atomic_write(path, data, data_len): i64 {
     var ret = agnodrm_fsync(fd);  # SYS_FSYNC
     if (ret < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - ret, "atomic_write: fsync failed");
+        return drm_err_io(0 - ret, "atomic_write: fsync failed");
     }
 
     # Rename temp to target: syscall 82 = SYS_RENAME
     ret = agnodrm_rename(tmppath, path);
     if (ret < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - ret, "atomic_write: rename failed");
+        return drm_err_io(0 - ret, "atomic_write: rename failed");
     }
 
     return Ok(0);
@@ -2795,13 +2799,13 @@ fn update_atomic_write(path, data, data_len): i64 {
 # Atomically copy src to dst (via temp + rename).
 # Returns Result: Ok(bytes_copied) or Err.
 fn update_atomic_copy(src, dst): i64 {
-    if (src == 0) { return err_invalid_argument("atomic_copy src is null"); }
-    if (dst == 0) { return err_invalid_argument("atomic_copy dst is null"); }
+    if (src == 0) { return drm_err_invalid_argument("atomic_copy src is null"); }
+    if (dst == 0) { return drm_err_invalid_argument("atomic_copy dst is null"); }
 
     # Open source
     var src_fd = sys_open(src, 0, 0);  # O_RDONLY
     if (src_fd < 0) {
-        return err_io(0 - src_fd, "atomic_copy: failed to open source");
+        return drm_err_io(0 - src_fd, "atomic_copy: failed to open source");
     }
     defer { sys_close(src_fd); }
 
@@ -2814,7 +2818,7 @@ fn update_atomic_copy(src, dst): i64 {
 
     var dst_fd = sys_open(tmppath, 0x241, 0x1A4);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
     if (dst_fd < 0) {
-        return err_io(0 - dst_fd, "atomic_copy: failed to create temp dest");
+        return drm_err_io(0 - dst_fd, "atomic_copy: failed to create temp dest");
     }
     defer { sys_close(dst_fd); }
 
@@ -2828,7 +2832,7 @@ fn update_atomic_copy(src, dst): i64 {
             var ret = sys_write(dst_fd, buf + nwritten, nread - nwritten);
             if (ret < 0) {
                 sys_unlink(tmppath);
-                return err_io(0 - ret, "atomic_copy: write failed");
+                return drm_err_io(0 - ret, "atomic_copy: write failed");
             }
             nwritten = nwritten + ret;
         }
@@ -2838,7 +2842,7 @@ fn update_atomic_copy(src, dst): i64 {
 
     if (nread < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - nread, "atomic_copy: read failed");
+        return drm_err_io(0 - nread, "atomic_copy: read failed");
     }
 
     # fsync (fd closed by defer)
@@ -2848,7 +2852,7 @@ fn update_atomic_copy(src, dst): i64 {
     var ret = agnodrm_rename(tmppath, dst);
     if (ret < 0) {
         sys_unlink(tmppath);
-        return err_io(0 - ret, "atomic_copy: rename failed");
+        return drm_err_io(0 - ret, "atomic_copy: rename failed");
     }
 
     return Ok(total);
@@ -2928,22 +2932,22 @@ fn update_parse_version(version): i64 {
 fn update_validate_version(version): i64 {
     var v = update_parse_version(version);
     if (v == 0) {
-        return err_invalid_argument("version must have exactly 3 parts (YYYY.M.D)");
+        return drm_err_invalid_argument("version must have exactly 3 parts (YYYY.M.D)");
     }
     var year = load64(v);
     var month = load64(v + 8);
 
     if (year < 2024) {
-        return err_invalid_argument("version year out of range (2024-2100)");
+        return drm_err_invalid_argument("version year out of range (2024-2100)");
     }
     if (year > 2100) {
-        return err_invalid_argument("version year out of range (2024-2100)");
+        return drm_err_invalid_argument("version year out of range (2024-2100)");
     }
     if (month < 1) {
-        return err_invalid_argument("version month out of range (1-12)");
+        return drm_err_invalid_argument("version month out of range (1-12)");
     }
     if (month > 12) {
-        return err_invalid_argument("version month out of range (1-12)");
+        return drm_err_invalid_argument("version month out of range (1-12)");
     }
     return Ok(0);
 }
@@ -3191,7 +3195,7 @@ fn update_get_current_slot(): i64 {
                 var val = load8(cmdbuf + pos + 11);
                 if (val == 97 || val == 65) { return Ok(SLOT_A); }
                 if (val == 98 || val == 66) { return Ok(SLOT_B); }
-                return err_invalid_argument("Unknown slot in cmdline");
+                return drm_err_invalid_argument("Unknown slot in cmdline");
             }
         }
     }
@@ -3227,8 +3231,8 @@ fn update_get_current_slot(): i64 {
 # Save update state to a JSON file.
 # Returns Result: Ok(0) or Err.
 fn update_save_state(state, path): i64 {
-    if (state == 0) { return err_invalid_argument("state is null"); }
-    if (path == 0) { return err_invalid_argument("path is null"); }
+    if (state == 0) { return drm_err_invalid_argument("state is null"); }
+    if (path == 0) { return drm_err_invalid_argument("path is null"); }
 
     # Build JSON manually. Size the buffer from the actual variable-length
     # fields (version, pending) plus fixed scaffolding, so a large field
@@ -3307,18 +3311,18 @@ fn update_save_state(state, path): i64 {
 # Load update state from a JSON file.
 # Returns Result: Ok(state_ptr) or Err.
 fn update_load_state(path): i64 {
-    if (path == 0) { return err_invalid_argument("state path is null"); }
+    if (path == 0) { return drm_err_invalid_argument("state path is null"); }
 
     var fd = sys_open(path, 0, 0);
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open update state file");
+        return drm_err_io(0 - fd, "failed to open update state file");
     }
     defer { sys_close(fd); }
 
     var buf = alloc(4096);
     var n = sys_read(fd, buf, 4095);
     if (n <= 0) {
-        return err_io(0, "failed to read update state file");
+        return drm_err_io(0, "failed to read update state file");
     }
     store8(buf + n, 0);
 
@@ -3410,21 +3414,21 @@ fn update_load_state(path): i64 {
 # Note: SHA-256 digest verification requires a SHA-256 implementation
 # which is not yet available in Cyrius stdlib. Structural checks only.
 fn update_verify_manifest(manifest): i64 {
-    if (manifest == 0) { return err_invalid_argument("manifest is null"); }
+    if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
 
     var ver = update_manifest_version(manifest);
     if (ver == 0 || strlen(ver) == 0) {
-        return err_invalid_argument("manifest version must not be empty");
+        return drm_err_invalid_argument("manifest version must not be empty");
     }
 
     var files = update_manifest_files(manifest);
     if (files == 0 || vec_len(files) == 0) {
-        return err_invalid_argument("manifest must contain at least one file");
+        return drm_err_invalid_argument("manifest must contain at least one file");
     }
 
     var rd = update_manifest_release_date(manifest);
     if (rd == 0 || strlen(rd) == 0) {
-        return err_invalid_argument("manifest release_date must not be empty");
+        return drm_err_invalid_argument("manifest release_date must not be empty");
     }
 
     # Validate version format
@@ -3437,14 +3441,14 @@ fn update_verify_manifest(manifest): i64 {
         var f = vec_get(files, fi);
         var hash = update_file_sha256(f);
         if (hash == 0 || strlen(hash) != 64) {
-            return err_invalid_argument("file has invalid sha256 (expected 64 hex chars)");
+            return drm_err_invalid_argument("file has invalid sha256 (expected 64 hex chars)");
         }
         # Verify all chars are hex
         var hi = 0;
         while (hi < 64) {
             var c = load8(hash + hi);
             if (agnodrm_is_hex_char(c) == 0) {
-                return err_invalid_argument("file sha256 contains non-hex character");
+                return drm_err_invalid_argument("file sha256 contains non-hex character");
             }
             hi = hi + 1;
         }
@@ -3467,8 +3471,8 @@ fn update_verify_manifest(manifest): i64 {
 # Supports local file paths and file:// URLs only.
 # Future: Mac/Windows will need platform-specific fetch (NSURLSession, WinHTTP).
 fn update_check(config, current_version): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
-    if (current_version == 0) { return err_invalid_argument("current_version is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
+    if (current_version == 0) { return drm_err_invalid_argument("current_version is null"); }
 
     var url = update_config_url(config);
     var path = url;
@@ -3480,13 +3484,13 @@ fn update_check(config, current_version): i64 {
 
     # Only support local file paths for now
     if (load8(path) != 47) {  # '/'
-        return err_not_supported("network update check not yet implemented");
+        return drm_err_not_supported("network update check not yet implemented");
     }
 
     # Read manifest file
     var fd = sys_open(path, 0, 0);
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open manifest file");
+        return drm_err_io(0 - fd, "failed to open manifest file");
     }
     defer { sys_close(fd); }
 
@@ -3507,7 +3511,7 @@ fn update_check(config, current_version): i64 {
     # Look for "version":"X.Y.Z"
     var vidx = strstr(buf, "\"version\"");
     if (vidx < 0) {
-        return err_invalid_argument("manifest missing version field");
+        return drm_err_invalid_argument("manifest missing version field");
     }
     var qi = vidx + 9;
     while (qi < total && load8(buf + qi) != 34) { qi = qi + 1; }
@@ -3538,12 +3542,12 @@ fn update_check(config, current_version): i64 {
 # Write update image to the inactive slot's block device.
 # Returns Result: Ok(0) or Err.
 fn update_apply(config, manifest): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
-    if (manifest == 0) { return err_invalid_argument("manifest is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
+    if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
 
     var files = update_manifest_files(manifest);
     if (files == 0 || vec_len(files) == 0) {
-        return err_invalid_argument("manifest contains no files to apply");
+        return drm_err_invalid_argument("manifest contains no files to apply");
     }
 
     var current_res = update_get_current_slot();
@@ -3555,21 +3559,21 @@ fn update_apply(config, manifest): i64 {
 
     var image = update_file_path(vec_get(files, 0));
     if (image == 0 || strlen(image) == 0) {
-        return err_invalid_argument("update image path is empty");
+        return drm_err_invalid_argument("update image path is empty");
     }
 
     # Validate image path: must be absolute, no traversal
     if (load8(image) != 47) {
-        return err_invalid_argument("update image path must be absolute");
+        return drm_err_invalid_argument("update image path must be absolute");
     }
     if (strstr(image, "..") >= 0) {
-        return err_invalid_argument("update image path must not contain '..'");
+        return drm_err_invalid_argument("update image path must not contain '..'");
     }
 
     # Validate within staging directory
     var staging = "/var/lib/agnos/updates/";
     if (memeq(image, staging, strlen(staging)) != 1) {
-        return err_invalid_argument("update image must be within /var/lib/agnos/updates/");
+        return drm_err_invalid_argument("update image must be within /var/lib/agnos/updates/");
     }
 
     # Write via dd
@@ -3618,7 +3622,7 @@ fn update_apply(config, manifest): i64 {
 # Writes slot marker for argonaut and optionally sets EFI boot entry.
 # Returns Result: Ok(0) or Err.
 fn update_switch_slot(config, slot): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     # Write slot marker file
     var marker = "/var/lib/agnos/next-slot";
@@ -3662,7 +3666,7 @@ fn update_switch_slot(config, slot): i64 {
 # Roll back to the previous slot.
 # Returns Result: Ok(0) or Err.
 fn update_rollback(config): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
     var load_res = update_load_state(state_file);
@@ -3670,7 +3674,7 @@ fn update_rollback(config): i64 {
     var state = payload(load_res);
 
     if (update_state_rollback_available(state) == 0) {
-        return err_invalid_argument("no rollback image available");
+        return drm_err_invalid_argument("no rollback image available");
     }
 
     var previous = update_other_slot(update_state_slot(state));
@@ -3701,7 +3705,7 @@ fn update_rollback(config): i64 {
 # Increments boot counter, clears pending update flag.
 # Returns Result: Ok(0) or Err.
 fn update_mark_boot_successful(config): i64 {
-    if (config == 0) { return err_invalid_argument("config is null"); }
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
     var load_res = update_load_state(state_file);
@@ -3852,7 +3856,7 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
     # Read /proc/mounts
     var fd = sys_open("/proc/mounts", 0, 0);  # O_RDONLY
     if (fd < 0) {
-        return err_io(0 - fd, "failed to open /proc/mounts");
+        return drm_err_io(0 - fd, "failed to open /proc/mounts");
     }
     defer { sys_close(fd); }
 
@@ -3919,12 +3923,12 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
 # extra_opts: additional mount options string, or 0 for none.
 # Returns Result: Ok(0) or Err.
 fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
-    if (device == 0) { return err_invalid_argument("fuse device is null"); }
-    if (mountpoint == 0) { return err_invalid_argument("fuse mountpoint is null"); }
-    if (fuse_type == 0) { return err_invalid_argument("fuse type is null"); }
+    if (device == 0) { return drm_err_invalid_argument("fuse device is null"); }
+    if (mountpoint == 0) { return drm_err_invalid_argument("fuse mountpoint is null"); }
+    if (fuse_type == 0) { return drm_err_invalid_argument("fuse type is null"); }
 
-    if (strlen(device) == 0) { return err_invalid_argument("fuse device is empty"); }
-    if (strlen(mountpoint) == 0) { return err_invalid_argument("fuse mountpoint is empty"); }
+    if (strlen(device) == 0) { return drm_err_invalid_argument("fuse device is empty"); }
+    if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("fuse mountpoint is empty"); }
 
     # Use the fuse type command directly (e.g., sshfs, ntfs-3g)
     # Or fusermount for generic mounts
@@ -3957,8 +3961,8 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
 # Unmount a FUSE filesystem at the given mountpoint.
 # Returns Result: Ok(0) or Err.
 fn fuse_unmount(mountpoint): i64 {
-    if (mountpoint == 0) { return err_invalid_argument("unmount mountpoint is null"); }
-    if (strlen(mountpoint) == 0) { return err_invalid_argument("unmount mountpoint is empty"); }
+    if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
+    if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("unmount mountpoint is empty"); }
 
     var cmd = "fusermount";
     var argv = alloc(24);
@@ -3977,7 +3981,7 @@ fn fuse_unmount(mountpoint): i64 {
 
 # Lazy unmount via fusermount -uz (for busy mounts).
 fn fuse_unmount_lazy(mountpoint): i64 {
-    if (mountpoint == 0) { return err_invalid_argument("unmount mountpoint is null"); }
+    if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
 
     var cmd = "fusermount";
     var argv = alloc(24);
@@ -4009,12 +4013,12 @@ fn fuse_is_available(): i64 {
 # Returns Result: Ok(0) or Err.
 fn fuse_validate_mountpoint(path): i64 {
     if (path == 0 || strlen(path) == 0) {
-        return err_invalid_argument("mountpoint path is empty");
+        return drm_err_invalid_argument("mountpoint path is empty");
     }
 
     # Must not be filesystem root
     if (strlen(path) == 1 && load8(path) == 47) {
-        return err_invalid_argument("cannot use filesystem root as mountpoint");
+        return drm_err_invalid_argument("cannot use filesystem root as mountpoint");
     }
 
     # Check path exists and is a directory
@@ -4022,13 +4026,13 @@ fn fuse_validate_mountpoint(path): i64 {
     var statbuf = alloc(144);
     var ret = sys_stat(path, statbuf);
     if (ret < 0) {
-        return err_invalid_argument("mountpoint does not exist");
+        return drm_err_invalid_argument("mountpoint does not exist");
     }
 
     var mode = load32(statbuf + 24);
     # S_IFDIR = 0x4000 = 16384
     if ((mode & 0xF000) != 0x4000) {
-        return err_invalid_argument("mountpoint is not a directory");
+        return drm_err_invalid_argument("mountpoint is not a directory");
     }
 
     return Ok(0);
@@ -4070,7 +4074,7 @@ enum FuseStatus {
 # Returns Result: Ok(FuseStatus) or Err.
 fn fuse_get_status(mountpoint): i64 {
     if (mountpoint == 0 || strlen(mountpoint) == 0) {
-        return err_invalid_argument("mountpoint is empty");
+        return drm_err_invalid_argument("mountpoint is empty");
     }
 
     var arr = alloc(1024);
