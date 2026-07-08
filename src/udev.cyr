@@ -216,6 +216,10 @@ fn udev_parse_udevadm_info(text): i64 {
 # max_devices: max capacity of result_arr.
 # Returns Result: Ok(count) or Err.
 fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return Ok(0);                # agnos has no udev/udevadm — no devices to enumerate
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var cmd = "udevadm";
     var argv = alloc(24);
     store64(argv, cmd);
@@ -288,6 +292,7 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
     }
 
     return Ok(count);
+    #endif
 }
 
 # ================================================================
@@ -302,6 +307,10 @@ fn udev_get_device_info(syspath): i64 {
         return drm_err_invalid_argument("syspath cannot be empty");
     }
 
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("udev device query (agnos has no udev/udevadm)");
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var cmd = "udevadm";
     # Build --path=<syspath> argument
     var prefix = "--path=";
@@ -323,6 +332,7 @@ fn udev_get_device_info(syspath): i64 {
 
     var output = payload(res);
     return udev_parse_udevadm_info(output);
+    #endif
 }
 
 # ================================================================

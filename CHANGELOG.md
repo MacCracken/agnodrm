@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.6] — 2026-07-08
+
+### Added
+
+- **agnos-readiness: the Linux-only device/system modules now build `--agnos`.**
+  Every function touching a Linux-only syscall or path is guarded behind
+  `#ifdef CYRIUS_TARGET_AGNOS` with a "not supported on agnos" stub (empty
+  enumeration / the module's `*_err_not_supported` helper); the Linux body is
+  kept byte-identical under `#ifndef`:
+  - **drm** — `/dev/dri` card enumeration (`SYS_GETDENTS64`) + version/capability
+    ioctls (`SYS_IOCTL`).
+  - **udev** — `udevadm` device discovery.
+  - **fuse** — `/proc/mounts`, `/dev/fuse`, `fusermount`.
+  - **bootloader** — GRUB / systemd-boot detection.
+  - **netns / journald / update** — Linux netns paths / the `AF_UNIX` journald
+    socket / Linux update paths.
+  No new kernel syscalls — these are Linux subsystems agnos does not have by
+  design (its display path is bhumi's sovereign scanout `fbinfo#38`/`blit#39`),
+  so stubbing (not reimplementing) is correct. Both `--agnos` and Linux builds
+  green; Linux behavior unchanged. Unblocks aethersafha building `--agnos`.
+
+### Changed
+
+- **Toolchain pin `6.2.11` → `6.4.25`** — brought current to the latest cyrius.
+
 ## [1.4.5] — 2026-07-03
 
 ### Changed

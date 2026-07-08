@@ -79,6 +79,10 @@ fn bootloader_config_set_entries(c, arr, count): i64 {
 # Detect the installed bootloader by probing well-known paths.
 # Returns Result: Ok(BootloaderType constant).
 fn bootloader_detect(): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return Ok(BOOT_UNKNOWN);     # agnos boots via gnoboot (sovereign UEFI), not GRUB/systemd-boot — neither well-known path exists, so nothing to detect
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     # Check for systemd-boot: /boot/efi/EFI/systemd
     var sd_path = "/boot/efi/EFI/systemd";
     var fd = sys_open(sd_path, 0x10000, 0);  # O_RDONLY | O_DIRECTORY
@@ -96,6 +100,7 @@ fn bootloader_detect(): i64 {
     }
 
     return Ok(BOOT_UNKNOWN);
+    #endif
 }
 
 # ================================================================
@@ -230,6 +235,10 @@ fn bootloader_parse_loader_conf(text): i64 {
 # max_entries: capacity.
 # Returns Result: Ok(count) or Err.
 fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return Ok(0);               # agnos boots via gnoboot, not systemd-boot — no `bootctl` binary and no /boot/loader/entries to enumerate
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     # Use bootctl list (systemd-boot) as it provides structured output
     var cmd = "bootctl";
     var argv = alloc(16);
@@ -247,6 +256,7 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     # Fallback: try reading /boot/loader/entries/ directly
     # For now, return 0 entries on failure
     return Ok(0);
+    #endif
 }
 
 # Parse bootctl list output (simplified).

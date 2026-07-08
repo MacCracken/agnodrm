@@ -183,12 +183,13 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 - **Benchmarks**: `lib/bench.cyr` with `now_ns()`; CSV history via `scripts/bench-history.sh`
 - **`var buf[N]` inside a function** is **static data**, not stack — consecutive calls clobber. Diagnostic: build emits "large static data (N bytes)" warning. Always heap-allocate large buffers; small bufs are OK only when their contents are copied out before the next call
 - **Heap large buffers** — `var buf[256000]` bloats the binary by 256KB (and creates the static-data hazard above)
-- **Enum values for constants** — don't consume `gvar_toks` slots (256 initialized globals limit)
+- **Enum values for constants** — don't consume `gvar_toks` slots (4,096 initialized globals limit)
 - **No negative literals** — write `(0 - N)` not `-N`
 - **No mixed `&&` / `||`** in one expression — nest `if` blocks
 - **`return;` without value is invalid** — always `return 0;`
 - **All `var` declarations are function-scoped** — no block scoping
-- **Max limits per compilation unit**: 4,096 variables, 1,024 functions, 256 initialized globals — guarded by `cyrius capacity --check`
+- **Max limits per compilation unit**: 4,096 variables, 1,024 functions, 4,096 initialized globals — guarded by `cyrius capacity --check`
+- **Initialized-globals counting rule** — only a top-level `var NAME = <non-literal>;` (call / identifier / expression initializer) consumes an initialized-globals slot; a bare integer-literal init (`var x = 42;`) takes the static-init fast path and enum members are const-folded, so neither counts. See the cyrius guide's **Global Initializers** section (`docs/guides/cyrius-guide.md` in the cyrius repo)
 
 ## CI / Release
 

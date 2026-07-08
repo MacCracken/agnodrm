@@ -2,7 +2,7 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-06-19 (1.4.4)
+**Last refresh:** 2026-07-08 (1.4.6)
 
 > **Renamed `agnosys` → `agnodrm` at 1.4.4** — decomposed from the AGNOS kernel-interface library to the **device / DRM model** (udev + DRM/KMS on error/util support). 15 modules moved to their proper homes (trust→sigil, security/mac/audit→kavach, pam→aegis, logging→sakshi, syscall layer→cyrius). See the [decomposition plan](2026-06-18-agnosys-to-agnodrm-decomposition-plan.md). Metrics below predating 1.4.4 describe the old 20-module surface and are being refreshed as touched.
 
@@ -10,8 +10,8 @@
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.4.4** |
-| `cyrius.cyml [package].cyrius` | **6.2.11** |
+| `VERSION` | **1.4.6** |
+| `cyrius.cyml [package].cyrius` | **6.4.25** |
 | Min Cyrius (consumer) | 6.2.11 |
 | Last cyrius bump | 6.2.1 → 6.2.11 (2026-06-15; 6.2.x maintenance line, bug-fix/optimization patches only). Pure pin refresh — no `src/*.cyr` edits; validated green from clean deps. Prior: 6.1.23 → 6.2.1 at 1.4.2 (stdlib pin sweep; dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 (2026-06-10; first 6.1.x adoption). Absorbs the **v6.0.64 thread-safe allocator** (`lib/alloc.cyr` global CAS spinlock + vtable). Required: `[deps] stdlib += atomic` (transitive include not auto-resolved), and removing `alloc_reset()`-between-groups from the integration test + benches (incompatible with the new memoized default allocator — dangling cache → SIGSEGV/spin). Binary **159,392 → 162,784 B (+3,392)** from the lock/vtable code. **Perf regression** on alloc-bound paths (`ok_create` +321%, `from_errno` +210%) — single-threaded agnosys pays for the lock; confined to cold/diagnostic heap paths (zero-alloc `syserr_pack` hot path unchanged at 3 ns). Prior bumps: 6.0.52 → 6.0.56 at 1.4.0 (AGNOS-target work), 6.0.24 → 6.0.52 at 1.3.2 (codegen change, +368 B). |
 

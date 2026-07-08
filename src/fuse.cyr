@@ -120,6 +120,10 @@ fn fuse_extract_field(line, linelen, field_idx): i64 {
 # fuse_only: 1 to return only fuse.* mounts, 0 for all.
 # Returns Result: Ok(count) or Err.
 fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return Ok(0);            # agnos has no /proc/mounts and no FUSE — zero mounts
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     # Read /proc/mounts
     var fd = sys_open("/proc/mounts", 0, 0);  # O_RDONLY
     if (fd < 0) {
@@ -177,6 +181,7 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
     }
 
     return Ok(count);
+    #endif
 }
 
 # ================================================================
@@ -190,6 +195,10 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
 # extra_opts: additional mount options string, or 0 for none.
 # Returns Result: Ok(0) or Err.
 fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("fuse mount");   # agnos has no FUSE / fusermount
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (device == 0) { return drm_err_invalid_argument("fuse device is null"); }
     if (mountpoint == 0) { return drm_err_invalid_argument("fuse mountpoint is null"); }
     if (fuse_type == 0) { return drm_err_invalid_argument("fuse type is null"); }
@@ -219,6 +228,7 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
     var res = run_capture(fuse_type, argv);
     if (is_err_result(res) == 1) { return res; }
     return Ok(0);
+    #endif
 }
 
 # ================================================================
@@ -228,6 +238,10 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
 # Unmount a FUSE filesystem at the given mountpoint.
 # Returns Result: Ok(0) or Err.
 fn fuse_unmount(mountpoint): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("fuse unmount");   # agnos has no FUSE / fusermount
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
     if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("unmount mountpoint is empty"); }
 
@@ -240,6 +254,7 @@ fn fuse_unmount(mountpoint): i64 {
     var res = run_capture(cmd, argv);
     if (is_err_result(res) == 1) { return res; }
     return Ok(0);
+    #endif
 }
 
 # ================================================================
@@ -248,6 +263,10 @@ fn fuse_unmount(mountpoint): i64 {
 
 # Lazy unmount via fusermount -uz (for busy mounts).
 fn fuse_unmount_lazy(mountpoint): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("fuse lazy unmount");   # agnos has no FUSE / fusermount
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
 
     var cmd = "fusermount";
@@ -259,6 +278,7 @@ fn fuse_unmount_lazy(mountpoint): i64 {
     var res = run_capture(cmd, argv);
     if (is_err_result(res) == 1) { return res; }
     return Ok(0);
+    #endif
 }
 
 # ================================================================
@@ -268,7 +288,12 @@ fn fuse_unmount_lazy(mountpoint): i64 {
 # Check whether FUSE is available on this system (/dev/fuse exists).
 # Returns 1 if available, 0 otherwise.
 fn fuse_is_available(): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0;               # agnos has no /dev/fuse — FUSE unavailable
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     return sys_access("/dev/fuse", 0) == 0;
+    #endif
 }
 
 # ================================================================
@@ -279,6 +304,10 @@ fn fuse_is_available(): i64 {
 # Checks: not null, not root, exists, is a directory.
 # Returns Result: Ok(0) or Err.
 fn fuse_validate_mountpoint(path): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("fuse mountpoint validation");   # agnos has no FUSE
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (path == 0 || strlen(path) == 0) {
         return drm_err_invalid_argument("mountpoint path is empty");
     }
@@ -303,6 +332,7 @@ fn fuse_validate_mountpoint(path): i64 {
     }
 
     return Ok(0);
+    #endif
 }
 
 # ================================================================

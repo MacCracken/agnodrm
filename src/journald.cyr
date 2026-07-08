@@ -205,6 +205,13 @@ fn journald_make_sockaddr(): i64 {
 #
 # Returns Result: Ok(0) on success, Err on failure.
 fn journald_send(message, priority, identifier): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no systemd-journald AF_UNIX socket — it logs via sakshi, not
+    # journald. SYS_SOCKET_NR/SYS_SENDTO_NR here target the Linux journal socket;
+    # not supported on agnos. (See the journald Linux-eccentric deferral.)
+    return drm_err_not_supported("journald send (use sakshi on agnos)");
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (message == 0) {
         return drm_err_invalid_argument("journal message cannot be null");
     }
@@ -255,6 +262,7 @@ fn journald_send(message, priority, identifier): i64 {
     }
 
     return Ok(0);
+    #endif
 }
 
 # Send a structured log with extra key-value fields.
@@ -262,6 +270,13 @@ fn journald_send(message, priority, identifier): i64 {
 # fields_vals: vec of C string pointers (field values).
 # Returns Result: Ok(0) or Err.
 fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no systemd-journald AF_UNIX socket — it logs via sakshi, not
+    # journald. SYS_SOCKET_NR/SYS_SENDTO_NR here target the Linux journal socket;
+    # not supported on agnos. (See the journald Linux-eccentric deferral.)
+    return drm_err_not_supported("journald send (use sakshi on agnos)");
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (message == 0) {
         return drm_err_invalid_argument("journal message cannot be null");
     }
@@ -327,6 +342,7 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
     }
 
     return Ok(0);
+    #endif
 }
 
 # ================================================================
@@ -446,6 +462,13 @@ fn journald_parse_json(json_line): i64 {
 # is safe — the value lands in argv[i] and is read verbatim by journalctl.
 # See audit F-1 (2026-04-26) and SECURITY-NOTES.md § journald.
 fn journald_query(filter): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    # agnos has no journalctl subprocess and no systemd journal to query — the
+    # journal is a Linux systemd facility; agnos records via sakshi. Not
+    # supported here. (See the journald Linux-eccentric deferral.)
+    return drm_err_not_supported("journald query (no journalctl on agnos)");
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     var args = _journald_build_argv(filter);
     var buf = alloc(131072);  # 128KB capture buffer
     var nbytes = exec_capture(args, buf, 131072);
@@ -478,6 +501,7 @@ fn journald_query(filter): i64 {
     }
 
     return Ok(entries);
+    #endif
 }
 
 # ================================================================
