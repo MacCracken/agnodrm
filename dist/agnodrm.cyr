@@ -1940,7 +1940,7 @@ fn netns_truncate_veth(base): i64 {
 # path, not a bare "ip".)
 fn netns_run_ip(args): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("network namespaces (ip command)");  # agnos has no netns / external ip tooling — not supported here
+    return drm_err_not_supported("network namespaces (ip command)");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var rc = exec_vec(args);
@@ -1976,7 +1976,7 @@ fn netns_concat3(a, b, c): i64 {
 # Returns Result: Ok(handle_ptr) or Err.
 fn netns_create_agent_netns(config): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("network namespace creation");  # agnos has no netns / veth / external ip tooling — not supported here
+    return drm_err_not_supported("network namespace creation");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var vres = netns_validate_config(config);
@@ -2090,7 +2090,7 @@ fn netns_create_agent_netns(config): i64 {
 
 fn netns_destroy_agent_netns(handle): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("network namespace destruction");  # agnos has no netns / external ip tooling — not supported here
+    return drm_err_not_supported("network namespace destruction");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var veth_host = netns_handle_veth_host(handle);
@@ -2253,7 +2253,7 @@ fn netns_render_nftables_ruleset(policy): i64 {
 # Returns Result.
 fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("nftables ruleset in network namespace");  # agnos has no netns / nft tooling — not supported here
+    return drm_err_not_supported("nftables ruleset in network namespace");  # agnos: no netns/nft
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var ns_name = netns_handle_name(handle);
@@ -2385,7 +2385,7 @@ fn bootloader_config_set_entries(c, arr, count): i64 {
 # Returns Result: Ok(BootloaderType constant).
 fn bootloader_detect(): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return Ok(BOOT_UNKNOWN);     # agnos boots via gnoboot (sovereign UEFI), not GRUB/systemd-boot — neither well-known path exists, so nothing to detect
+    return Ok(BOOT_UNKNOWN);     # agnos boots via gnoboot, not GRUB/systemd-boot
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     # Check for systemd-boot: /boot/efi/EFI/systemd
@@ -2541,7 +2541,7 @@ fn bootloader_parse_loader_conf(text): i64 {
 # Returns Result: Ok(count) or Err.
 fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return Ok(0);               # agnos boots via gnoboot, not systemd-boot — no `bootctl` binary and no /boot/loader/entries to enumerate
+    return Ok(0);               # agnos boots via gnoboot; no systemd-boot entries
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     # Use bootctl list (systemd-boot) as it provides structured output
@@ -2821,7 +2821,7 @@ var VER_GREATER = 1;
 # Returns Result: Ok(0) or Err.
 fn update_atomic_write(path, data, data_len): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("atomic file write (temp-file + Linux fsync/rename)");  # agnos has no A/B-update tmp-path story; agnodrm_fsync/rename use Linux x86_64 syscall numbers — not supported here
+    return drm_err_not_supported("atomic file write (temp-file + Linux fsync/rename)");  # agnos: no A/B update
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (path == 0) {
@@ -2884,7 +2884,7 @@ fn update_atomic_write(path, data, data_len): i64 {
 # Returns Result: Ok(bytes_copied) or Err.
 fn update_atomic_copy(src, dst): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("atomic file copy (temp-file + Linux fsync/rename)");  # agnos has no A/B-update tmp-path story; agnodrm_fsync/rename use Linux x86_64 syscall numbers — not supported here
+    return drm_err_not_supported("atomic file copy (temp-file + Linux fsync/rename)");  # agnos: no A/B update
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (src == 0) { return drm_err_invalid_argument("atomic_copy src is null"); }
@@ -3272,7 +3272,7 @@ fn update_file_new(path, sha256, size_bytes): i64 {
 # Returns Result: Ok(slot) or Err.
 fn update_get_current_slot(): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("current boot slot (/proc/cmdline agnos.slot=)");  # agnos has no /proc/cmdline nor this Linux A/B slot marker — not supported here
+    return drm_err_not_supported("current boot slot (/proc/cmdline agnos.slot=)");  # agnos: no /proc/cmdline
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     # Read /proc/cmdline
@@ -3637,7 +3637,7 @@ fn update_check(config, current_version): i64 {
 # Returns Result: Ok(0) or Err.
 fn update_apply(config, manifest): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("apply update to inactive slot (dd to block device)");  # agnos has no Linux A/B block-device slots nor an external dd — not supported here
+    return drm_err_not_supported("apply update to inactive slot (dd to block device)");  # agnos: no A/B slots
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
@@ -3722,7 +3722,7 @@ fn update_apply(config, manifest): i64 {
 # Returns Result: Ok(0) or Err.
 fn update_switch_slot(config, slot): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("switch active slot (efibootmgr --bootnext)");  # agnos has no external efibootmgr nor this Linux A/B slot marker — not supported here
+    return drm_err_not_supported("switch active slot (efibootmgr --bootnext)");  # agnos: no efibootmgr
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
@@ -3771,7 +3771,7 @@ fn update_switch_slot(config, slot): i64 {
 # Returns Result: Ok(0) or Err.
 fn update_rollback(config): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("rollback to previous slot (argonaut + efibootmgr)");  # agnos has no Linux A/B slots nor external argonaut/efibootmgr tooling — not supported here
+    return drm_err_not_supported("rollback to previous slot (argonaut + efibootmgr)");  # agnos: no A/B slots
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }

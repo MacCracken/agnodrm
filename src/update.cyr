@@ -50,7 +50,7 @@ var VER_GREATER = 1;
 # Returns Result: Ok(0) or Err.
 fn update_atomic_write(path, data, data_len): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("atomic file write (temp-file + Linux fsync/rename)");  # agnos has no A/B-update tmp-path story; agnodrm_fsync/rename use Linux x86_64 syscall numbers — not supported here
+    return drm_err_not_supported("atomic file write (temp-file + Linux fsync/rename)");  # agnos: no A/B update
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (path == 0) {
@@ -113,7 +113,7 @@ fn update_atomic_write(path, data, data_len): i64 {
 # Returns Result: Ok(bytes_copied) or Err.
 fn update_atomic_copy(src, dst): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("atomic file copy (temp-file + Linux fsync/rename)");  # agnos has no A/B-update tmp-path story; agnodrm_fsync/rename use Linux x86_64 syscall numbers — not supported here
+    return drm_err_not_supported("atomic file copy (temp-file + Linux fsync/rename)");  # agnos: no A/B update
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (src == 0) { return drm_err_invalid_argument("atomic_copy src is null"); }
@@ -501,7 +501,7 @@ fn update_file_new(path, sha256, size_bytes): i64 {
 # Returns Result: Ok(slot) or Err.
 fn update_get_current_slot(): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("current boot slot (/proc/cmdline agnos.slot=)");  # agnos has no /proc/cmdline nor this Linux A/B slot marker — not supported here
+    return drm_err_not_supported("current boot slot (/proc/cmdline agnos.slot=)");  # agnos: no /proc/cmdline
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     # Read /proc/cmdline
@@ -866,7 +866,7 @@ fn update_check(config, current_version): i64 {
 # Returns Result: Ok(0) or Err.
 fn update_apply(config, manifest): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("apply update to inactive slot (dd to block device)");  # agnos has no Linux A/B block-device slots nor an external dd — not supported here
+    return drm_err_not_supported("apply update to inactive slot (dd to block device)");  # agnos: no A/B slots
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
@@ -951,7 +951,7 @@ fn update_apply(config, manifest): i64 {
 # Returns Result: Ok(0) or Err.
 fn update_switch_slot(config, slot): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("switch active slot (efibootmgr --bootnext)");  # agnos has no external efibootmgr nor this Linux A/B slot marker — not supported here
+    return drm_err_not_supported("switch active slot (efibootmgr --bootnext)");  # agnos: no efibootmgr
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
@@ -1000,7 +1000,7 @@ fn update_switch_slot(config, slot): i64 {
 # Returns Result: Ok(0) or Err.
 fn update_rollback(config): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("rollback to previous slot (argonaut + efibootmgr)");  # agnos has no Linux A/B slots nor external argonaut/efibootmgr tooling — not supported here
+    return drm_err_not_supported("rollback to previous slot (argonaut + efibootmgr)");  # agnos: no A/B slots
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }

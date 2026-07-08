@@ -243,7 +243,7 @@ fn netns_truncate_veth(base): i64 {
 # path, not a bare "ip".)
 fn netns_run_ip(args): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("network namespaces (ip command)");  # agnos has no netns / external ip tooling — not supported here
+    return drm_err_not_supported("network namespaces (ip command)");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var rc = exec_vec(args);
@@ -279,7 +279,7 @@ fn netns_concat3(a, b, c): i64 {
 # Returns Result: Ok(handle_ptr) or Err.
 fn netns_create_agent_netns(config): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("network namespace creation");  # agnos has no netns / veth / external ip tooling — not supported here
+    return drm_err_not_supported("network namespace creation");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var vres = netns_validate_config(config);
@@ -393,7 +393,7 @@ fn netns_create_agent_netns(config): i64 {
 
 fn netns_destroy_agent_netns(handle): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("network namespace destruction");  # agnos has no netns / external ip tooling — not supported here
+    return drm_err_not_supported("network namespace destruction");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var veth_host = netns_handle_veth_host(handle);
@@ -556,7 +556,7 @@ fn netns_render_nftables_ruleset(policy): i64 {
 # Returns Result.
 fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("nftables ruleset in network namespace");  # agnos has no netns / nft tooling — not supported here
+    return drm_err_not_supported("nftables ruleset in network namespace");  # agnos: no netns/nft
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var ns_name = netns_handle_name(handle);
