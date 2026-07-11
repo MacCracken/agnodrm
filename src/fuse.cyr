@@ -206,28 +206,25 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
     if (strlen(device) == 0) { return drm_err_invalid_argument("fuse device is empty"); }
     if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("fuse mountpoint is empty"); }
 
-    # Use the fuse type command directly (e.g., sshfs, ntfs-3g)
-    # Or fusermount for generic mounts
-    var argv_size = 32;
-    if (extra_opts != 0) { argv_size = 48; }
-    var argv = alloc(argv_size);
+    # Build argv vec. Element 0 is the fuse helper (sshfs, ntfs-3g, or an
+    # absolute fusermount path) — it MUST be an absolute path: execve(2) does
+    # no PATH lookup. Each arg is its own vec entry (no shell, no
+    # metacharacter split), so `device`/`mountpoint`/`extra_opts` reach the
+    # helper verbatim. agnodrm_run_checked checks the exit code — the old
+    # 2-arg run_capture ignored it (and left buf/buflen garbage). See CHANGELOG.
+    var args = vec_new();
+    vec_push(args, fuse_type);
+    vec_push(args, device);
+    vec_push(args, mountpoint);
 
-    store64(argv, fuse_type);
-    store64(argv + 8, device);
-    store64(argv + 16, mountpoint);
-
-    var argc = 3;
     if (extra_opts != 0) {
         if (strlen(extra_opts) > 0) {
-            store64(argv + 24, "-o");
-            store64(argv + 32, extra_opts);
-            argc = 5;
+            vec_push(args, "-o");
+            vec_push(args, extra_opts);
         }
     }
 
-    var res = run_capture(fuse_type, argv);
-    if (is_err_result(res) == 1) { return res; }
-    return Ok(0);
+    return agnodrm_run_checked(args, "fuse mount command failed");
     #endif
 }
 
@@ -245,15 +242,12 @@ fn fuse_unmount(mountpoint): i64 {
     if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
     if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("unmount mountpoint is empty"); }
 
-    var cmd = "fusermount";
-    var argv = alloc(24);
-    store64(argv, cmd);
-    store64(argv + 8, "-u");
-    store64(argv + 16, mountpoint);
+    var args = vec_new();
+    vec_push(args, "/usr/bin/fusermount");
+    vec_push(args, "-u");
+    vec_push(args, mountpoint);
 
-    var res = run_capture(cmd, argv);
-    if (is_err_result(res) == 1) { return res; }
-    return Ok(0);
+    return agnodrm_run_checked(args, "fusermount -u failed");
     #endif
 }
 
@@ -269,15 +263,12 @@ fn fuse_unmount_lazy(mountpoint): i64 {
     #ifndef CYRIUS_TARGET_AGNOS
     if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
 
-    var cmd = "fusermount";
-    var argv = alloc(24);
-    store64(argv, cmd);
-    store64(argv + 8, "-uz");
-    store64(argv + 16, mountpoint);
+    var args = vec_new();
+    vec_push(args, "/usr/bin/fusermount");
+    vec_push(args, "-uz");
+    vec_push(args, mountpoint);
 
-    var res = run_capture(cmd, argv);
-    if (is_err_result(res) == 1) { return res; }
-    return Ok(0);
+    return agnodrm_run_checked(args, "fusermount -uz failed");
     #endif
 }
 

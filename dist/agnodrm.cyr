@@ -634,29 +634,40 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
     return Ok(0);                # agnos has no udev/udevadm — no devices to enumerate
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    var cmd = "udevadm";
-    var argv = alloc(24);
-    store64(argv, cmd);
-    var arg1 = "info";
-    store64(argv + 8, arg1);
-    var arg2 = "--export-db";
-    store64(argv + 16, arg2);
+    # argv vec: element 0 is the ABSOLUTE command path — execve(2) does no
+    # PATH lookup, so a bare "udevadm" never runs. Each arg is its own vec
+    # entry; agnodrm_run_capture shells out via exec_capture (no /bin/sh, no
+    # metacharacter split). The old 2-arg run_capture(cmd, argv) form passed
+    # the whole argv array as run_capture's single `arg1` and left buf/buflen
+    # garbage — see CHANGELOG. Mirrors netns_run_ip / journald_query.
+    var args = vec_new();
+    vec_push(args, "/usr/bin/udevadm");
+    vec_push(args, "info");
+    vec_push(args, "--export-db");
 
-    var res = run_capture(cmd, argv);
+    # Capture the full device DB. 1 MiB heap buffer (+1 for the NUL so the
+    # terminator never writes past the end even on a full read). Output past
+    # 1 MiB is truncated (graceful: fewer device blocks parsed, no crash).
+    var cap = 1048576;
+    var buf = alloc(cap + 1);
+    var res = agnodrm_run_capture(args, buf, cap, "udevadm info --export-db failed");
     if (is_err_result(res) == 1) { return res; }
 
-    var output = payload(res);
-    if (output == 0) {
+    var nbytes = payload(res);
+    if (nbytes == 0) {
         return Ok(0);
     }
+    store8(buf + nbytes, 0);
+    var output = buf;
 
     # Split output into blocks separated by blank lines, parse each
     var count = 0;
     var textlen = strlen(output);
     var block_start = 0;
     var pos = 0;
+    var done = 0;
 
-    while (pos <= textlen) {
+    while (pos <= textlen && done == 0) {
         var at_end = 0;
         if (pos == textlen) { at_end = 1; }
         elif (load8(output + pos) == 10) {
@@ -700,6 +711,12 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
                 else { break; }
             }
             block_start = pos;
+            # Terminate once the final block has been consumed. Without this,
+            # pos==textlen re-enters the at_end branch forever (the skip-blank
+            # loop can't advance past textlen) — an infinite loop that stayed
+            # latent while the broken 2-arg run_capture never delivered output
+            # to parse. See CHANGELOG.
+            if (pos >= textlen) { done = 1; }
             continue;
         }
         pos = pos + 1;
@@ -725,7 +742,6 @@ fn udev_get_device_info(syspath): i64 {
     return drm_err_not_supported("udev device query (agnos has no udev/udevadm)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    var cmd = "udevadm";
     # Build --path=<syspath> argument
     var prefix = "--path=";
     var plen = strlen(prefix);
@@ -735,17 +751,25 @@ fn udev_get_device_info(syspath): i64 {
     memcpy(patharg + plen, syspath, slen);
     store8(patharg + plen + slen, 0);
 
-    var argv = alloc(24);
-    store64(argv, cmd);
-    var arg1 = "info";
-    store64(argv + 8, arg1);
-    store64(argv + 16, patharg);
+    # argv vec: element 0 is the ABSOLUTE command path (execve does no PATH
+    # lookup). Each arg is its own vec entry — no shell, no metacharacter
+    # split — so `patharg` (attacker-influenced via `syspath`) reaches
+    # udevadm verbatim as argv[2] and cannot escape into a shell.
+    var args = vec_new();
+    vec_push(args, "/usr/bin/udevadm");
+    vec_push(args, "info");
+    vec_push(args, patharg);
 
-    var res = run_capture(cmd, argv);
+    # Single-device info is small (a few hundred bytes); 64 KiB heap buffer
+    # (+1 for the NUL) is ample.
+    var cap = 65536;
+    var buf = alloc(cap + 1);
+    var res = agnodrm_run_capture(args, buf, cap, "udevadm info --path failed");
     if (is_err_result(res) == 1) { return res; }
 
-    var output = payload(res);
-    return udev_parse_udevadm_info(output);
+    var nbytes = payload(res);
+    store8(buf + nbytes, 0);
+    return udev_parse_udevadm_info(buf);
     #endif
 }
 
@@ -2549,17 +2573,22 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     return Ok(0);               # agnos boots via gnoboot; no systemd-boot entries
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    # Use bootctl list (systemd-boot) as it provides structured output
-    var cmd = "bootctl";
-    var argv = alloc(16);
-    store64(argv, cmd);
-    store64(argv + 8, "list");
+    # Use bootctl list (systemd-boot) as it provides structured output.
+    # argv vec: element 0 is the ABSOLUTE command path (execve does no PATH
+    # lookup). The old 2-arg run_capture(cmd, argv) form left buf/buflen
+    # garbage — see CHANGELOG. Mirrors udev_list_devices / journald_query.
+    var args = vec_new();
+    vec_push(args, "/usr/bin/bootctl");
+    vec_push(args, "list");
 
-    var res = run_capture(cmd, argv);
+    var cap = 65536;
+    var buf = alloc(cap + 1);
+    var res = agnodrm_run_capture(args, buf, cap, "bootctl list failed");
     if (is_ok(res) == 1) {
-        var output = payload(res);
-        if (output != 0) {
-            return bootloader_parse_bootctl_list(output, result_arr, max_entries);
+        var nbytes = payload(res);
+        if (nbytes > 0) {
+            store8(buf + nbytes, 0);
+            return bootloader_parse_bootctl_list(buf, result_arr, max_entries);
         }
     }
 
@@ -3689,9 +3718,11 @@ fn update_apply(config, manifest): i64 {
         return drm_err_invalid_argument("update image must be within /var/lib/agnos/updates/");
     }
 
-    # Write via dd
+    # Write via dd. Element 0 is the ABSOLUTE path — execve does no PATH
+    # lookup. agnodrm_run_checked checks dd's exit code; the old 2-arg
+    # run_capture("dd", args) ignored it and left buf/buflen garbage.
     var args = vec_new();
-    vec_push(args, "dd");
+    vec_push(args, "/usr/bin/dd");
 
     # Build if=<image>
     var if_arg = alloc(strlen(image) + 4);
@@ -3708,7 +3739,7 @@ fn update_apply(config, manifest): i64 {
     vec_push(args, "bs=4M");
     vec_push(args, "conv=fsync");
 
-    var dd_res = run_capture("dd", args);
+    var dd_res = agnodrm_run_checked(args, "dd image write failed");
     if (is_err_result(dd_res) == 1) { return dd_res; }
 
     # Update persistent state
@@ -3751,7 +3782,7 @@ fn update_switch_slot(config, slot): i64 {
 
     # Try efibootmgr (best effort)
     var efi_args = vec_new();
-    vec_push(efi_args, "efibootmgr");
+    vec_push(efi_args, "/usr/bin/efibootmgr");
     vec_push(efi_args, "--bootnext");
     var boot_label = alloc(8);
     memcpy(boot_label, "AGNOS-", 6);
@@ -3759,7 +3790,7 @@ fn update_switch_slot(config, slot): i64 {
     else { store8(boot_label + 6, 66); }                   # 'B'
     store8(boot_label + 7, 0);
     vec_push(efi_args, boot_label);
-    run_capture("efibootmgr", efi_args);  # ignore failure
+    exec_vec(efi_args);  # best effort — ignore failure (execve needs the abs path above)
 
     # Update persistent state
     var state_file = update_config_state_file(config);
@@ -3804,10 +3835,10 @@ fn update_rollback(config): i64 {
 
     # Stop services before switching (best effort)
     var stop_args = vec_new();
-    vec_push(stop_args, "argonaut");
+    vec_push(stop_args, "/usr/bin/argonaut");
     vec_push(stop_args, "stop");
     vec_push(stop_args, "daimon");
-    run_capture("argonaut", stop_args);  # ignore failure
+    exec_vec(stop_args);  # best effort — ignore failure (execve needs the abs path above)
 
     var switch_res = update_switch_slot(config, previous);
     if (is_err_result(switch_res) == 1) { return switch_res; }
@@ -4063,28 +4094,25 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
     if (strlen(device) == 0) { return drm_err_invalid_argument("fuse device is empty"); }
     if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("fuse mountpoint is empty"); }
 
-    # Use the fuse type command directly (e.g., sshfs, ntfs-3g)
-    # Or fusermount for generic mounts
-    var argv_size = 32;
-    if (extra_opts != 0) { argv_size = 48; }
-    var argv = alloc(argv_size);
+    # Build argv vec. Element 0 is the fuse helper (sshfs, ntfs-3g, or an
+    # absolute fusermount path) — it MUST be an absolute path: execve(2) does
+    # no PATH lookup. Each arg is its own vec entry (no shell, no
+    # metacharacter split), so `device`/`mountpoint`/`extra_opts` reach the
+    # helper verbatim. agnodrm_run_checked checks the exit code — the old
+    # 2-arg run_capture ignored it (and left buf/buflen garbage). See CHANGELOG.
+    var args = vec_new();
+    vec_push(args, fuse_type);
+    vec_push(args, device);
+    vec_push(args, mountpoint);
 
-    store64(argv, fuse_type);
-    store64(argv + 8, device);
-    store64(argv + 16, mountpoint);
-
-    var argc = 3;
     if (extra_opts != 0) {
         if (strlen(extra_opts) > 0) {
-            store64(argv + 24, "-o");
-            store64(argv + 32, extra_opts);
-            argc = 5;
+            vec_push(args, "-o");
+            vec_push(args, extra_opts);
         }
     }
 
-    var res = run_capture(fuse_type, argv);
-    if (is_err_result(res) == 1) { return res; }
-    return Ok(0);
+    return agnodrm_run_checked(args, "fuse mount command failed");
     #endif
 }
 
@@ -4102,15 +4130,12 @@ fn fuse_unmount(mountpoint): i64 {
     if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
     if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("unmount mountpoint is empty"); }
 
-    var cmd = "fusermount";
-    var argv = alloc(24);
-    store64(argv, cmd);
-    store64(argv + 8, "-u");
-    store64(argv + 16, mountpoint);
+    var args = vec_new();
+    vec_push(args, "/usr/bin/fusermount");
+    vec_push(args, "-u");
+    vec_push(args, mountpoint);
 
-    var res = run_capture(cmd, argv);
-    if (is_err_result(res) == 1) { return res; }
-    return Ok(0);
+    return agnodrm_run_checked(args, "fusermount -u failed");
     #endif
 }
 
@@ -4126,15 +4151,12 @@ fn fuse_unmount_lazy(mountpoint): i64 {
     #ifndef CYRIUS_TARGET_AGNOS
     if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
 
-    var cmd = "fusermount";
-    var argv = alloc(24);
-    store64(argv, cmd);
-    store64(argv + 8, "-uz");
-    store64(argv + 16, mountpoint);
+    var args = vec_new();
+    vec_push(args, "/usr/bin/fusermount");
+    vec_push(args, "-uz");
+    vec_push(args, mountpoint);
 
-    var res = run_capture(cmd, argv);
-    if (is_err_result(res) == 1) { return res; }
-    return Ok(0);
+    return agnodrm_run_checked(args, "fusermount -uz failed");
     #endif
 }
 

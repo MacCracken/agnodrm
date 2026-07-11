@@ -4,6 +4,7 @@ string
 alloc
 tagged
 fmt
+vec
 str
 io
 process

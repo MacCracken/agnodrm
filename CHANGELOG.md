@@ -35,6 +35,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   direct guard. Found via a full-module agnos-gating audit; the other seven
   modules (bootloader / fuse / netns / journald / udev / error / util) audited
   clean. Both `--agnos` and Linux builds green; Linux behavior byte-identical.
+- **Device enumeration was broken: `run_capture` called with 2 args against a
+  5-arg stdlib signature.** `lib/process.cyr`'s `run_capture(cmd, arg1, arg2,
+  buf, buflen)` is 5-arg, but `udev`, `fuse`, `bootloader`, and `update` called
+  it as `run_capture(cmd, argv)` with a raw `alloc()` array of string pointers.
+  The array landed in `arg1`; `arg2`/`buf`/`buflen` were left uninitialized — so
+  the capture read loop wrote to a garbage pointer and the bare `cmd` never
+  reached `execve(2)` (which does no PATH lookup). The `udev` sites are
+  smoke-reachable, so `cyrius build` emitted `warning: 'run_capture' expects 5
+  arguments, got 2`; the DCE'd sites carried the same latent defect. `cyrius
+  lint` never flagged it, so `scripts/audit.sh` passed while `udev_list_devices`
+  / `udev_get_device_info` returned garbage on Linux (yukti consumes udev). All
+  sites migrated to the argv-vec exec API already used by `netns`/`journald`:
+  `agnodrm_run_capture(args, buf, buflen, errmsg)` (capture) or
+  `agnodrm_run_checked(args, errmsg)` / `exec_vec(args)` (checked / best-effort),
+  with **absolute** command paths (`/usr/bin/udevadm`, `/usr/bin/bootctl`,
+  `/usr/bin/fusermount`, `/usr/bin/dd`, `/usr/bin/efibootmgr`,
+  `/usr/bin/argonaut`) and caller-owned heap capture buffers (`+1` byte so the
+  NUL never overruns). Each argument is its own vec entry — no shell, no
+  metacharacter split. `#ifndef CYRIUS_TARGET_AGNOS` gating unchanged. Also fixes
+  a latent infinite loop in `udev_list_devices`' block-splitter (once `pos`
+  reached `textlen` the `at_end` branch re-entered forever) that the capture fix
+  first exposed. Verified on real hardware: `udev_list_devices` enumerates all
+  1277 devices (matching `udevadm info --export-db`), the `subsystem` filter
+  returns the correct 8 block devices, and `bootloader_list_boot_entries`
+  returns the correct 2 systemd-boot entries.
 
 ### Changed
 
@@ -44,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   regenerated (`dist/agnodrm.cyr` + `dist/agnodrm-core.cyr`); the core bundle's
   `.deps` manifest recomputed by the 6.4.50 distlib (was stale from an older
   gen).
+- **`docs/development/capability-map.md` regenerated** — records the six new
+  absolute subprocess paths introduced by the `run_capture` fix above. `dist`
+  bundles regenerated from the fixed sources; the core bundle's `.deps` gained
+  `vec` (udev now builds its argv through the vec API).
 
 ### Performance
 
