@@ -216,6 +216,10 @@ fn drm_list_devices(result_arr, max_cards): i64 {
 
 # Open a DRM device by path. Returns Result: Ok(fd) or Err.
 fn drm_open(path): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("open DRM device (no DRM subsystem)");  # agnos: display via bhumi scanout
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (path == 0) {
         return drm_err_invalid_argument("drm device path is null");
     }
@@ -225,6 +229,7 @@ fn drm_open(path): i64 {
         return drm_err_io(0 - fd, "failed to open DRM device");
     }
     return Ok(fd);
+    #endif
 }
 
 # Close a DRM device fd.

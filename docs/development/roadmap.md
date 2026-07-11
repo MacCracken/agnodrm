@@ -25,6 +25,28 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
 
+## Resolved — P1 (AGNOS ABI) ✅ (1.5.0, 2026-07-11)
+
+- **[P1] Raw Linux-shaped `sys_open` ungated on agnos** — `src/drm.cyr`
+  (`drm_open`). Filed 2026-07-08, fixed 1.5.0. `sys_open(path, 0x80002, 0)`
+  (`O_RDWR | O_CLOEXEC`) used the Linux 3-arg shape, but agnos `sys_open` is
+  `(name, namelen, flags)` — so on agnos it passed `namelen = 0x80002` (garbage)
+  and `flags = 0`, not an `O_RDWR` open of the DRM node. The call was
+  **unconditional**, unlike its already-gated siblings `drm_get_driver_version` /
+  `drm_get_capability`. Same conversion family as the cyrius `file_open` / sakshi
+  `_sk_open` `O_RDWR` bug. **Resolution:** gated `drm_open` "not supported" on
+  agnos (the gate-not-reimplement path), matching the rest of the DRM surface —
+  agnos display routes through bhumi's sovereign scanout, so there is no DRM node
+  to open.
+- **Two stragglers found in the same 1.5.0 full-module audit** (identical class,
+  missed by the 1.4.6 agnos-readiness sweep): `update_load_state`
+  (`sys_open(path, 0, 0)` on the `/var/lib/agnos` A/B state file, reachable via
+  `update_mark_boot_successful`) and `update_check` (`sys_open(path, 0, 0)` on
+  the local update-manifest). Both gated the same way; the delegating callers
+  propagate `not_supported` through the now-gated primitives. The other seven
+  modules (bootloader / fuse / netns / journald / udev / error / util) audited
+  clean. `--agnos` + Linux builds green. See CHANGELOG `[1.5.0]`.
+
 ## Phase 1 — Core (V0.1) ✅
 
 - [x] `error` — SysError types, errno mapping, Result helpers

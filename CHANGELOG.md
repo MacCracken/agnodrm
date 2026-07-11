@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-07-11
+
+### Fixed
+
+- **Agnos ABI: three ungated Linux `sys_open` sites closed — the filed P1 plus
+  two stragglers the 1.4.6 sweep missed.** 1.4.6 gated the enumeration + ioctl
+  surface, but three functions still ran a raw Linux-shape `sys_open`
+  unconditionally, which is wrong on agnos (whose `sys_open` is
+  `(name, namelen, flags)`, not the Linux `(path, flags, mode)`):
+  - **`drm_open`** (`src/drm.cyr`) — the filed P1. `sys_open(path, 0x80002, 0)`
+    (`O_RDWR|O_CLOEXEC`) ran on all targets; on agnos `namelen` received
+    `0x80002` and `flags` received `0` — never an `O_RDWR` open of a DRM node.
+  - **`update_load_state`** (`src/update.cyr:639`) — `sys_open(path, 0, 0)` on
+    the `/var/lib/agnos` A/B state file; reachable on agnos through
+    `update_mark_boot_successful`.
+  - **`update_check`** (`src/update.cyr:814`) — `sys_open(path, 0, 0)` on the
+    local update-manifest file.
+  Each now carries the house `#ifdef CYRIUS_TARGET_AGNOS` stub returning
+  `drm_err_not_supported(...)`, with the Linux body under `#ifndef` — matching
+  the already-gated `drm_get_driver_version` / `drm_get_capability` /
+  `update_apply` / `update_get_current_slot`. On agnos these subsystems are
+  stubbed by design (display → bhumi sovereign scanout; agnos has no A/B update
+  model), so gating (not reimplementing) is the correct call. The delegating
+  callers `update_save_state` / `update_mark_boot_successful` propagate
+  `not_supported` cleanly through the now-gated primitives, so they need no
+  direct guard. Found via a full-module agnos-gating audit; the other seven
+  modules (bootloader / fuse / netns / journald / udev / error / util) audited
+  clean. Both `--agnos` and Linux builds green; Linux behavior byte-identical.
+
+### Changed
+
+- **Toolchain pin `6.4.25` → `6.4.50`** — brought current to the latest cyrius
+  (6.4.x maintenance line, bug-fix/optimization patches). Vendored `./lib/`
+  refreshed to the 6.4.50 snapshot (31 files). Audit clean (11/11); dist bundles
+  regenerated (`dist/agnodrm.cyr` + `dist/agnodrm-core.cyr`); the core bundle's
+  `.deps` manifest recomputed by the 6.4.50 distlib (was stale from an older
+  gen).
+
+### Performance
+
+- Broad hot-path wins from the `6.2.11 → 6.4.50` toolchain arc versus the last
+  recorded bench baseline: `ok_create` −69%, `from_errno` −61%,
+  `validate_ver_good` −51%, `compare_versions` −39%, `wrap_syscall_ok` −17%,
+  `validate_cmdline_safe` −14%. Two stdlib string micro-ops regressed and
+  reproduce stably across repeated runs — `streq_16ch` 53 → 72 ns, `strlen_16ch`
+  11 → 21 ns — attributable to stdlib string codegen over the arc, **not**
+  agnodrm source (the agnos gates add only a compile-time branch; the Linux body
+  is byte-identical to 1.4.6). Absolute cost is tens of nanoseconds and touches
+  none of agnodrm's own hot paths; the net picture is strongly positive.
+
 ## [1.4.6] — 2026-07-08
 
 ### Added

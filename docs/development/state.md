@@ -2,7 +2,7 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-07-08 (1.4.6)
+**Last refresh:** 2026-07-11 (1.5.0)
 
 > **Renamed `agnosys` → `agnodrm` at 1.4.4** — decomposed from the AGNOS kernel-interface library to the **device / DRM model** (udev + DRM/KMS on error/util support). 15 modules moved to their proper homes (trust→sigil, security/mac/audit→kavach, pam→aegis, logging→sakshi, syscall layer→cyrius). See the [decomposition plan](2026-06-18-agnosys-to-agnodrm-decomposition-plan.md). Metrics below predating 1.4.4 describe the old 20-module surface and are being refreshed as touched.
 
@@ -10,17 +10,17 @@
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.4.6** |
-| `cyrius.cyml [package].cyrius` | **6.4.25** |
+| `VERSION` | **1.5.0** |
+| `cyrius.cyml [package].cyrius` | **6.4.50** |
 | Min Cyrius (consumer) | 6.2.11 |
-| Last cyrius bump | 6.2.1 → 6.2.11 (2026-06-15; 6.2.x maintenance line, bug-fix/optimization patches only). Pure pin refresh — no `src/*.cyr` edits; validated green from clean deps. Prior: 6.1.23 → 6.2.1 at 1.4.2 (stdlib pin sweep; dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 (2026-06-10; first 6.1.x adoption). Absorbs the **v6.0.64 thread-safe allocator** (`lib/alloc.cyr` global CAS spinlock + vtable). Required: `[deps] stdlib += atomic` (transitive include not auto-resolved), and removing `alloc_reset()`-between-groups from the integration test + benches (incompatible with the new memoized default allocator — dangling cache → SIGSEGV/spin). Binary **159,392 → 162,784 B (+3,392)** from the lock/vtable code. **Perf regression** on alloc-bound paths (`ok_create` +321%, `from_errno` +210%) — single-threaded agnosys pays for the lock; confined to cold/diagnostic heap paths (zero-alloc `syserr_pack` hot path unchanged at 3 ns). Prior bumps: 6.0.52 → 6.0.56 at 1.4.0 (AGNOS-target work), 6.0.24 → 6.0.52 at 1.3.2 (codegen change, +368 B). |
+| Last cyrius bump | 6.4.25 → 6.4.50 at 1.5.0 (2026-07-11; 6.4.x maintenance line, bug-fix/optimization patches only). Pin refresh shipped **alongside** the 1.5.0 agnos-gating fixes (three ungated Linux `sys_open` sites closed: `drm_open`, `update_load_state`, `update_check` — see CHANGELOG `[1.5.0]`). Vendored `./lib/` re-populated via `cyrius deps` (31 files, 6.4.50 snapshot). Audit clean (11/11), 93 tests, both `--agnos` and Linux builds green; dist bundles regenerated (core `.deps` recomputed by 6.4.50 distlib). **Perf:** broad wins over the last recorded baseline (`ok_create` −69%, `from_errno` −61%, `validate_ver_good` −51%, `compare_versions` −39%); two stdlib string micro-ops regressed (`streq_16ch` 53→72 ns, `strlen_16ch` 11→21 ns — stdlib codegen, not agnodrm source). Prior: 6.2.11 → 6.4.25 at 1.4.6 (agnos-readiness sweep — Linux-only device/system modules build `--agnos`), 6.2.1 → 6.2.11 at 1.4.3 (6.2.x maintenance), 6.1.23 → 6.2.1 at 1.4.2 (dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 at 1.4.1 (first 6.1.x; **v6.0.64 thread-safe allocator** — `[deps] stdlib += atomic`). |
 
 ## Build Metrics
 
 | Metric | Value | Notes |
 |---|---|---|
-| Binary size (DCE) | **128,728 B** (1.4.4) | The device-model smoke `main.cyr` over error/util/udev/drm. Was 124,376 B at 1.4.3 for the old 20-module surface — not directly comparable (different program). |
-| `dist/agnodrm.cyr` size | ~137 KB / 4,091 lines (1.4.4) | Full bundle = the 9 surviving modules. Down from ~327 KB / 10,125 lines (`dist/agnosys.cyr`, 1.4.3) — the 15 moved modules left with their code. Plus `dist/agnodrm-core.cyr` (error/util/udev/drm). |
+| Binary size (DCE) | **119,648 B** (1.5.0) | The device-model smoke `main.cyr` over error/util/udev/drm. Was 128,728 B at 1.4.4; the drop is the 6.4.50 codegen + DCE (503 unreachable fns NOPed). `--agnos` smoke build 106,872 B. |
+| `dist/agnodrm.cyr` size | 4,220 lines (1.5.0) | Full bundle = the 9 surviving modules (+ the three 1.5.0 agnos gates). Plus `dist/agnodrm-core.cyr` (error/util/udev/drm), 1,126 lines. |
 | Fn-table utilization | 433 / 8,192 (5%) | +9 fns since 1.2.7 (stdlib snapshot growth pulled into the include graph) |
 | Var-table | 342 / 8,192 | |
 | Fixup-table | 865 / 262,144 | |
@@ -52,11 +52,9 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 
 | Category | Count | Where |
 |---|---|---|
-| Integration tests passed | **252 / 252** | `cyrius test` |
-| Integration assertions | 275 | `tests/tcyr/test_integration.tcyr` (1.3.0 added 4 — 3 `big_check_*` + 1 `exec_vec_multiarg`; 1.3.1 added 1 — `readfd_cap` for the shared read-fd helper) |
-| Fuzz harnesses | 7 | `fuzz/audit_nlmsg.fcyr`, `fuzz/audit_reply.fcyr`, `fuzz/certpin_pin.fcyr`, `fuzz/fuse_parse.fcyr` (1.1.14), `fuzz/journald_filter.fcyr`, `fuzz/luks_cipher.fcyr`, `fuzz/pam_config.fcyr` |
-| Benchmarks | 30 (11 groups) | `tests/bcyr/bench_all.bcyr` |
-| Bench file (compare) | 1 | `tests/bcyr/bench_compare.bcyr` (Cyrius vs Rust port baseline) |
+| Integration tests passed | **93 / 93** | `cyrius test` — trimmed to the 9 survivors at 1.4.4 (was 252 for the 20-module surface) |
+| Fuzz harnesses | 2 | `fuzz/fuse_parse.fcyr`, `fuzz/journald_filter.fcyr` (the pam/audit/certpin/luks harnesses left with their modules at 1.4.4) |
+| Benchmarks | 18 (6 groups) | `tests/bcyr/bench_all.bcyr` (was 30 / 11 groups; `bench_compare` removed at 1.4.4) |
 
 ## Local Audit Gates (`scripts/audit.sh`)
 
@@ -72,7 +70,7 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 - **Runtime**: 0
 - **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `fmt`, `vec`, `str`, `io`, `ct`, `slice`, `fnptr`, `json`, `tagged`, `assert`, `bench`, `fs`, `hashmap`, `net`, `process` (18 — `ct` added 1.1.3 for `ct_eq_bytes`; `slice` added 1.1.11 for `slice<u8>` indexing; `fnptr`/`json`/`tagged` added 1.1.12 for `#derive(Serialize)`; `assert`/`bench`/`fs`/`hashmap`/`net`/`process` added across 1.2.x for downstream-bundle completeness)
 - **Git-pinned**: 0 (no `[deps.<name>]` stanzas; no `cyrius.lock` needed today)
-- **Vendored stdlib refresh** (last): 2026-06-03 to cyrius 6.0.52 snapshot (full `./lib/` re-populated via `cyrius deps` after `rm -rf lib`; 29 stdlib files). Count 25 → 29: the AGNOS-target peers `alloc_agnos.cyr` + `syscalls_x86_64_agnos.cyr` and the macOS/Windows peers `syscalls_macos.cyr` / `syscalls_windows.cyr` / `process_win.cyr` are now pulled transitively. None affect the Linux build.
+- **Vendored stdlib refresh** (last): 2026-07-11 to cyrius 6.4.50 snapshot (full `./lib/` re-populated via `cyrius deps` after `rm -rf lib`; 31 stdlib files). `./lib/` is gitignored — CI regenerates it fresh from the pin each run, so the working-tree copy is a dev convenience only. Prior: 2026-06-03 to 6.0.52 (29 files).
 
 ## Consumer Status
 
@@ -106,6 +104,10 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
+| **1.5.0** | 2026-07-11 | **cyrius pin 6.4.25 → 6.4.50 + three ungated agnos `sys_open` sites closed.** The filed P1 (`drm_open`) plus two stragglers the 1.4.6 sweep missed (`update_load_state`, `update_check`) — each ran a raw Linux-shape `sys_open` unconditionally (garbage on agnos's `(name, namelen, flags)` ABI). All three now carry the house `#ifdef CYRIUS_TARGET_AGNOS` stub returning `drm_err_not_supported(...)`, Linux body under `#ifndef`. Found by a full-module agnos-gating audit; the other seven modules audited clean. Vendored `./lib/` refreshed to 6.4.50 (31 files). Audit clean (11/11), 93 tests, both `--agnos` (106,872 B) and Linux (119,648 B DCE) builds green. Dist bundles regenerated; core `.deps` recomputed. Bench: broad toolchain wins (`ok_create` −69%, `validate_ver_good` −51%); two stdlib string micro-ops slower (`streq_16ch`/`strlen_16ch`, stdlib codegen, not agnodrm source). See CHANGELOG `[1.5.0]`. |
+| **1.4.6** | 2026-07-08 | **agnos-readiness: Linux-only device/system modules build `--agnos`** — drm/udev/fuse/bootloader/netns/journald/update functions touching Linux syscalls/paths guarded behind `#ifdef CYRIUS_TARGET_AGNOS` "not supported" stubs, Linux body byte-identical under `#ifndef`. cyrius pin 6.2.11 → 6.4.25. (Three `sys_open` stragglers slipped this sweep — closed at 1.5.0.) |
+| **1.4.5** | 2026-07-03 | **Namespaced the error family** (`ERR_*` → `DRM_ERR_*`, `err_*` → `drm_err_*`, `syserr_*` → `drm_syserr_*`) to end symbol collisions when co-included with sibling libs (notably agnostik). Dist bundles regenerated; downstream consumers (aegis) migrate references. |
+| **1.4.4** | 2026-06-19 | **Renamed `agnosys` → `agnodrm`; decomposed to the device/DRM model.** 15 modules moved to their proper homes (trust→sigil, security/mac/audit→kavach, pam→aegis, logging→sakshi, syscall→cyrius). Survivors: error/util/udev/drm + deferred journald/netns/bootloader/update/fuse. Tests trimmed 252 → 93; profiles reduced to `[lib.core]`. |
 | **1.4.3** | 2026-06-15 | **cyrius pin 6.2.1 → 6.2.11** — 6.2.x maintenance line (bug-fix/optimization patches only, no API change). Pure pin refresh, no `src/*.cyr` edits; validated green from clean deps (`rm -rf lib build && cyrius deps`). DCE build 124,376 B (byte-identical to 1.4.2), 252 tests pass, audit clean (11/11). All 6 `dist/` bundles version-stamped. Bench delta within noise; minor wins on constant-time compares (`ct_streq` −8/−12%). |
 | **1.4.2** | 2026-06-12 | **Daimon-class buffer fix + cyrius pin 6.1.23 → 6.2.1.** `update_save_state` `bc_buf` boot-count scratch overflow fixed (`var bc_buf[8]` → `[24]`; `fmt_int_buf` of an i64 needs ~20 digits — boot_count ≥ 10,000,000 overran into adjacent static memory; surfaced by the 6.2.1 address-taken-local-array audit, latent/layout-masked until now). Pin sweep onto current toolchain required dropping the stale `"json"` `[deps] stdlib` entry — the standalone json stdlib module was carved into bayan at 6.1.25, so 6.2.x ships no `lib/json.cyr`; agnosys rolls its own JSON helpers and calls no stdlib `json_*` symbols. |
 | **1.4.1** | 2026-06-10 | **Cyrius pin 6.0.56 → 6.1.23 — first 6.1.x adoption; absorbs the v6.0.64 thread-safe allocator** (`lib/alloc.cyr` global CAS spinlock + vtable). Required `[deps] stdlib += atomic` (transitive include not auto-resolved) + removing `alloc_reset()`-between-groups from the integration test + benches (dangling memoized-allocator cache → SIGSEGV/spin) + fixing a no-arg `query_sysinfo()` miscall in benches. Binary 159,392 → 162,784 B (+3,392, lock/vtable). **Perf regression** on alloc-bound paths (`ok_create` +321%, `from_errno` +210%, `mac_default_profile` +74%) — single-threaded agnosys pays for the lock; zero-alloc hot path (`syserr_pack` 3 ns) unchanged. Follow-up: upstream single-thread no-op gate or freelist hot-path migration (patra pattern). Audit clean (11/11); 252 tests, 7 fuzz, 30 benches; API surface unchanged. |

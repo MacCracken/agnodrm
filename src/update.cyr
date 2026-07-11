@@ -634,6 +634,10 @@ fn update_save_state(state, path): i64 {
 # Load update state from a JSON file.
 # Returns Result: Ok(state_ptr) or Err.
 fn update_load_state(path): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("load update state (/var/lib/agnos A/B state file)");  # agnos: no A/B update subsystem
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (path == 0) { return drm_err_invalid_argument("state path is null"); }
 
     var fd = sys_open(path, 0, 0);
@@ -726,6 +730,7 @@ fn update_load_state(path): i64 {
     }
 
     return Ok(state);
+    #endif
 }
 
 # ================================================================
@@ -794,6 +799,10 @@ fn update_verify_manifest(manifest): i64 {
 # Supports local file paths and file:// URLs only.
 # Future: Mac/Windows will need platform-specific fetch (NSURLSession, WinHTTP).
 fn update_check(config, current_version): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("update check (Linux manifest file read)");  # agnos: no A/B update subsystem
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
     if (current_version == 0) { return drm_err_invalid_argument("current_version is null"); }
 
@@ -856,6 +865,7 @@ fn update_check(config, current_version): i64 {
 
     # Up to date
     return Ok(0);
+    #endif
 }
 
 # ================================================================
