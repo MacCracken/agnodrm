@@ -220,29 +220,40 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
     return Ok(0);                # agnos has no udev/udevadm — no devices to enumerate
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    var cmd = "udevadm";
-    var argv = alloc(24);
-    store64(argv, cmd);
-    var arg1 = "info";
-    store64(argv + 8, arg1);
-    var arg2 = "--export-db";
-    store64(argv + 16, arg2);
+    # argv vec: element 0 is the ABSOLUTE command path — execve(2) does no
+    # PATH lookup, so a bare "udevadm" never runs. Each arg is its own vec
+    # entry; agnodrm_run_capture shells out via exec_capture (no /bin/sh, no
+    # metacharacter split). The old 2-arg run_capture(cmd, argv) form passed
+    # the whole argv array as run_capture's single `arg1` and left buf/buflen
+    # garbage — see CHANGELOG. Mirrors netns_run_ip / journald_query.
+    var args = vec_new();
+    vec_push(args, "/usr/bin/udevadm");
+    vec_push(args, "info");
+    vec_push(args, "--export-db");
 
-    var res = run_capture(cmd, argv);
+    # Capture the full device DB. 1 MiB heap buffer (+1 for the NUL so the
+    # terminator never writes past the end even on a full read). Output past
+    # 1 MiB is truncated (graceful: fewer device blocks parsed, no crash).
+    var cap = 1048576;
+    var buf = alloc(cap + 1);
+    var res = agnodrm_run_capture(args, buf, cap, "udevadm info --export-db failed");
     if (is_err_result(res) == 1) { return res; }
 
-    var output = payload(res);
-    if (output == 0) {
+    var nbytes = payload(res);
+    if (nbytes == 0) {
         return Ok(0);
     }
+    store8(buf + nbytes, 0);
+    var output = buf;
 
     # Split output into blocks separated by blank lines, parse each
     var count = 0;
     var textlen = strlen(output);
     var block_start = 0;
     var pos = 0;
+    var done = 0;
 
-    while (pos <= textlen) {
+    while (pos <= textlen && done == 0) {
         var at_end = 0;
         if (pos == textlen) { at_end = 1; }
         elif (load8(output + pos) == 10) {
@@ -286,6 +297,12 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
                 else { break; }
             }
             block_start = pos;
+            # Terminate once the final block has been consumed. Without this,
+            # pos==textlen re-enters the at_end branch forever (the skip-blank
+            # loop can't advance past textlen) — an infinite loop that stayed
+            # latent while the broken 2-arg run_capture never delivered output
+            # to parse. See CHANGELOG.
+            if (pos >= textlen) { done = 1; }
             continue;
         }
         pos = pos + 1;
@@ -311,7 +328,6 @@ fn udev_get_device_info(syspath): i64 {
     return drm_err_not_supported("udev device query (agnos has no udev/udevadm)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    var cmd = "udevadm";
     # Build --path=<syspath> argument
     var prefix = "--path=";
     var plen = strlen(prefix);
@@ -321,17 +337,25 @@ fn udev_get_device_info(syspath): i64 {
     memcpy(patharg + plen, syspath, slen);
     store8(patharg + plen + slen, 0);
 
-    var argv = alloc(24);
-    store64(argv, cmd);
-    var arg1 = "info";
-    store64(argv + 8, arg1);
-    store64(argv + 16, patharg);
+    # argv vec: element 0 is the ABSOLUTE command path (execve does no PATH
+    # lookup). Each arg is its own vec entry — no shell, no metacharacter
+    # split — so `patharg` (attacker-influenced via `syspath`) reaches
+    # udevadm verbatim as argv[2] and cannot escape into a shell.
+    var args = vec_new();
+    vec_push(args, "/usr/bin/udevadm");
+    vec_push(args, "info");
+    vec_push(args, patharg);
 
-    var res = run_capture(cmd, argv);
+    # Single-device info is small (a few hundred bytes); 64 KiB heap buffer
+    # (+1 for the NUL) is ample.
+    var cap = 65536;
+    var buf = alloc(cap + 1);
+    var res = agnodrm_run_capture(args, buf, cap, "udevadm info --path failed");
     if (is_err_result(res) == 1) { return res; }
 
-    var output = payload(res);
-    return udev_parse_udevadm_info(output);
+    var nbytes = payload(res);
+    store8(buf + nbytes, 0);
+    return udev_parse_udevadm_info(buf);
     #endif
 }
 

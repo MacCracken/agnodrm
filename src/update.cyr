@@ -903,9 +903,11 @@ fn update_apply(config, manifest): i64 {
         return drm_err_invalid_argument("update image must be within /var/lib/agnos/updates/");
     }
 
-    # Write via dd
+    # Write via dd. Element 0 is the ABSOLUTE path — execve does no PATH
+    # lookup. agnodrm_run_checked checks dd's exit code; the old 2-arg
+    # run_capture("dd", args) ignored it and left buf/buflen garbage.
     var args = vec_new();
-    vec_push(args, "dd");
+    vec_push(args, "/usr/bin/dd");
 
     # Build if=<image>
     var if_arg = alloc(strlen(image) + 4);
@@ -922,7 +924,7 @@ fn update_apply(config, manifest): i64 {
     vec_push(args, "bs=4M");
     vec_push(args, "conv=fsync");
 
-    var dd_res = run_capture("dd", args);
+    var dd_res = agnodrm_run_checked(args, "dd image write failed");
     if (is_err_result(dd_res) == 1) { return dd_res; }
 
     # Update persistent state
@@ -965,7 +967,7 @@ fn update_switch_slot(config, slot): i64 {
 
     # Try efibootmgr (best effort)
     var efi_args = vec_new();
-    vec_push(efi_args, "efibootmgr");
+    vec_push(efi_args, "/usr/bin/efibootmgr");
     vec_push(efi_args, "--bootnext");
     var boot_label = alloc(8);
     memcpy(boot_label, "AGNOS-", 6);
@@ -973,7 +975,7 @@ fn update_switch_slot(config, slot): i64 {
     else { store8(boot_label + 6, 66); }                   # 'B'
     store8(boot_label + 7, 0);
     vec_push(efi_args, boot_label);
-    run_capture("efibootmgr", efi_args);  # ignore failure
+    exec_vec(efi_args);  # best effort — ignore failure (execve needs the abs path above)
 
     # Update persistent state
     var state_file = update_config_state_file(config);
@@ -1018,10 +1020,10 @@ fn update_rollback(config): i64 {
 
     # Stop services before switching (best effort)
     var stop_args = vec_new();
-    vec_push(stop_args, "argonaut");
+    vec_push(stop_args, "/usr/bin/argonaut");
     vec_push(stop_args, "stop");
     vec_push(stop_args, "daimon");
-    run_capture("argonaut", stop_args);  # ignore failure
+    exec_vec(stop_args);  # best effort — ignore failure (execve needs the abs path above)
 
     var switch_res = update_switch_slot(config, previous);
     if (is_err_result(switch_res) == 1) { return switch_res; }

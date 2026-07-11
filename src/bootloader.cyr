@@ -239,17 +239,22 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     return Ok(0);               # agnos boots via gnoboot; no systemd-boot entries
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    # Use bootctl list (systemd-boot) as it provides structured output
-    var cmd = "bootctl";
-    var argv = alloc(16);
-    store64(argv, cmd);
-    store64(argv + 8, "list");
+    # Use bootctl list (systemd-boot) as it provides structured output.
+    # argv vec: element 0 is the ABSOLUTE command path (execve does no PATH
+    # lookup). The old 2-arg run_capture(cmd, argv) form left buf/buflen
+    # garbage — see CHANGELOG. Mirrors udev_list_devices / journald_query.
+    var args = vec_new();
+    vec_push(args, "/usr/bin/bootctl");
+    vec_push(args, "list");
 
-    var res = run_capture(cmd, argv);
+    var cap = 65536;
+    var buf = alloc(cap + 1);
+    var res = agnodrm_run_capture(args, buf, cap, "bootctl list failed");
     if (is_ok(res) == 1) {
-        var output = payload(res);
-        if (output != 0) {
-            return bootloader_parse_bootctl_list(output, result_arr, max_entries);
+        var nbytes = payload(res);
+        if (nbytes > 0) {
+            store8(buf + nbytes, 0);
+            return bootloader_parse_bootctl_list(buf, result_arr, max_entries);
         }
     }
 
