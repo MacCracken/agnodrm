@@ -13,3 +13,8 @@ process
 fs
 ct
 slice
+atomic
+fnptr
+assert
+bench
+net
