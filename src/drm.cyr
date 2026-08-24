@@ -136,8 +136,7 @@ fn drm_verinfo_new(major, minor, patch, name, date, desc): i64 {
     return v;
 }
 
-# Hand-rolled JSON serializer (cstring-pointer fields not yet
-# supported by cyrius #derive(Serialize)).
+# Hand-rolled JSON serializer — cstring fields; see roadmap.md V1.1.12.
 fn drm_verinfo_to_json(v, sb): i64 {
     str_builder_add_cstr(sb, "{\"major\":");
     str_builder_add_int(sb, drm_verinfo_major(v));
@@ -186,19 +185,43 @@ fn drm_list_devices(result_arr, max_cards): i64 {
         var pos = 0;
         while (pos < nread) {
             # dirent64: d_ino(8), d_off(8), d_reclen(2), d_type(1), d_name(...)
+            # d_name therefore starts at +19, so a record is at least 20 bytes.
+            # Validate d_reclen before trusting it: reclen == 0 would spin this
+            # loop forever, and a reclen running past nread would walk name_ptr
+            # into uninitialized heap. devtmpfs makes both unreachable today —
+            # this is defence-in-depth against a malformed dirent stream.
             var reclen = load16(buf + pos + 16);
+            var rec_ok = 1;
+            if (reclen < 20) { rec_ok = 0; }
+            if (rec_ok == 1) { if (pos + reclen > nread) { rec_ok = 0; } }
+            if (rec_ok == 0) { pos = nread; continue; }
+
             var name_ptr = buf + pos + 19;
+            var name_max = reclen - 19;      # bytes available to d_name
+
+            # Bounded NUL scan — d_name is padded, not guaranteed terminated
+            # within our read window, so never hand it to strlen().
+            var nlen = 0;
+            var scanning = 1;
+            while (scanning == 1) {
+                if (nlen >= name_max) { scanning = 0; }
+                if (scanning == 1) {
+                    if (load8(name_ptr + nlen) == 0) { scanning = 0; }
+                    if (scanning == 1) { nlen = nlen + 1; }
+                }
+            }
 
             # Check if name starts with "card"
-            if (memeq(name_ptr, "card", 4) == 1) {
-                if (count < max_cards) {
-                    var nlen = strlen(name_ptr);
-                    var path = alloc(10 + nlen);
-                    memcpy(path, "/dev/dri/", 9);
-                    memcpy(path + 9, name_ptr, nlen);
-                    store8(path + 9 + nlen, 0);
-                    store64(result_arr + count * 8, path);
-                    count = count + 1;
+            if (name_max >= 4) {
+                if (memeq(name_ptr, "card", 4) == 1) {
+                    if (count < max_cards) {
+                        var path = alloc(10 + nlen);
+                        memcpy(path, "/dev/dri/", 9);
+                        memcpy(path + 9, name_ptr, nlen);
+                        store8(path + 9 + nlen, 0);
+                        store64(result_arr + count * 8, path);
+                        count = count + 1;
+                    }
                 }
             }
             pos = pos + reclen;
@@ -262,6 +285,12 @@ fn drm_get_driver_version(fd): i64 {
     var name_len = load64(ver + DRM_VER_NAME_LEN);
     var date_len = load64(ver + DRM_VER_DATE_LEN);
     var desc_len = load64(ver + DRM_VER_DESC_LEN);
+    # Clamp low as well as high. These fields are __kernel_size_t (u64); read
+    # back as i64 anything >= 2^63 reads negative, and `> 4096` does not catch
+    # that — alloc(negative + 1) below would be handed a bogus size.
+    if (name_len < 0) { name_len = 0; }
+    if (date_len < 0) { date_len = 0; }
+    if (desc_len < 0) { desc_len = 0; }
     if (name_len > 4096) { name_len = 4096; }
     if (date_len > 4096) { date_len = 4096; }
     if (desc_len > 4096) { desc_len = 4096; }

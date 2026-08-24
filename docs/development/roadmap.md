@@ -513,6 +513,46 @@ routes today, but worth removing. Options, in preference order:
   Larger change; revisit only if upstream declines and the cold-path cost starts
   mattering to a consumer.
 
+#### V1.5.x — `update` module deferred capabilities (documented 2026-08-24 at 1.5.3)
+
+Two capabilities in `src/update.cyr` are deliberately unimplemented. Both were
+carried as bare in-code notes until the 1.5.3 P(-1) sweep; recorded here so the
+code can cite a tracked entry (cyrlint requires every deferral to cross-reference
+a CHANGELOG / roadmap / issue entry).
+
+- [ ] **Manifest SHA-256 digest verification** (`update_verify_manifest`,
+  `update_parse_manifest`). The manifest carries a `sha256_digest` field that is
+  parsed and stored but never checked, so `update_verify_manifest` validates
+  **structural integrity only** — it is not an authenticity check and must not be
+  relied on as one. Blocked on a SHA-256 primitive: cyrius stdlib ships `sha1`
+  and `keccak` but no `sha256` leaf (verified against the 6.5.35 snapshot), and
+  agnodrm takes no non-stdlib runtime dependency, so vendoring sigil's
+  implementation is not an option. Lands when cyrius stdlib grows `sha256`.
+- [ ] **Network manifest fetch** (`update_check`). Local paths and `file://`
+  URLs only; a non-`/` path returns `not_supported`. Blocked on an HTTP client
+  in cyrius stdlib. Note this is a deliberate *security* boundary as much as a
+  gap — fetching an unauthenticated manifest over the network without the
+  digest check above would be strictly worse than refusing.
+
+#### Toolchain rule verification — `break` in `var`-declaring while loops (opened 2026-08-24 at 1.5.3)
+
+CLAUDE.md § Rules forbids `break` inside a `while` loop that declares `var`s
+("use flag + `continue`"). The 1.5.3 P(-1) sweep ran a brace-matching analyser
+over all four source globs and found **10 such loops** (4 in `bootloader`, 3 in
+`fuse`, 2 in `journald`, 1 in `udev` — all of them external-input parsers).
+
+Tested empirically against cyrius 6.5.35: the forbidden shape and the
+prescribed flag+continue shape produce **identical results**. The rule did not
+reproduce.
+
+- [ ] Determine whether the underlying codegen bug was fixed upstream (retire
+  the rule) or whether it guards a narrower shape than the analyser modelled
+  (document which shape, and re-check the 10 sites against it).
+
+Until that is resolved the rule stands and the 10 sites are grandfathered —
+they were left unchanged rather than churning working parsers on a rule that
+may be stale. See `docs/audit/2026-08-24-audit.md` § *Reviewed and found clean*.
+
 ### V2.0 — Breaking API cleanup
 
 The first major bump folds the API-breaking removals deferred from the 1.3.0
@@ -522,6 +562,8 @@ attribute is still unproven, see V1.2.4), so the notice lives in docs. Consumers
 should migrate before 2.0.0.
 
 - [ ] **Remove `agnosys_checked_syscall`** — public but 0 callers and byte-redundant with `wrap_syscall` (`src/error.cyr`). *Migration:* use `wrap_syscall`.
+- [ ] **Remove `bootloader_is_dangerous_token`** (audit F-2, 1.5.3) — public, **0 production callers** (only the bench suite), and its semantics *diverge* from the validator beside it: it is a case-insensitive **substring** search while `bootloader_validate_kernel_cmdline` matches **exact tokens**. A consumer reaching for the obvious-looking helper gets looser behaviour than the library's own validator. *Migration:* use `bootloader_validate_kernel_cmdline`.
+- [ ] **Allowlist-based kernel-cmdline validation** (audit F-1, 1.5.3) — the structural answer to the denylist. `bootloader_validate_kernel_cmdline` can only ever report "nothing listed matched"; 1.5.3 widened the list 21 → 48 entries and added a `rdinit=` prefix rule, but an unlisted interpreter or a novel parameter still passes. An allowlist API (permit a declared set, reject the rest) is a breaking contract change, hence 2.0.
 - [ ] **Remove the unused `label` parameter of `dmverity_validate_hex`** (arity 2 → 1) — the argument is ignored today; the error message is fixed. *Migration:* drop the second argument.
 - [ ] Sweep for any other `src/util.cyr` consolidation candidates whose extraction would be API-breaking, and fold them in the same major.
 

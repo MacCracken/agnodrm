@@ -3,7 +3,7 @@
 # support. The trust / security / syscall / logging modules that once
 # shipped here moved to their proper homes (sigil / kavach / aegis /
 # cyrius / sakshi) in the agnosys → agnodrm decomposition (2026-06-19);
-# the deferred Linux-eccentric group (journald / netns / bootloader /
+# the deferred Linux-eccentric group (roadmap.md Scope) — journald / netns / bootloader /
 # update / fuse) is parked in src/ post-v1. This main.cyr is a build
 # smoke over the surviving device-model modules.
 

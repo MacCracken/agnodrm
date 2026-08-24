@@ -131,7 +131,13 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
     }
     defer { sys_close(fd); }
 
-    var buf = alloc(8192);
+    # `8192 + 1`: the read loop can fill all 8192 bytes, and the NUL below
+    # is written at `buf + total_read`, i.e. index 8192 on a full read — one
+    # past a bare alloc(8192). Same class as the F-11 fix in update_check
+    # (1.3.0) and the `cap + 1` in agnodrm_read_fd_to_str (1.3.1); this site
+    # was missed by both sweeps. /proc/mounts passes 8192 bytes at roughly 90
+    # mounts, which container and snap-heavy hosts reach routinely.
+    var buf = alloc(8192 + 1);
     var total_read = 0;
     var nread = sys_read(fd, buf + total_read, 8192 - total_read);
     while (nread > 0) {

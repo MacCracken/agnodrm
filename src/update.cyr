@@ -400,8 +400,7 @@ fn update_state_new(slot, version): i64 {
 # through `set_rollback_available`.
 fn update_state_set_rollback(s, val): i64 { return update_state_set_rollback_available(s, val); }
 
-# Hand-rolled JSON serializer (cstring-pointer fields not yet
-# supported by cyrius #derive(Serialize)).
+# Hand-rolled JSON serializer — cstring fields; see roadmap.md V1.1.12.
 fn update_state_to_json(s, sb): i64 {
     str_builder_add_cstr(sb, "{\"slot\":");
     str_builder_add_int(sb, update_state_slot(s));
@@ -455,7 +454,7 @@ fn update_config_device_for_slot(c, slot): i64 {
 # ================================================================
 # UpdateManifest struct — 6 fields * 8 = 48 bytes.
 # Field name `files` matches 1.0 getter (not doc-comment `files_vec`).
-# Note: sha256_digest verification deferred — requires SHA-256 impl.
+# Note: sha256_digest verification deferred — requires SHA-256 (roadmap.md V1.5.x).
 # For now, manifest validation checks structural integrity only.
 # ================================================================
 
@@ -740,7 +739,7 @@ fn update_load_state(path): i64 {
 # Validate structural integrity of an update manifest.
 # Returns Result: Ok(0) or Err.
 # Note: SHA-256 digest verification requires a SHA-256 implementation
-# which is not yet available in Cyrius stdlib. Structural checks only.
+# which is not yet in Cyrius stdlib (roadmap.md V1.5.x). Structural checks only.
 fn update_verify_manifest(manifest): i64 {
     if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
 
@@ -795,7 +794,7 @@ fn update_verify_manifest(manifest): i64 {
 # current_version: installed version string.
 # Returns Result: Ok(manifest_ptr) if update available, Ok(0) if up-to-date, or Err.
 #
-# Note: Network fetch (curl) not yet implemented in Cyrius.
+# Note: Network fetch (curl) not yet implemented (roadmap.md V1.5.x).
 # Supports local file paths and file:// URLs only.
 # Future: Mac/Windows will need platform-specific fetch (NSURLSession, WinHTTP).
 fn update_check(config, current_version): i64 {
@@ -814,9 +813,9 @@ fn update_check(config, current_version): i64 {
         path = url + 7;
     }
 
-    # Only support local file paths for now
+    # Only support local file paths for now (roadmap.md V1.5.x)
     if (load8(path) != 47) {  # '/'
-        return drm_err_not_supported("network update check not yet implemented");
+        return drm_err_not_supported("network update check not yet implemented");   #skip-lint
     }
 
     # Read manifest file

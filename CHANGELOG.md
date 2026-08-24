@@ -7,7 +7,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.3] — 2026-08-24
+
+P(-1) audit / hardening sweep. **1 HIGH, 2 MEDIUM, 4 LOW** security findings,
+all closed; two quality gates found to be inert and repaired. Full report:
+[`docs/audit/2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md).
+
+### Security
+
+- **F-5 (HIGH) — `fuse_parse_proc_mounts` wrote one byte past its heap buffer.**
+  `src/fuse.cyr` allocated exactly 8192 bytes, read up to 8192 into it, then
+  NUL-terminated at `buf + total_read` — so a read that filled the buffer wrote
+  `store8(buf + 8192, 0)`, one byte past the end. `/proc/mounts` crosses 8192
+  bytes at roughly **90 mount entries**, which container hosts, Kubernetes
+  nodes, and snap-heavy desktops reach routinely; the audit host carries 28
+  mounts, which is why the suite never tripped it. Confirmed with a heap-canary
+  harness, not inferred: the old shape corrupts exactly 1 byte of the adjacent
+  allocation, the new one corrupts 0. **This is the third instance of one bug
+  class** — already fixed in `update_check` (F-11, 1.3.0) and
+  `agnodrm_read_fd_to_str` (1.3.1, which allocates `cap + 1` for precisely this
+  reason); `fuse.cyr` was missed by both sweeps. Now `alloc(8192 + 1)`.
+- **F-1 (MEDIUM) — kernel cmdline denylist had structural gaps.**
+  `bootloader_validate_kernel_cmdline` matched 21 exact tokens. **`rdinit=` was
+  absent entirely** — it overrides the initramfs init to an arbitrary binary,
+  the same escape `init=` grants. `init=` itself enumerated only three shells,
+  so `zsh`/`ksh`/`csh`/`tcsh`/`ash`/`busybox`/`sulogin` walked through, and
+  there were no entries at all for rescue targets or for CPU-mitigation, KASLR,
+  and LSM downgrades. Denylist widened 21 → 48 entries; `rdinit=` is matched by
+  **prefix** rather than enumerated, behind a length + first-byte guard.
+- **F-6 (MEDIUM) — netns firewall-rule port was unvalidated.** `netns_fw_rule_new`
+  accepts any i64, and two sites rendered it with `fmt_int_buf` into `alloc(8)`.
+  `fmt_int_buf` of an i64 needs up to 20 digits plus sign, so any 8+ digit port
+  wrote past the buffer; only `port > 0` was checked. Now bounded to
+  1..65535 with a 24-byte scratch (the `[24]` convention already used in
+  `error`/`update`).
+- **F-7 (LOW) — `netns_validate_config` accepted a negative `prefix_len`.**
+  The checks were `== 0` and `> 32`, so negatives passed both and then
+  overflowed a 4-byte format scratch. Now `< 1`.
+- **F-3 (LOW, defence-in-depth) — `drm_list_devices` trusted getdents64
+  `d_reclen`.** `reclen == 0` spins the walk forever; a `reclen` past `nread`
+  walks `d_name` into uninitialised heap, and `strlen` could run off the 4096
+  buffer. Unreachable via devtmpfs today. Now guarded (`reclen >= 20`,
+  `pos + reclen <= nread`) with a bounded NUL scan replacing `strlen`.
+- **F-4 (LOW) — `drm_get_driver_version` length cap missed negatives.** The
+  ioctl's string lengths are `__kernel_size_t`; read back as i64 anything
+  ≥ 2^63 reads negative and slipped past `> 4096` into `alloc(len + 1)`.
+  Clamped low as well as high.
+
+### Fixed
+
+- **`scripts/audit.sh`'s lint gate had been inert since it was written.** It
+  ran `cyrius lint "$f" || fail`, but **`cyrius lint` exits 0 even when it
+  reports findings** — so the gate could only fire if cyrlint failed to execute
+  at all. It also covered `src/*.cyr` only, while CI covers src + tests +
+  benches + fuzz, so a finding in a test or fuzz harness passed locally and
+  failed in CI. Both gates now parse cyrlint's summary counters, cover all four
+  globs, and fail loudly if the output shape changes rather than silently
+  passing — the same lesson the 1.5.2 fmt gate taught.
+- **CI's lint gate matched only `^\s*warn ` lines**, which do not match
+  cyrlint's *deferral* output. **15 untracked deferrals** had accumulated
+  unseen across `drm`/`journald`/`main`/`update`/`util` and the test and bench
+  files. All 15 resolved — cross-referenced to a CHANGELOG/roadmap entry, or
+  marked `#skip-lint` where the trigger phrase was incidental prose (three sit
+  inside string literals where rewording would change program output). Both
+  gates now gate on deferrals as well as warnings.
+
+- **CI build steps could swallow a compiler failure.** The new log-grepping
+  gates capture build output to a file rather than piping through `tee`: the
+  default GitHub Actions step shell is `bash -e` with **no** `pipefail`, so
+  `cyrius build ... | tee log` would have reported tee's exit status and
+  masked a failing build. Applied to the x86_64 and aarch64 steps as well as
+  the new agnos one.
+
 ### Added
+
+- `fuzz/bootloader_cmdline.fcyr` — third fuzz harness, covering the cmdline
+  validator: empty/oversize/null input, non-printable and non-ASCII bytes,
+  tokens far longer than the 128-byte extraction buffer, a dangerous token
+  hidden behind a 900-byte token, dense separators, and the exact 4096-byte
+  limit.
+- 18 regression assertions (93 → **111**). Verified to be genuine regressions:
+  11 of them **fail against the unfixed sources** and pass against the fixed
+  ones. The F-5 assertions exercise the live `/proc/mounts` path but cannot
+  reproduce the overflow on a host with few mounts — that one is covered by the
+  canary harness described above.
+- `docs/audit/2026-08-24-audit.md` — full report, including the interfaces
+  reviewed and found clean, the CVE-landscape review, and follow-ups.
+- Roadmap **V1.5.x** section recording the two deliberate `update` deferrals
+  (manifest SHA-256 verification, network fetch) that had lived only as bare
+  in-code notes.
 
 - **`cyrius build --agnos` is now a build gate — in CI, in the release
   workflow, and in `scripts/audit.sh`.** 1.5.2 fixed the undefined
@@ -36,14 +124,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. In `audit.sh` this is factored into a `check_build_log` helper that
   also carries the pre-existing `non-exhaustive` match promotion.
 
-### Fixed
+### Changed
 
-- **CI build steps could swallow a compiler failure.** The new log-grepping
-  gates capture build output to a file rather than piping through `tee`: the
-  default GitHub Actions step shell is `bash -e` with **no** `pipefail`, so
-  `cyrius build ... | tee log` would have reported tee's exit status and
-  masked a failing build. Applied to the x86_64 and aarch64 steps as well as
-  the new agnos one.
+- **`bootloader_validate_kernel_cmdline`'s contract is now stated honestly.**
+  It documented "Ok(0) if valid", a completeness claim a denylist cannot back.
+  It now reads "Ok(0) means no listed footgun matched, NOT that the cmdline is
+  safe", in the doc comment, the generated API prose, and SECURITY-NOTES.
+- **Out-of-range netns ports are now skipped during nftables rendering** rather
+  than emitted. Consumers relying on arbitrary port values will see those rules
+  omitted — such a rule could never load anyway, and emitting it failed the
+  whole ruleset.
+- **`docs/SECURITY-NOTES.md` pruned to the 9 live modules.** It still carried
+  sections for the 13 that left in the 1.4.4 decomposition (`syscall`,
+  `logging`, `security`, `mac`, `audit`, `pam`, `luks`, `dmverity`, `ima`,
+  `tpm`, `certpin`, `secureboot`) — stale privilege and trust-boundary claims
+  for code that has not been in this repo since 1.4.4, which is a real hazard
+  in a security document. A pointer to the owning repos replaces them, and the
+  previously-undocumented `util` module gained a section.
+- `scripts/audit.sh` is now **12 gates** (added `fmt drift` at 1.5.2 as gate 8;
+  lint is gate 9). README / CONTRIBUTING / roadmap / state.md updated to match.
+
+### Performance
+
+Three regressions against the tracked 1.5.2 `bench-history.csv` row. **All
+three trace to `src/bootloader.cyr` growing** (27 denylist entries + the
+`rdinit=` prefix rule), and that was verified rather than assumed: restoring
+*only* `bootloader.cyr` to its pre-sweep state — while keeping every other
+1.5.3 change — returns all three to their 1.5.2 timings.
+
+| Benchmark | 1.5.2 | 1.5.3 | Δ | bootloader.cyr reverted |
+|---|---:|---:|---:|---:|
+| `validate_cmdline_safe` | 427 ns | 617 ns | **+44.5%** | 424 ns |
+| `compare_versions` | 112 ns | 156 ns | **+39.3%** | 110 ns |
+| `validate_ver_good` | 71 ns | 87 ns | **+22.5%** | 70 ns |
+
+- **`validate_cmdline_safe` is a real, deliberate cost** — the price of F-1's
+  coverage, ~44 ns per token over a 4-token cmdline. Attributed by bisecting
+  the two changes: +138 ns from checking 27 more denylist entries, +93 ns from
+  the `rdinit=` prefix test, of which a length + first-byte guard recovers
+  56 ns. The function validates a boot entry; it is not on any hot path, and
+  600 ns to catch `rdinit=/bin/sh` is a trade worth making.
+- **`compare_versions` and `validate_ver_good` are code-layout collateral, not
+  real regressions.** Their code was not touched — only comments changed in
+  `update.cyr` — and the revert experiment above restores them exactly. The
+  same effect moved two stdlib micro-ops the other way: `strlen_16ch`
+  22 → 11 ns (−50%) and `streq_16ch` 72 → 51 ns (−29%).
+
+Run-to-run noise on this suite is 0–6% across 3 runs, so all of the above is
+signal. Remaining 13 benchmarks are flat or better.
 
 ## [1.5.2] — 2026-08-24
 

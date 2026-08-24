@@ -11,7 +11,7 @@
 #   6. Smoke           — ./build/agnodrm prints "agnodrm ready"
 #   7. Tests           — cyrius test (tests/tcyr/*.tcyr)
 #   8. Fmt drift       — cyrfmt output must match every committed source file
-#   9. Lint            — cyrius lint every src/*.cyr
+#   9. Lint            — cyrius lint findings (warnings + untracked deferrals), all 4 globs
 #  10. Vet             — cyrius vet src/main.cyr (include-graph audit)
 #  11. Fuzz            — every fuzz/*.fcyr, 10s timeout, must exit 0
 #  12. Benchmarks      — tests/bcyr/bench_all.bcyr runs to completion
@@ -134,10 +134,49 @@ rm -f "$fmt_tmp"
 pass "$fmt_n files match cyrfmt"
 
 stage 9/12 "lint"
-for f in src/*.cyr; do
-    cyrius lint "$f" > /dev/null 2>&1 || fail "lint: $f"
+# Gate the LINTER's FINDINGS, not just its exit code.
+#
+# Two holes this replaces, both found in the 1.5.3 P(-1) sweep:
+#   1. `cyrius lint` exits 0 even when it reports findings, so the old
+#      `cyrius lint "$f" || fail` could never fire — it caught only cyrlint
+#      failing to execute at all. The gate was inert for its whole life.
+#   2. It looked at `src/*.cyr` only, while CI lints src + tests + benches +
+#      fuzz, so a finding in a test or fuzz harness passed locally and failed
+#      in CI. Same mirror gap the fmt gate had.
+#
+# cyrlint ends each file with "<n> untracked deferrals" and "<n> warnings".
+# Parse those counters. If neither line is present the output shape changed —
+# fail loudly rather than silently passing everything (the 1.5.2 fmt-gate
+# lesson: a broken tool must never read as a clean result).
+lint_files=0
+lint_warn_total=0
+lint_defer_total=0
+for f in src/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do
+    [ -f "$f" ] || continue
+    out=$(cyrius lint "$f" 2>&1) || fail "lint: cyrlint errored on $f (linter error, not a finding)"
+    echo "$out" | grep -qE '[0-9]+ warnings' \
+        || { echo "$out"; fail "lint: unrecognized cyrlint output for $f — tooling changed, gate cannot be trusted"; }
+    w=$(echo "$out" | grep -oE '[0-9]+ warnings' | tail -1 | grep -oE '^[0-9]+' || true)
+    d=$(echo "$out" | grep -oE '[0-9]+ untracked deferrals' | tail -1 | grep -oE '^[0-9]+' || true)
+    [ -n "$w" ] || w=0
+    [ -n "$d" ] || d=0
+    if [ "$w" -ne 0 ] || [ "$d" -ne 0 ]; then
+        echo "$out" | grep -E '^\s*(warn|deferral) ' || true
+        lint_warn_total=$((lint_warn_total + w))
+        lint_defer_total=$((lint_defer_total + d))
+    fi
+    lint_files=$((lint_files + 1))
 done
-pass "0 warnings"
+[ "$lint_warn_total" -eq 0 ] \
+    || fail "lint: $lint_warn_total warning(s)"
+# Untracked deferrals are gated too: cyrlint wants every TODO/FIXME/"not yet"
+# cross-referenced to a CHANGELOG / roadmap / issue entry, or marked
+# #skip-lint when the phrase is incidental prose. 12 had accumulated unseen
+# because neither gate looked (audit.sh checked only the exit code; CI greps
+# for "warn " lines, which deferral lines do not match). Cleared in 1.5.3.
+[ "$lint_defer_total" -eq 0 ] \
+    || fail "lint: $lint_defer_total untracked deferral(s) — cross-reference each, or mark #skip-lint"
+pass "$lint_files files, 0 warnings, 0 untracked deferrals"
 
 stage 10/12 "vet"
 # cyrius 5.7.x changed vet's output; we now rely on exit code only.

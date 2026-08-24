@@ -1,0 +1,103 @@
+# Fuzz: bootloader_validate_kernel_cmdline — kernel cmdline denylist validator.
+# Must not crash on empty input, oversize input, adversarial token lengths,
+# non-printable/non-ASCII bytes, or dense separators. Covers F-1 (1.5.3):
+# the denylist previously enumerated only three init= shells and had no
+# rdinit= / rescue-target / mitigation-downgrade entries at all.
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/hashmap.cyr"
+include "lib/process.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/bootloader.cyr"
+
+alloc_init();
+
+# --- benign cmdlines accept ---
+var ok1 = "root=/dev/sda1 ro quiet";
+if (is_ok(bootloader_validate_kernel_cmdline(ok1)) != 1) { syscall(60, 10); }
+if (is_ok(bootloader_validate_kernel_cmdline("")) != 1) { syscall(60, 11); }
+if (is_ok(bootloader_validate_kernel_cmdline("   ")) != 1) { syscall(60, 12); }
+
+# --- null pointer rejected, not dereferenced ---
+if (is_err_result(bootloader_validate_kernel_cmdline(0)) != 1) { syscall(60, 13); }
+
+# --- known-dangerous tokens rejected ---
+if (is_err_result(bootloader_validate_kernel_cmdline("ro init=/bin/sh")) != 1) { syscall(60, 20); }
+if (is_err_result(bootloader_validate_kernel_cmdline("ro rdinit=/bin/sh")) != 1) { syscall(60, 21); }
+if (is_err_result(bootloader_validate_kernel_cmdline("ro mitigations=off")) != 1) { syscall(60, 22); }
+if (is_err_result(bootloader_validate_kernel_cmdline("ro nokaslr")) != 1) { syscall(60, 23); }
+if (is_err_result(bootloader_validate_kernel_cmdline("systemd.unit=rescue.target")) != 1) { syscall(60, 24); }
+
+# --- prefix rule must not over-match ---
+if (is_ok(bootloader_validate_kernel_cmdline("ro rdinitfoo=1")) != 1) { syscall(60, 30); }
+if (is_ok(bootloader_validate_kernel_cmdline("ro rdinit")) != 1) { syscall(60, 31); }
+
+# --- non-printable / non-ASCII rejected ---
+var np = alloc(16);
+memcpy(np, "ro ", 3);
+store8(np + 3, 7);          # BEL
+store8(np + 4, 0);
+if (is_err_result(bootloader_validate_kernel_cmdline(np)) != 1) { syscall(60, 40); }
+var hi = alloc(16);
+memcpy(hi, "ro ", 3);
+store8(hi + 3, 200);        # > 126
+store8(hi + 4, 0);
+if (is_err_result(bootloader_validate_kernel_cmdline(hi)) != 1) { syscall(60, 41); }
+
+# --- oversize input rejected (> 4096) ---
+var big = alloc(5000);
+var bi = 0;
+while (bi < 4999) { store8(big + bi, 97); bi = bi + 1; }
+store8(big + 4999, 0);
+if (is_err_result(bootloader_validate_kernel_cmdline(big)) != 1) { syscall(60, 50); }
+
+# --- token far longer than the 128-byte extraction buffer (truncation path) ---
+var longtok = alloc(1024);
+var li = 0;
+while (li < 1000) { store8(longtok + li, 98); li = li + 1; }
+store8(longtok + 1000, 0);
+if (is_ok(bootloader_validate_kernel_cmdline(longtok)) != 1) { syscall(60, 60); }
+
+# --- a dangerous token hidden after a very long token ---
+var mixed = alloc(1200);
+var mi = 0;
+while (mi < 900) { store8(mixed + mi, 99); mi = mi + 1; }
+store8(mixed + 900, 32);
+memcpy(mixed + 901, "init=/bin/sh", 12);
+store8(mixed + 913, 0);
+if (is_err_result(bootloader_validate_kernel_cmdline(mixed)) != 1) { syscall(60, 61); }
+
+# --- dense separators, empty tokens ---
+var dense = alloc(600);
+var di = 0;
+while (di < 512) { store8(dense + di, 32); di = di + 1; }
+store8(dense + 512, 0);
+if (is_ok(bootloader_validate_kernel_cmdline(dense)) != 1) { syscall(60, 70); }
+
+# --- exactly-at-limit input (4096) accepted ---
+var lim = alloc(4200);
+var xi = 0;
+while (xi < 4096) { store8(lim + xi, 97); xi = xi + 1; }
+store8(lim + 4096, 0);
+if (is_ok(bootloader_validate_kernel_cmdline(lim)) != 1) { syscall(60, 80); }
+
+# --- iteration stress: map is memoised across calls ---
+var n = 0;
+while (n < 500) {
+    if (is_err_result(bootloader_validate_kernel_cmdline("ro rdinit=/bin/sh")) != 1) { syscall(60, 90); }
+    if (is_ok(bootloader_validate_kernel_cmdline(ok1)) != 1) { syscall(60, 91); }
+    n = n + 1;
+}
+
+syscall(1, 1, "bootloader_cmdline: ok\n", 23);
+syscall(60, 0);

@@ -56,7 +56,7 @@
 - `bootloader_parse_bootctl_list(arg1, arg2, arg3)` → Parse bootctl list output (simplified). Each entry block starts with a line containing "title:" o...
 - `bootloader_parse_loader_conf(arg)` → Parse loader.conf file contents. Returns { timeout, default_id } as a 16-byte struct.
 - `bootloader_type_str(arg)` → Bootloader type to string.
-- `bootloader_validate_kernel_cmdline(arg)` → Validate kernel command-line parameters. Returns Result: Ok(0) if valid, Err if dangerous or malf...
+- `bootloader_validate_kernel_cmdline(arg)` → Denylist check for a kernel cmdline: Ok(0) means no listed footgun matched, NOT that the cmdline ...
 
 ### `drm` (src/drm.cyr)
 
@@ -79,7 +79,7 @@
 - `drm_verinfo_set_minor(arg1, arg2)` → (no behavioral docs)
 - `drm_verinfo_set_name(arg1, arg2)` → (no behavioral docs)
 - `drm_verinfo_set_patch(arg1, arg2)` → (no behavioral docs)
-- `drm_verinfo_to_json(arg1, arg2)` → Hand-rolled JSON serializer (cstring-pointer fields not yet supported by cyrius #derive(Serialize)).
+- `drm_verinfo_to_json(arg1, arg2)` → Hand-rolled JSON serializer — cstring fields; see roadmap.md V1.1.12.
 
 ### `error` (src/error.cyr)
 
@@ -344,7 +344,7 @@
 - `update_state_set_slot(arg1, arg2)` → (no behavioral docs)
 - `update_state_set_version(arg1, arg2)` → (no behavioral docs)
 - `update_state_slot(arg)` → (no behavioral docs)
-- `update_state_to_json(arg1, arg2)` → Hand-rolled JSON serializer (cstring-pointer fields not yet supported by cyrius #derive(Serialize)).
+- `update_state_to_json(arg1, arg2)` → Hand-rolled JSON serializer — cstring fields; see roadmap.md V1.1.12.
 - `update_state_version(arg)` → (no behavioral docs)
 - `update_switch_slot(arg1, arg2)` → Mark a slot as active for the next boot. Writes slot marker for argonaut and optionally sets EFI ...
 - `update_validate_version(arg)` → Validate a CalVer version string (YYYY.M.D). Returns Result: Ok(0) or Err.

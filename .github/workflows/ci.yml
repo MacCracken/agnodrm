@@ -116,18 +116,40 @@ jobs:
 
       - name: Lint
         # Auto-discover so new modules are covered without editing CI.
-        # Treat any warning as a failure (fail on any cyrlint "  warn " line).
+        #
+        # Parse cyrlint's summary counters rather than grepping for a line
+        # prefix. Two reasons, both found in the 1.5.3 P(-1) sweep:
+        #   * `cyrius lint` exits 0 even when it reports findings, so exit
+        #     status alone proves nothing.
+        #   * The old `grep '^\s*warn '` matched only warnings. cyrlint also
+        #     reports "untracked deferrals" (TODO/FIXME/"not yet" with no
+        #     CHANGELOG/roadmap/issue cross-reference) on differently-shaped
+        #     lines, so 15 of those accumulated unseen. Both are gated now.
+        #
+        # If neither counter line is present the output shape changed — fail
+        # loudly rather than silently passing (the 1.5.2 fmt-gate lesson).
         run: |
-          fail=0
+          warn_total=0
+          defer_total=0
           for f in src/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do
             [ -f "$f" ] || continue
-            out=$(cyrius lint "$f" 2>&1)
+            out=$(cyrius lint "$f" 2>&1) || {
+              echo "$out"; echo "ERROR: cyrlint errored on $f"; exit 1; }
             echo "$out"
-            if echo "$out" | grep -qE '^\s*warn '; then
-              fail=1
-            fi
+            echo "$out" | grep -qE '[0-9]+ warnings' || {
+              echo "ERROR: unrecognized cyrlint output for $f — gate cannot be trusted"
+              exit 1; }
+            w=$(echo "$out" | grep -oE '[0-9]+ warnings' | tail -1 | grep -oE '^[0-9]+')
+            d=$(echo "$out" | grep -oE '[0-9]+ untracked deferrals' | tail -1 | grep -oE '^[0-9]+' || true)
+            [ -n "$d" ] || d=0
+            warn_total=$((warn_total + w))
+            defer_total=$((defer_total + d))
           done
-          [ $fail -eq 0 ] || { echo "lint: warnings present"; exit 1; }
+          [ $warn_total -eq 0 ] || { echo "lint: $warn_total warning(s)"; exit 1; }
+          [ $defer_total -eq 0 ] || {
+            echo "lint: $defer_total untracked deferral(s) — cross-reference each, or mark #skip-lint"
+            exit 1; }
+          echo "lint: clean (0 warnings, 0 untracked deferrals)"
 
       - name: Vet (include-graph audit)
         run: cyrius vet src/main.cyr

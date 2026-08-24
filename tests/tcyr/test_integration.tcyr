@@ -1,5 +1,5 @@
 # test_integration.tcyr — integration tests for the agnodrm modules
-# (device model: error/util/udev/drm + deferred: journald/netns/
+# (device model: error/util/udev/drm + deferred group per roadmap.md: journald/netns/
 # bootloader/update/fuse). The trust/security/syscall/logging modules
 # moved out in the agnosys → agnodrm decomposition; their tests went
 # with them.
@@ -146,6 +146,23 @@ fn test_bootloader() {
     bootloader_config_set_timeout(bc, 5);
     assert_eq(bootloader_config_type(bc), BOOT_SYSTEMD_BOOT, "bc_t");
     assert_eq(bootloader_config_timeout(bc), 5, "bc_to");
+
+    # F-1 (1.5.3): the danger denylist enumerated only three init= shells and
+    # had no entry at all for rdinit=, rescue targets, or mitigation/KASLR
+    # downgrades. Each of these passed validation before this release.
+    assert(is_err_result(bootloader_validate_kernel_cmdline("root=/dev/sda1 rdinit=/bin/sh")) == 1, "cmd_rdinit");
+    assert(is_err_result(bootloader_validate_kernel_cmdline("rdinit=/sbin/anything")) == 1, "cmd_rdinit_any");
+    assert(is_err_result(bootloader_validate_kernel_cmdline("ro init=/bin/zsh")) == 1, "cmd_zsh");
+    assert(is_err_result(bootloader_validate_kernel_cmdline("ro init=/bin/busybox")) == 1, "cmd_busybox");
+    assert(is_err_result(bootloader_validate_kernel_cmdline("quiet mitigations=off")) == 1, "cmd_mitig");
+    assert(is_err_result(bootloader_validate_kernel_cmdline("quiet nokaslr")) == 1, "cmd_nokaslr");
+    assert(is_err_result(bootloader_validate_kernel_cmdline("systemd.unit=rescue.target")) == 1, "cmd_rescue");
+    assert(is_err_result(bootloader_validate_kernel_cmdline("ro security=none")) == 1, "cmd_secnone");
+    # Case-insensitive: tokens are lowercased before lookup.
+    assert(is_err_result(bootloader_validate_kernel_cmdline("ro RDINIT=/bin/sh")) == 1, "cmd_rdinit_case");
+    # `rdinit` is matched as the prefix `rdinit=`, so a token that merely
+    # starts with those letters must NOT trip it.
+    assert(is_ok(bootloader_validate_kernel_cmdline("ro rdinitfoo=1")) == 1, "cmd_rdinit_noprefix");
     return 0;
 }
 
@@ -170,6 +187,14 @@ fn test_fuse() {
     var line3 = "src /no/escape ext4 rw 0 0";
     var f3 = fuse_extract_field(line3, strlen(line3), 1);
     assert(streq(f3, "/no/escape") == 1, "esc_none");
+    # F-5 (1.5.3): fuse_parse_proc_mounts alloc'd exactly 8192 bytes but
+    # NUL-terminated at buf[total_read], writing one byte past the end when
+    # /proc/mounts filled the buffer (~90 mounts). Buffer is 8192 + 1 now.
+    # This exercises the real read+parse path against the live /proc/mounts.
+    var marr = alloc(8 * 128);
+    var mres = fuse_parse_proc_mounts(marr, 128, 0);
+    assert(is_ok(mres) == 1, "fpm_ok");
+    assert(payload(mres) >= 0, "fpm_count");
     return 0;
 }
 
@@ -239,6 +264,33 @@ fn test_netns() {
     assert_eq(netns_fw_policy_default_in(fp), FW_DROP, "fp_i");
     assert_eq(netns_fw_policy_default_out(fp), FW_ACCEPT, "fp_o");
 
+    # F-7 (1.5.3): prefix_len was checked with `== 0` and `> 32`, so a
+    # negative value passed both and then overflowed the alloc(4) scratch
+    # that fmt_int_buf renders it into.
+    var cneg = netns_config_new("agent-neg", "10.0.0.2", "10.0.0.1", 0 - 999999, 1);
+    assert(is_err_result(netns_validate_config(cneg)) == 1, "nc_plen_neg");
+    var czero = netns_config_new("agent-z", "10.0.0.2", "10.0.0.1", 0, 1);
+    assert(is_err_result(netns_validate_config(czero)) == 1, "nc_plen_zero");
+    var cbig = netns_config_new("agent-b", "10.0.0.2", "10.0.0.1", 33, 1);
+    assert(is_err_result(netns_validate_config(cbig)) == 1, "nc_plen_33");
+    var cok = netns_config_new("agent-ok", "10.0.0.2", "10.0.0.1", 24, 1);
+    assert(is_ok(netns_validate_config(cok)) == 1, "nc_plen_24");
+
+    # F-6 (1.5.3): rule ports were never range-checked and were rendered with
+    # fmt_int_buf into an alloc(8) scratch — an 8+ digit port wrote past it.
+    # In-range ports still render; out-of-range ones are skipped rather than
+    # emitted as an unloadable nft rule.
+    var rules = alloc(8 * 2);
+    var rok = netns_fw_rule_new(TRAFFIC_INBOUND, PROTO_TCP, 443, "0.0.0.0", FW_ACCEPT, "https");
+    var rbad = netns_fw_rule_new(TRAFFIC_INBOUND, PROTO_TCP, 999999999, "0.0.0.0", FW_ACCEPT, "oob");
+    store64(rules, rok);
+    store64(rules + 8, rbad);
+    var pol = netns_fw_policy_new(FW_DROP, FW_ACCEPT);
+    netns_fw_policy_set_rules(pol, rules, 2);
+    var rs = netns_render_nftables_ruleset(pol);
+    assert(strstr(rs, "dport 443") >= 0, "nft_port_inrange");
+    assert(strstr(rs, "999999999") < 0, "nft_port_oob_skipped");
+
     # Regression (1.3.0): netns command exec was broken — the argv array was
     # passed as a single argument to run_capture/_exec3 (cmd + 2 args max),
     # so multi-arg `ip netns add ...` never reached the binary. netns now
@@ -285,7 +337,7 @@ fn test_journald() {
 fn main() {
     alloc_init();
     println("================================================================");
-    println("  agnodrm integration tests — device model + deferred modules");
+    println("  agnodrm integration tests — device model + deferred modules");   #skip-lint
     println("================================================================");
     test_error();
     test_update();

@@ -2,7 +2,7 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-08-24 (1.5.2). *(1.5.1 shipped without a state.md / capability-map / bench-history refresh; this pass reconciles all three.)*
+**Last refresh:** 2026-08-24 (1.5.3 — P(-1) audit / hardening sweep).
 
 > **Renamed `agnosys` → `agnodrm` at 1.4.4** — decomposed from the AGNOS kernel-interface library to the **device / DRM model** (udev + DRM/KMS on error/util support). 15 modules moved to their proper homes (trust→sigil, security/mac/audit→kavach, pam→aegis, logging→sakshi, syscall layer→cyrius). See the [decomposition plan](2026-06-18-agnosys-to-agnodrm-decomposition-plan.md). Metrics below predating 1.4.4 describe the old 20-module surface and are being refreshed as touched.
 
@@ -10,7 +10,7 @@
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.5.2** |
+| `VERSION` | **1.5.3** |
 | `cyrius.cyml [package].cyrius` | **6.5.35** |
 | Min Cyrius (consumer) | 6.2.11 |
 | Last cyrius bump | 6.5.27 → **6.5.35** at 1.5.2 (2026-08-24; 6.5.x maintenance line, current release). Vendored `./lib/` rebuilt from a clean `rm -rf lib && cyrius deps` and verified **byte-identical** to the 6.5.35 toolchain snapshot — 35 files (31 + the 4-file `args` family). This also cleared a stale `patra 1.13.0` (pinned: 1.13.8) shadow the prior working-tree `lib sync --full` dump carried. Shipped **alongside** the `[deps] stdlib += args` fix that resolves `_agnos_getenv` on agnos builds (see CHANGELOG `[1.5.2]`). Audit clean (11/11), 93 tests, all three targets (x86_64 / aarch64 / agnos) build warning-free; dist bundles regenerated (core `.deps` gained `args` + `syscalls`). **Perf:** toolchain-only wins — `compare_versions` −26.8%, `validate_ver_good` −16.5%, `is_dangerous_token_miss` −12.6%, `is_dangerous_token_hit` −10.3%; no regressions (`parse_subsystem` +2 ns is noise, matching its 1.5.0 value). Prior: 6.4.50 → 6.5.27 at 1.5.1 (2026-08-17, matching the AGNOS desktop stack), 6.4.25 → 6.4.50 at 1.5.0 (shipped with the three ungated agnos `sys_open` fixes), 6.2.11 → 6.4.25 at 1.4.6 (agnos-readiness sweep), 6.2.1 → 6.2.11 at 1.4.3 (6.2.x maintenance), 6.1.23 → 6.2.1 at 1.4.2 (dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 at 1.4.1 (first 6.1.x; **v6.0.64 thread-safe allocator** — `[deps] stdlib += atomic`). |
@@ -19,15 +19,15 @@
 
 | Metric | Value | Notes |
 |---|---|---|
-| Binary size (DCE) | **140,776 B** (1.5.2) | The device-model smoke `main.cyr` over error/util/udev/drm. Was 140,744 B at the 6.5.27 pin measured on this host (+32 B from `args`); the step up from 1.5.0's 119,648 B is the 6.5.27 toolchain, absorbed at 1.5.1. Dead-code floor 554 unreachable fns / 103,740 bytes NOPed. `--agnos` 132,320 B (+4,096 B — the `getenv` path now resolves), `--aarch64` 333,248 B. |
-| `dist/agnodrm.cyr` size | 4,273 lines (1.5.2) | Full bundle = the 9 surviving modules. Plus `dist/agnodrm-core.cyr` (error/util/udev/drm), 1,167 lines. Bodies byte-identical to 1.5.1 — only the version header moved. |
+| Binary size (DCE) | **140,776 B** (1.5.3) | Byte-identical to 1.5.2 — the 1.5.3 security fixes land in DCE-eliminated or already-live paths. `--agnos` 132,320 B, `--aarch64` 333,248 B. Dead-code floor 554 unreachable fns. |
+| `dist/agnodrm.cyr` size | 4,382 lines (1.5.3) | Full bundle = the 9 surviving modules. Plus `dist/agnodrm-core.cyr` (error/util/udev/drm), 1,196 lines. |
 | Fn-table utilization | 603 / 32,768 (2%) | Ceiling grew 8,192 → 32,768 in 6.5.x; count rose with the 6.5.35 stdlib snapshot + `args` |
 | Var-table | 393 / 8,192 (5%) | |
 | Fixup-table | 928 / 1,048,576 (<1%) | Ceiling grew 262,144 → 1,048,576 in 6.5.x |
 | String-data | 2,077 / 2,097,152 (<1%) | |
-| Code-size | 133,712 / 67,108,864 (<1%) | Ceiling grew 1,048,576 → 67,108,864 in 6.5.x |
+| Code-size | 134,320 / 67,108,864 (<1%) | Ceiling grew 1,048,576 → 67,108,864 in 6.5.x |
 | Compile time | ~460 ms | recorded at 1.0.0 closeout; not re-measured since |
-| Identifiers | 16,191 / 524,288 (3%) | |
+| Identifiers | 16,216 / 524,288 (3%) | |
 
 ## Module Count
 
@@ -53,13 +53,17 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 
 | Category | Count | Where |
 |---|---|---|
-| Integration tests passed | **93 / 93** | `cyrius test` — trimmed to the 9 survivors at 1.4.4 (was 252 for the 20-module surface) |
-| Fuzz harnesses | 2 | `fuzz/fuse_parse.fcyr`, `fuzz/journald_filter.fcyr` (the pam/audit/certpin/luks harnesses left with their modules at 1.4.4) |
+| Integration tests passed | **111 / 111** | `cyrius test` — trimmed to the 9 survivors at 1.4.4 (was 252 for the 20-module surface) |
+| Fuzz harnesses | 3 | `fuzz/fuse_parse.fcyr`, `fuzz/journald_filter.fcyr`, `fuzz/bootloader_cmdline.fcyr` (added 1.5.3, covering the kernel-cmdline denylist validator) |
 | Benchmarks | 18 (6 groups) | `tests/bcyr/bench_all.bcyr` (was 30 / 11 groups; `bench_compare` removed at 1.4.4) |
 
 ## Local Audit Gates (`scripts/audit.sh`)
 
-12 gates, all green at 1.5.2: syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → **fmt drift** → lint → vet → fuzz → benchmarks. Mirrors CI.
+12 gates, all green at 1.5.3: syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → **fmt drift** → **lint** → vet → fuzz → benchmarks. Mirrors CI.
+
+**Gate 8 (fmt drift)**, added 1.5.2, diffs the **`cyrfmt` binary's** output against every committed source file (`src/*.cyr`, `tests/tcyr/*.tcyr`, `tests/bcyr/*.bcyr`, `fuzz/*.fcyr`). It must call `cyrfmt` directly — `cyrius fmt <file>` is a silent no-op as of cyrius 6.5.35 (zero bytes, exit 0), which made the old CI gate diff an empty stream against every file and report all 14 as drifted when none had.
+
+**Gate 9 (lint)** was rewritten at 1.5.3. It had been **inert since it was written**: it ran `cyrius lint "$f" || fail`, but `cyrius lint` exits 0 even when it reports findings, so it could only fire if cyrlint failed to execute. It also covered `src/*.cyr` only. It now parses cyrlint's summary counters, gates **warnings and untracked deferrals**, and covers all four globs. CI's equivalent matched only `^\s*warn ` lines and so never saw deferrals — 15 had accumulated. Both gates now fail loudly if cyrlint's output shape changes, rather than silently passing.
 
 Gate 8 (fmt drift) was added at 1.5.2. It diffs the **`cyrfmt` binary's** output against every committed source file (same set as CI: `src/*.cyr`, `tests/tcyr/*.tcyr`, `tests/bcyr/*.bcyr`, `fuzz/*.fcyr`). Until 1.5.2 this check existed only in CI, which is why a broken fmt gate was not caught before a push. It must call `cyrfmt` directly — `cyrius fmt <file>` is a silent no-op as of cyrius 6.5.35 (zero bytes, exit 0), which made the old CI gate diff an empty stream against every file and report all 14 as drifted when none had. The gate fails **empty formatter output as a tooling error**, never as source drift.
 
@@ -110,6 +114,7 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
+| **1.5.3** | 2026-08-24 | **P(-1) audit / hardening sweep — 1 HIGH, 2 MEDIUM, 4 LOW, all closed.** F-5 (HIGH): `fuse_parse_proc_mounts` wrote one byte past its 8192-byte heap buffer when `/proc/mounts` filled it (~90 mounts — routine on container hosts); third instance of a class already fixed at 1.3.0 and 1.3.1, proven by heap canary. F-1 (MEDIUM): kernel-cmdline denylist had no `rdinit=` entry at all and enumerated only three `init=` shells — widened 21 → 48 entries, `rdinit=` matched by prefix. F-6 (MEDIUM): netns firewall port unvalidated into an `alloc(8)` scratch. Plus F-3/F-4 (drm getdents/ioctl hardening) and F-7 (netns prefix_len). **Two inert gates repaired**: `audit.sh`'s lint gate had never been able to fire (`cyrius lint` exits 0 on findings) and covered only `src/`; CI's missed deferral lines entirely — 15 had accumulated. 93 → 111 tests (11 verified to fail on unfixed sources), 2 → 3 fuzz harnesses, SECURITY-NOTES pruned to the 9 live modules. Perf: `validate_cmdline_safe` 452 → 627 ns, a deliberate trade for F-1 coverage. See CHANGELOG `[1.5.3]` and `docs/audit/2026-08-24-audit.md`. |
 | **1.5.2** | 2026-08-24 | **cyrius pin 6.5.27 → 6.5.35 + the agnos `_agnos_getenv` gap closed.** `[deps] stdlib` declared `io` but not `args`, and `lib/io.cyr`'s `getenv()` delegates to `args_agnos.cyr`'s `_agnos_getenv` under `#ifdef CYRIUS_TARGET_AGNOS` — so `cyrius build --agnos` emitted `undefined function '_agnos_getenv'` and any agnos `getenv()` would have jumped to an unresolved symbol. Latent since the agnos target was adopted at 1.4.0, hidden by a `lib sync --full` working-tree dump and by CI never cross-building `--agnos`. Vendored `./lib/` rebuilt clean and verified byte-identical to the 6.5.35 snapshot (35 files); stale `patra 1.13.0` shadow cleared. Audit clean (11/11), 93 tests, all three targets warning-free (x86_64 140,776 B / agnos 132,320 B / aarch64 333,248 B). Dist bundles regenerated and consumer-verified; core `.deps` gained `args` + `syscalls`. capability-map + state.md reconciled (both had shipped stale at 1.5.1). Bench: toolchain-only wins, no regressions (`compare_versions` −26.8%, `validate_ver_good` −16.5%). See CHANGELOG `[1.5.2]`. |
 | **1.5.1** | 2026-08-17 | **cyrius pin 6.4.50 → 6.5.27**, matching the rest of the AGNOS desktop stack. Build 123,848 → 140,752 B; tests green. *(Shipped without the mandatory bench-history row, capability-map regen, or state.md refresh — all three reconciled at 1.5.2.)* |
 | **1.5.0** | 2026-07-11 | **cyrius pin 6.4.25 → 6.4.50 + three ungated agnos `sys_open` sites closed.** The filed P1 (`drm_open`) plus two stragglers the 1.4.6 sweep missed (`update_load_state`, `update_check`) — each ran a raw Linux-shape `sys_open` unconditionally (garbage on agnos's `(name, namelen, flags)` ABI). All three now carry the house `#ifdef CYRIUS_TARGET_AGNOS` stub returning `drm_err_not_supported(...)`, Linux body under `#ifndef`. Found by a full-module agnos-gating audit; the other seven modules audited clean. Vendored `./lib/` refreshed to 6.4.50 (31 files). Audit clean (11/11), 93 tests, both `--agnos` (106,872 B) and Linux (119,648 B DCE) builds green. Dist bundles regenerated; core `.deps` recomputed. Bench: broad toolchain wins (`ok_create` −69%, `validate_ver_good` −51%); two stdlib string micro-ops slower (`streq_16ch`/`strlen_16ch`, stdlib codegen, not agnodrm source). See CHANGELOG `[1.5.0]`. |
@@ -202,4 +207,4 @@ V1.2.0 (multi-profile `cyrius distlib`) shipped 2026-05-09. V1.2.1 ship batched 
 
 ## Last Security Audit
 
-[`docs/audit/2026-05-09-audit.md`](../audit/2026-05-09-audit.md) — P(-1) hardening pass at 1.1.14. Pairs with [`2026-05-09-cve-landscape.md`](../audit/2026-05-09-cve-landscape.md) (CVE class survey) and [`reviews/2026-05-09-internal-review.md`](reviews/2026-05-09-internal-review.md) (internal deep review). 0 critical / 0 high / 0 medium findings; 3 LOW + 1 INFO closed in this release. Prior round: [`docs/audit/2026-04-26-audit.md`](../audit/2026-04-26-audit.md) at 1.0.1.
+[`docs/audit/2026-08-24-audit.md`](../audit/2026-08-24-audit.md) — P(-1) sweep at 1.5.3. **1 HIGH / 2 MEDIUM / 4 LOW, all closed.** F-5 (HIGH) was a 1-byte heap overflow in `fuse_parse_proc_mounts` (third instance of a class already fixed twice, at 1.3.0 and 1.3.1), proven with a heap-canary harness. F-1/F-6 (MEDIUM) were the kernel-cmdline denylist gaps (`rdinit=` absent entirely) and the unvalidated netns firewall port. The sweep also found **two inert quality gates** — `audit.sh`'s lint gate could never fire, and CI's never matched deferral lines — which is why several findings survived earlier rounds. Prior round: [`docs/audit/2026-06-01-audit.md`](../audit/2026-06-01-audit.md) at 1.3.0; before that [`2026-05-09-audit.md`](../audit/2026-05-09-audit.md) at 1.1.14.

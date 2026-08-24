@@ -12,7 +12,7 @@
 
 # Socket-syscall numbers, formerly from src/syscall_arch.cyr (deleted in the
 # agnosys → agnodrm decomposition — the per-arch syscall layer moved to cyrius).
-# journald is in the deferred Linux-eccentric group (post-v1, no consumer), so
+# journald is in the deferred Linux-eccentric group (roadmap.md Scope; no consumer), so
 # the two x86_64 numbers are inlined to keep it self-contained. (Linux x86_64
 # only — journald is systemd-journal-specific; an aarch64 peer isn't tracked.)
 enum JournaldSyscall {
