@@ -13,6 +13,24 @@
 
 Numbers come from `CYRIUS_STATS=1 cyrius build <src> <out>`.
 
+> **Refresh note (1.5.2, 2026-08-24, Cyrius 6.5.35).** The gate build's current
+> numbers are below. The per-profile tables further down **predate the 1.4.4
+> decomposition** — they measure the old 20-module `agnosys` surface and the
+> `security` / `storage` / `trust` / `system` profile bundles, none of which
+> exist any more (only `[lib.core]` survives). They are kept as history; a full
+> rewrite against the 9-module surface is a closeout-pass item, not a patch-bump
+> one. Note also that 6.5.x raised several ceilings again: `fn_table`
+> 8,192 → 32,768, `identifiers` 131,072 → 524,288, `fixup_table`
+> 262,144 → 1,048,576, `code_size` 1,048,576 → 67,108,864.
+>
+> | Build | fn_table | identifiers | var_table | fixup_table | string_data | code_size |
+> |-------|---------:|------------:|----------:|------------:|------------:|----------:|
+> | `src/main.cyr` (device-model smoke: error+util+udev+drm) | 603 / 32 768 · 2% | 16 191 / 524 288 · 3% | 393 / 8 192 · 5% | 928 / 1 048 576 · <1% | 2 077 / 2 097 152 · <1% | 133 712 / 67 108 864 · <1% |
+>
+> Highest utilization is `var_table` at 5% — the only table whose ceiling did
+> not grow in 6.5.x, and still far under the 85% gate.
+
+
 ## Builds measured
 
 All measurements are **core-then-profile** — i.e. consumers are expected to include `dist/agnosys-core.cyr` plus their domain profile. Standalone profile measurements would fail compile (security needs core's `ENOSYS`, system needs core's `SYS_SOCKET_NR`, etc. — by design).

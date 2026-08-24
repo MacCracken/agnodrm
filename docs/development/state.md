@@ -2,7 +2,7 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-07-11 (1.5.0)
+**Last refresh:** 2026-08-24 (1.5.2). *(1.5.1 shipped without a state.md / capability-map / bench-history refresh; this pass reconciles all three.)*
 
 > **Renamed `agnosys` → `agnodrm` at 1.4.4** — decomposed from the AGNOS kernel-interface library to the **device / DRM model** (udev + DRM/KMS on error/util support). 15 modules moved to their proper homes (trust→sigil, security/mac/audit→kavach, pam→aegis, logging→sakshi, syscall layer→cyrius). See the [decomposition plan](2026-06-18-agnosys-to-agnodrm-decomposition-plan.md). Metrics below predating 1.4.4 describe the old 20-module surface and are being refreshed as touched.
 
@@ -10,23 +10,24 @@
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.5.0** |
-| `cyrius.cyml [package].cyrius` | **6.4.50** |
+| `VERSION` | **1.5.2** |
+| `cyrius.cyml [package].cyrius` | **6.5.35** |
 | Min Cyrius (consumer) | 6.2.11 |
-| Last cyrius bump | 6.4.25 → 6.4.50 at 1.5.0 (2026-07-11; 6.4.x maintenance line, bug-fix/optimization patches only). Pin refresh shipped **alongside** the 1.5.0 agnos-gating fixes (three ungated Linux `sys_open` sites closed: `drm_open`, `update_load_state`, `update_check` — see CHANGELOG `[1.5.0]`). Vendored `./lib/` re-populated via `cyrius deps` (31 files, 6.4.50 snapshot). Audit clean (11/11), 93 tests, both `--agnos` and Linux builds green; dist bundles regenerated (core `.deps` recomputed by 6.4.50 distlib). **Perf:** broad wins over the last recorded baseline (`ok_create` −69%, `from_errno` −61%, `validate_ver_good` −51%, `compare_versions` −39%); two stdlib string micro-ops regressed (`streq_16ch` 53→72 ns, `strlen_16ch` 11→21 ns — stdlib codegen, not agnodrm source). Prior: 6.2.11 → 6.4.25 at 1.4.6 (agnos-readiness sweep — Linux-only device/system modules build `--agnos`), 6.2.1 → 6.2.11 at 1.4.3 (6.2.x maintenance), 6.1.23 → 6.2.1 at 1.4.2 (dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 at 1.4.1 (first 6.1.x; **v6.0.64 thread-safe allocator** — `[deps] stdlib += atomic`). |
+| Last cyrius bump | 6.5.27 → **6.5.35** at 1.5.2 (2026-08-24; 6.5.x maintenance line, current release). Vendored `./lib/` rebuilt from a clean `rm -rf lib && cyrius deps` and verified **byte-identical** to the 6.5.35 toolchain snapshot — 35 files (31 + the 4-file `args` family). This also cleared a stale `patra 1.13.0` (pinned: 1.13.8) shadow the prior working-tree `lib sync --full` dump carried. Shipped **alongside** the `[deps] stdlib += args` fix that resolves `_agnos_getenv` on agnos builds (see CHANGELOG `[1.5.2]`). Audit clean (11/11), 93 tests, all three targets (x86_64 / aarch64 / agnos) build warning-free; dist bundles regenerated (core `.deps` gained `args` + `syscalls`). **Perf:** toolchain-only wins — `compare_versions` −26.8%, `validate_ver_good` −16.5%, `is_dangerous_token_miss` −12.6%, `is_dangerous_token_hit` −10.3%; no regressions (`parse_subsystem` +2 ns is noise, matching its 1.5.0 value). Prior: 6.4.50 → 6.5.27 at 1.5.1 (2026-08-17, matching the AGNOS desktop stack), 6.4.25 → 6.4.50 at 1.5.0 (shipped with the three ungated agnos `sys_open` fixes), 6.2.11 → 6.4.25 at 1.4.6 (agnos-readiness sweep), 6.2.1 → 6.2.11 at 1.4.3 (6.2.x maintenance), 6.1.23 → 6.2.1 at 1.4.2 (dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 at 1.4.1 (first 6.1.x; **v6.0.64 thread-safe allocator** — `[deps] stdlib += atomic`). |
 
 ## Build Metrics
 
 | Metric | Value | Notes |
 |---|---|---|
-| Binary size (DCE) | **119,648 B** (1.5.0) | The device-model smoke `main.cyr` over error/util/udev/drm. Was 128,728 B at 1.4.4; the drop is the 6.4.50 codegen + DCE (503 unreachable fns NOPed). `--agnos` smoke build 106,872 B. |
-| `dist/agnodrm.cyr` size | 4,220 lines (1.5.0) | Full bundle = the 9 surviving modules (+ the three 1.5.0 agnos gates). Plus `dist/agnodrm-core.cyr` (error/util/udev/drm), 1,126 lines. |
-| Fn-table utilization | 433 / 8,192 (5%) | +9 fns since 1.2.7 (stdlib snapshot growth pulled into the include graph) |
-| Var-table | 342 / 8,192 | |
-| Fixup-table | 865 / 262,144 | |
-| String-data | 1,494 / 2,097,152 | |
-| Code-size | 97,928 / 1,048,576 | |
-| Compile time | ~460 ms | recorded at 1.0.0 closeout |
+| Binary size (DCE) | **140,776 B** (1.5.2) | The device-model smoke `main.cyr` over error/util/udev/drm. Was 140,744 B at the 6.5.27 pin measured on this host (+32 B from `args`); the step up from 1.5.0's 119,648 B is the 6.5.27 toolchain, absorbed at 1.5.1. Dead-code floor 554 unreachable fns / 103,740 bytes NOPed. `--agnos` 132,320 B (+4,096 B — the `getenv` path now resolves), `--aarch64` 333,248 B. |
+| `dist/agnodrm.cyr` size | 4,273 lines (1.5.2) | Full bundle = the 9 surviving modules. Plus `dist/agnodrm-core.cyr` (error/util/udev/drm), 1,167 lines. Bodies byte-identical to 1.5.1 — only the version header moved. |
+| Fn-table utilization | 603 / 32,768 (2%) | Ceiling grew 8,192 → 32,768 in 6.5.x; count rose with the 6.5.35 stdlib snapshot + `args` |
+| Var-table | 393 / 8,192 (5%) | |
+| Fixup-table | 928 / 1,048,576 (<1%) | Ceiling grew 262,144 → 1,048,576 in 6.5.x |
+| String-data | 2,077 / 2,097,152 (<1%) | |
+| Code-size | 133,712 / 67,108,864 (<1%) | Ceiling grew 1,048,576 → 67,108,864 in 6.5.x |
+| Compile time | ~460 ms | recorded at 1.0.0 closeout; not re-measured since |
+| Identifiers | 16,191 / 524,288 (3%) | |
 
 ## Module Count
 
@@ -68,9 +69,9 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 ## Dependencies
 
 - **Runtime**: 0
-- **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `fmt`, `vec`, `str`, `io`, `ct`, `slice`, `fnptr`, `json`, `tagged`, `assert`, `bench`, `fs`, `hashmap`, `net`, `process` (18 — `ct` added 1.1.3 for `ct_eq_bytes`; `slice` added 1.1.11 for `slice<u8>` indexing; `fnptr`/`json`/`tagged` added 1.1.12 for `#derive(Serialize)`; `assert`/`bench`/`fs`/`hashmap`/`net`/`process` added across 1.2.x for downstream-bundle completeness)
+- **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `atomic`, `fmt`, `vec`, `str`, `io`, `ct`, `slice`, `fnptr`, `tagged`, `assert`, `bench`, `fs`, `hashmap`, `net`, `process`, `args` (**19** — `ct` added 1.1.3 for `ct_eq_bytes`; `slice` added 1.1.11 for `slice<u8>` indexing; `fnptr`/`tagged` added 1.1.12 for `#derive(Serialize)`; `assert`/`bench`/`fs`/`hashmap`/`net`/`process` added across 1.2.x for downstream-bundle completeness; `atomic` added 1.4.1 for the thread-safe allocator; stale `json` dropped at 1.4.2; **`args` added 1.5.2** — `lib/io.cyr`'s `getenv()` delegates to `args_agnos.cyr`'s `_agnos_getenv` on the agnos target, which was otherwise an undefined symbol)
 - **Git-pinned**: 0 (no `[deps.<name>]` stanzas; no `cyrius.lock` needed today)
-- **Vendored stdlib refresh** (last): 2026-07-11 to cyrius 6.4.50 snapshot (full `./lib/` re-populated via `cyrius deps` after `rm -rf lib`; 31 stdlib files). `./lib/` is gitignored — CI regenerates it fresh from the pin each run, so the working-tree copy is a dev convenience only. Prior: 2026-06-03 to 6.0.52 (29 files).
+- **Vendored stdlib refresh** (last): 2026-08-24 to cyrius 6.5.35 snapshot (`rm -rf lib && cyrius deps`; **35** stdlib files) — verified byte-identical to `~/.cyrius/versions/6.5.35/lib`. `./lib/` is gitignored — CI regenerates it fresh from the pin each run, so the working-tree copy is a dev convenience only. **Keep it a `cyrius deps` set, not a `cyrius lib sync --full` dump:** the full dump is a superset that masks missing `[deps] stdlib` entries (that is exactly how the `args` gap survived — see CHANGELOG `[1.5.2]`). Prior: 2026-07-11 to 6.4.50 (31 files), 2026-06-03 to 6.0.52 (29 files).
 
 ## Consumer Status
 
@@ -104,6 +105,8 @@ Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 | Tag | Date | Headline |
 |---|---|---|
+| **1.5.2** | 2026-08-24 | **cyrius pin 6.5.27 → 6.5.35 + the agnos `_agnos_getenv` gap closed.** `[deps] stdlib` declared `io` but not `args`, and `lib/io.cyr`'s `getenv()` delegates to `args_agnos.cyr`'s `_agnos_getenv` under `#ifdef CYRIUS_TARGET_AGNOS` — so `cyrius build --agnos` emitted `undefined function '_agnos_getenv'` and any agnos `getenv()` would have jumped to an unresolved symbol. Latent since the agnos target was adopted at 1.4.0, hidden by a `lib sync --full` working-tree dump and by CI never cross-building `--agnos`. Vendored `./lib/` rebuilt clean and verified byte-identical to the 6.5.35 snapshot (35 files); stale `patra 1.13.0` shadow cleared. Audit clean (11/11), 93 tests, all three targets warning-free (x86_64 140,776 B / agnos 132,320 B / aarch64 333,248 B). Dist bundles regenerated and consumer-verified; core `.deps` gained `args` + `syscalls`. capability-map + state.md reconciled (both had shipped stale at 1.5.1). Bench: toolchain-only wins, no regressions (`compare_versions` −26.8%, `validate_ver_good` −16.5%). See CHANGELOG `[1.5.2]`. |
+| **1.5.1** | 2026-08-17 | **cyrius pin 6.4.50 → 6.5.27**, matching the rest of the AGNOS desktop stack. Build 123,848 → 140,752 B; tests green. *(Shipped without the mandatory bench-history row, capability-map regen, or state.md refresh — all three reconciled at 1.5.2.)* |
 | **1.5.0** | 2026-07-11 | **cyrius pin 6.4.25 → 6.4.50 + three ungated agnos `sys_open` sites closed.** The filed P1 (`drm_open`) plus two stragglers the 1.4.6 sweep missed (`update_load_state`, `update_check`) — each ran a raw Linux-shape `sys_open` unconditionally (garbage on agnos's `(name, namelen, flags)` ABI). All three now carry the house `#ifdef CYRIUS_TARGET_AGNOS` stub returning `drm_err_not_supported(...)`, Linux body under `#ifndef`. Found by a full-module agnos-gating audit; the other seven modules audited clean. Vendored `./lib/` refreshed to 6.4.50 (31 files). Audit clean (11/11), 93 tests, both `--agnos` (106,872 B) and Linux (119,648 B DCE) builds green. Dist bundles regenerated; core `.deps` recomputed. Bench: broad toolchain wins (`ok_create` −69%, `validate_ver_good` −51%); two stdlib string micro-ops slower (`streq_16ch`/`strlen_16ch`, stdlib codegen, not agnodrm source). See CHANGELOG `[1.5.0]`. |
 | **1.4.6** | 2026-07-08 | **agnos-readiness: Linux-only device/system modules build `--agnos`** — drm/udev/fuse/bootloader/netns/journald/update functions touching Linux syscalls/paths guarded behind `#ifdef CYRIUS_TARGET_AGNOS` "not supported" stubs, Linux body byte-identical under `#ifndef`. cyrius pin 6.2.11 → 6.4.25. (Three `sys_open` stragglers slipped this sweep — closed at 1.5.0.) |
 | **1.4.5** | 2026-07-03 | **Namespaced the error family** (`ERR_*` → `DRM_ERR_*`, `err_*` → `drm_err_*`, `syserr_*` → `drm_syserr_*`) to end symbol collisions when co-included with sibling libs (notably agnostik). Dist bundles regenerated; downstream consumers (aegis) migrate references. |

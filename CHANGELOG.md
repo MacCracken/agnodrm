@@ -7,6 +7,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] — 2026-08-24
+
+### Fixed
+
+- **agnos builds referenced an undefined `_agnos_getenv`.** `[deps] stdlib`
+  declared `io` but never `args`, and `lib/io.cyr`'s `getenv()` delegates to
+  `args_agnos.cyr`'s `_agnos_getenv` under `#ifdef CYRIUS_TARGET_AGNOS`
+  (a forward fn ref — `io` precedes `args` in the stdlib include order; cyrius
+  v6.0.87, ABI §4.6). With the declared dep set, `cyrius build --agnos
+  src/main.cyr` emitted `warning: undefined function '_agnos_getenv'` — so any
+  `getenv()` on agnos would have jumped to an unresolved symbol.
+  Fixed by adding `"args"` to `[deps] stdlib`. Two things had hidden this:
+  the working-tree `./lib/` was a `cyrius lib sync --full` dump (a superset
+  that happened to carry `args_agnos.cyr`) rather than the `cyrius deps` set
+  CI reproduces, and **CI never cross-builds `--agnos`** (only `--aarch64`),
+  so the gate that would have caught it does not exist. Latent since the agnos
+  target was adopted at 1.4.0; Linux and aarch64 were never affected.
+  All three targets now build warning-free.
+
+### Changed
+
+- **cyrius pin 6.5.27 → 6.5.35** (current release; 6.5.x maintenance line).
+  Vendored `./lib/` rebuilt from a clean `rm -rf lib && cyrius deps` and
+  verified **byte-identical** to the 6.5.35 toolchain snapshot — this also
+  cleared a stale `patra 1.13.0` (pinned: 1.13.8) shadow the old working-tree
+  dump carried. Snapshot is 35 files (31 + the 4-file `args` family).
+- `[deps] stdlib` 18 → 19 entries (`+args`). `dist/agnodrm.deps` picks up
+  `args`; `dist/agnodrm-core.deps` picks up `args` **and `syscalls`** — the
+  6.5.35 distlib computes a more accurate leaf set, and `syscalls` was
+  genuinely missing from the core sidecar before.
+- `docs/development/capability-map.md` regenerated. It had shipped at 1.5.1
+  still stamped `1.5.0` (the regen step was missed), so `scripts/audit.sh`
+  gate 3 failed on a clean tree at 1.5.1. **No capability drift** — only the
+  generated header (timestamp / commit / version) changed.
+- Dist bundles version-stamped to 1.5.2. Module bodies are byte-identical to
+  1.5.1 (no `src/*.cyr` changes in this release).
+
+### Performance
+
+Toolchain-only wins from 6.5.35 codegen; no `src/*.cyr` changes. Measured on
+the same host, 18 benchmarks, 6 groups (`tests/bcyr/bench_all.bcyr`), against a
+6.5.27-vendored-lib baseline taken immediately before the bump:
+
+| Benchmark | 6.5.27 | 6.5.35 | Δ |
+|---|---:|---:|---:|
+| `compare_versions` | 153 ns | 112 ns | **−26.8%** |
+| `validate_ver_good` | 85 ns | 71 ns | **−16.5%** |
+| `is_dangerous_token_miss` | 111 ns | 97 ns | **−12.6%** |
+| `is_dangerous_token_hit` | 116 ns | 104 ns | **−10.3%** |
+| `validate_cmdline_safe` | 447 ns | 427 ns | −4.5% |
+| `strlen_16ch` | 23 ns | 22 ns | −4.3% |
+| `streq_16ch` | 75 ns | 72 ns | −4.0% |
+| `parse_subsystem` | 41 ns | 43 ns | +4.9% (noise) |
+
+`parse_subsystem` moved 2 ns on a ~40 ns benchmark and matches its recorded
+1.5.0 value (43 ns) — run-to-run noise, not a regression. The remaining 10
+benchmarks are flat. Row appended to `bench-history.csv`.
+
+Note: **1.5.1 shipped without a `bench-history.csv` row** (the mandatory
+per-version bench step was missed), so the CSV's previous row is 1.5.0's.
+The baseline in the table above was therefore measured fresh rather than read
+from history.
+
+### Build Metrics
+
+| Target | Size | Δ |
+|---|---:|---:|
+| x86_64 (DCE) | 140,776 B | +32 B vs 1.5.1's pin measured here (140,744 B) |
+| agnos (DCE) | 132,320 B | +4,096 B — the `getenv` path now actually resolves |
+| aarch64 (DCE) | 333,248 B | +32 B |
+
+Dead code floor (x86_64): 554 unreachable fns, 103,740 bytes NOPed.
+
+Compiler-table utilization at the new pin (ceilings grew in 6.5.x):
+`fn_table` 603 / 32,768 · 2% — `identifiers` 16,191 / 524,288 · 3% —
+`var_table` 393 / 8,192 · 5% — `fixup_table` 928 / 1,048,576 · <1% —
+`string_data` 2,077 / 2,097,152 · <1% — `code_size` 133,712 / 67,108,864 · <1%.
+
+### Verification
+
+`scripts/audit.sh` clean — all 11 gates. 93 / 93 tests, 2 fuzz harnesses,
+18 benchmarks, 315 public fns (API surface unchanged, no drift). x86_64,
+aarch64, and agnos all build warning-free. Both dist bundles additionally
+verified by compiling and running a real consumer against them.
+
 ## [1.5.1] - 2026-08-17
 
 ### Changed

@@ -18,3 +18,4 @@ fnptr
 assert
 bench
 net
+args

@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "agnodrm — AGNOS device / DRM model (udev enumeration + DRM/KMS device-node access)"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.5.27"
+cyrius = "6.5.35"
 repository = "https://github.com/MacCracken/agnodrm"
 
 [build]
@@ -51,4 +51,4 @@ modules = [
 ]
 
 [deps]
-stdlib = ["syscalls", "string", "alloc", "atomic", "fmt", "vec", "str", "io", "ct", "slice", "fnptr", "tagged", "assert", "bench", "fs", "hashmap", "net", "process"]
+stdlib = ["syscalls", "string", "alloc", "atomic", "fmt", "vec", "str", "io", "ct", "slice", "fnptr", "tagged", "assert", "bench", "fs", "hashmap", "net", "process", "args"]
