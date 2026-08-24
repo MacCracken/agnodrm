@@ -96,7 +96,6 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 - Do not define functions with 7+ parameters — split into `module_thing_new(...)` + `module_thing_set_*(...)` pattern
 - Do not use `sys_system()` with unsanitized input — command injection risk
 - Do not trust external data (file content, network input, user args) without validation
-- Do not use `break` in while loops with `var` declarations — use flag + `continue`
 
 ## Process
 
@@ -189,6 +188,7 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 - **`return;` without value is invalid** — always `return 0;`
 - **All `var` declarations are function-scoped** — no block scoping
 - **Max limits per compilation unit**: 4,096 variables, 1,024 functions, 4,096 initialized globals — guarded by `cyrius capacity --check`
+- **`break` in `while` loops is fine** (verified 2026-08-24 against cyrius 6.5.35). A rule forbidding `break` inside a `while` loop that declares `var`s — "use flag + `continue`" — was carried as a hard constraint from 2026-04-26 to 1.5.3. It does not reproduce: the break form and the flag+continue form produce identical results on **x86_64 and aarch64**, `defer` blocks registered before the loop still run on the break path, and vars declared after the break statement behave correctly. Do not re-add it without a failing reproducer; the evidence is in [`docs/audit/2026-08-24-audit.md`](docs/audit/2026-08-24-audit.md).
 - **Initialized-globals counting rule** — only a top-level `var NAME = <non-literal>;` (call / identifier / expression initializer) consumes an initialized-globals slot; a bare integer-literal init (`var x = 42;`) takes the static-init fast path and enum members are const-folded, so neither counts. See the cyrius guide's **Global Initializers** section (`docs/guides/cyrius-guide.md` in the cyrius repo)
 
 ## CI / Release

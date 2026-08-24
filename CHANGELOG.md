@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Retired the `break`-in-`var`-declaring-`while`-loop rule from CLAUDE.md.**
+  It had been a hard constraint since 2026-04-26 ("use flag + `continue`"),
+  carried into the 1.5.3 audit, where a brace-matching analyser found 10 loops
+  violating it — all of them external-input parsers in `bootloader`, `fuse`,
+  `journald`, and `udev`. The rule does not reproduce on cyrius 6.5.35 and is
+  retired rather than churning ten working parsers to satisfy it.
+
+  Retired on evidence, not on a single test. Verified:
+  - **Both architectures.** A 10-case harness (simple break, the nested
+    inner-loop shape from `bootloader_is_dangerous_token`, vars declared
+    *after* the break statement, loop vars read after a break exit, two
+    sequential breaking loops) produces identical results in the break form
+    and the prescribed flag+continue form on **x86_64 and aarch64** — the
+    latter run under `qemu-aarch64`, and the arch that carried the historical
+    cyrius codegen bug (the 1.1.8 → 1.1.9 sub-8-byte struct-load incident).
+  - **`defer` interaction**, the plausible original motive: a `defer` block
+    registered before the loop still runs on the break path.
+  - **The real code, on both arches.** The full 111-assertion integration
+    suite and all 3 fuzz harnesses pass under `qemu-aarch64`, exercising every
+    one of the 10 sites.
+  - **Origin.** The rule entered in the 1.0.1 CLAUDE.md restructure
+    (`562a014`) as general house guidance; none of that release's audit
+    findings (F-1..F-6) describe it, and no issue, ADR, or architecture note
+    ever recorded a reproducer.
+
+  CLAUDE.md's Cyrius Conventions section now records the verified behaviour in
+  its place, so the rule is not re-added from folklore. Closes the follow-up
+  opened at 1.5.3.
+
 ## [1.5.3] — 2026-08-24
 
 P(-1) audit / hardening sweep. **1 HIGH, 2 MEDIUM, 4 LOW** security findings,

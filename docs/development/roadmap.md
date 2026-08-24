@@ -545,13 +545,22 @@ Tested empirically against cyrius 6.5.35: the forbidden shape and the
 prescribed flag+continue shape produce **identical results**. The rule did not
 reproduce.
 
-- [ ] Determine whether the underlying codegen bug was fixed upstream (retire
-  the rule) or whether it guards a narrower shape than the analyser modelled
-  (document which shape, and re-check the 10 sites against it).
+- [x] **Resolved 2026-08-24 — rule retired.** Re-tested far past the original
+  single case: a 10-shape harness (simple break, the nested inner-loop shape,
+  vars declared *after* the break, loop vars read after a break exit, two
+  sequential breaking loops) gives identical results in both forms on
+  **x86_64 and aarch64** (the latter under `qemu-aarch64` — the arch that
+  carried the historical sub-8-byte struct-load codegen bug). A `defer`
+  registered before the loop still runs on the break path, which was the
+  plausible original motive. The real code was checked too: the full
+  111-assertion suite and all 3 fuzz harnesses pass under `qemu-aarch64`,
+  exercising all 10 sites. Origin research found the rule entered as general
+  house guidance in the 1.0.1 CLAUDE.md restructure (`562a014`) with no
+  reproducer recorded in any audit, issue, or ADR.
 
-Until that is resolved the rule stands and the 10 sites are grandfathered —
-they were left unchanged rather than churning working parsers on a rule that
-may be stale. See `docs/audit/2026-08-24-audit.md` § *Reviewed and found clean*.
+  The rule is removed from CLAUDE.md § Rules; the Cyrius Conventions section
+  records the verified behaviour in its place so it is not re-added from
+  folklore. The 10 sites stay as they are. See CHANGELOG `[Unreleased]`.
 
 ### V2.0 — Breaking API cleanup
 
