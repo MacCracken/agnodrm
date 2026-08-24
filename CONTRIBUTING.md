@@ -14,7 +14,7 @@ Thank you for your interest in contributing.
 2. Create a feature branch from `main`
 3. `cyrius deps` to populate `./lib/` from the pinned cyrius stdlib
 4. Make your changes under `src/`, `tests/`, `fuzz/`, or `docs/`
-5. **Run `scripts/audit.sh`** — 11 gates, same as CI (syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → lint → vet → fuzz → benchmarks)
+5. **Run `scripts/audit.sh`** — 12 gates, same as CI (syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks)
 6. If you renamed or removed a public function, update the snapshot intentionally: `scripts/check-api-surface.sh --update` and record the rename in `CHANGELOG.md` under `Breaking`
 7. If any `src/*.cyr` changed, regenerate all bundles: `cyrius distlib && for p in core security storage trust system; do cyrius distlib $p; done`
 8. If `src/*.cyr` comments / public surface changed, regenerate the prose + capability map: `scripts/gen-api-surface-prose.sh && scripts/gen-capability-map.sh`

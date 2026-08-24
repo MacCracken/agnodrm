@@ -59,12 +59,17 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 
 ## Local Audit Gates (`scripts/audit.sh`)
 
-11 gates, all green at 1.2.7: syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → lint → vet → fuzz → benchmarks. Mirrors CI.
+12 gates, all green at 1.5.2: syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → **fmt drift** → lint → vet → fuzz → benchmarks. Mirrors CI.
+
+Gate 8 (fmt drift) was added at 1.5.2. It diffs the **`cyrfmt` binary's** output against every committed source file (same set as CI: `src/*.cyr`, `tests/tcyr/*.tcyr`, `tests/bcyr/*.bcyr`, `fuzz/*.fcyr`). Until 1.5.2 this check existed only in CI, which is why a broken fmt gate was not caught before a push. It must call `cyrfmt` directly — `cyrius fmt <file>` is a silent no-op as of cyrius 6.5.35 (zero bytes, exit 0), which made the old CI gate diff an empty stream against every file and report all 14 as drifted when none had. The gate fails **empty formatter output as a tooling error**, never as source drift.
+
+Gate 5 (build) covers **three targets**: x86_64, aarch64 (skipped when `cycc_aarch64` is absent locally), and **agnos** (unconditional — `--agnos` is the stock x86_64 backend plus the `CYRIUS_TARGET_AGNOS` define, so it needs no extra compiler binary). Each build log is run through `check_build_log`, which promotes two warn-only-but-exit-0 diagnostics to hard failures: `non-exhaustive` matches, and **`warning: undefined function`** — the shape that let `_agnos_getenv` ship at 1.5.2 (see CHANGELOG `[Unreleased]`).
 
 ## CI Workflow Status
 
-- `.github/workflows/ci.yml` — yukti-pattern: tarball install via cyrius.cyml-derived version, deps + verify-hashes, fmt-check, lint warn-fail, vet, dist staleness gate, DCE build, ELF magic, aarch64 best-effort cross, smoke, integration, fuzz, bench, security scan, docs check.
-- `.github/workflows/release.yml` — accepts `vX.Y.Z` and `X.Y.Z`; verify-version, install toolchain, deps + verify, DCE build, aarch64 best-effort, tests, fuzz, regenerate dist, archive (source tar + bundled `.cyr` + prebuilt x86_64 + aarch64 binaries + cyrius.lock + SHA256SUMS).
+- `.github/workflows/ci.yml` — yukti-pattern: tarball install via cyrius.cyml-derived version, deps + verify-hashes, fmt-check, lint warn-fail, vet, dist staleness gate, DCE build, ELF magic, aarch64 best-effort cross, **agnos cross (unconditional)**, smoke, integration, fuzz, bench, security scan, docs check.
+- `.github/workflows/release.yml` — accepts `vX.Y.Z` and `X.Y.Z`; verify-version, install toolchain, deps + verify, DCE build, aarch64 best-effort, **agnos cross (verify only, not shipped)**, tests, fuzz, regenerate dist, archive (source tar + bundled `.cyr` + prebuilt x86_64 + aarch64 binaries + cyrius.lock + SHA256SUMS).
+- **Cross-target build gates.** Every build step in both workflows captures its log to a file (never a `| tee` pipe — the default step shell is `bash -e` with no `pipefail`, which would mask the compiler's exit status behind tee's) and fails on `warning: undefined function`. Release ships x86_64 + aarch64 binaries; the agnos build is verified but not archived, since agnos consumers build the `.cyr` bundle themselves.
 
 ## Dependencies
 

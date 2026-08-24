@@ -7,9 +7,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`cyrius build --agnos` is now a build gate — in CI, in the release
+  workflow, and in `scripts/audit.sh`.** 1.5.2 fixed the undefined
+  `_agnos_getenv` but left the missing gate: agnodrm carries
+  `#ifdef CYRIUS_TARGET_AGNOS` branches across `drm` / `udev` / `fuse` /
+  `bootloader` / `netns` / `journald` / `update` (added at 1.4.6 and 1.5.0),
+  and nothing ever compiled that configuration. Now:
+  - `scripts/audit.sh` gate 5 builds `--agnos` alongside x86_64 and aarch64,
+    and verifies the ELF magic. The gate runs **unconditionally** — unlike
+    `--aarch64`, `--agnos` needs no extra compiler binary (it is the stock
+    x86_64 backend plus the `CYRIUS_TARGET_AGNOS` define), so there is no
+    `cycc_*` presence check to skip it.
+  - `ci.yml` gains a `Cross-build agnos` step after `Cross-build aarch64`.
+  - `release.yml` gains `Cross-build agnos (verify only)`. The build is
+    verified, **not shipped**: `build/agnodrm` is a smoke-test binary for a
+    library, and agnos consumers take the `.cyr` bundle and build it
+    themselves, so an agnos ELF in the release assets would carry no
+    consumer value. What the tag needs to guarantee is that its source
+    compiles for agnos and resolves every symbol it calls.
+- **Warn-only undefined symbols are now a hard failure on every target.**
+  The exit code was never sufficient: cyrius makes a *reachable* undefined
+  function a build error, but when DCE proves the call site unreachable it
+  only emits `warning: undefined function 'X'` and exits 0. That is exactly
+  how `_agnos_getenv` shipped. All build steps (x86_64, aarch64, agnos) in
+  `audit.sh`, `ci.yml`, and `release.yml` now grep the build log and fail on
+  it. In `audit.sh` this is factored into a `check_build_log` helper that
+  also carries the pre-existing `non-exhaustive` match promotion.
+
+### Fixed
+
+- **CI build steps could swallow a compiler failure.** The new log-grepping
+  gates capture build output to a file rather than piping through `tee`: the
+  default GitHub Actions step shell is `bash -e` with **no** `pipefail`, so
+  `cyrius build ... | tee log` would have reported tee's exit status and
+  masked a failing build. Applied to the x86_64 and aarch64 steps as well as
+  the new agnos one.
+
 ## [1.5.2] — 2026-08-24
 
 ### Fixed
+
+- **CI's fmt gate was reporting false drift on every file.** The 6.5.27 → 6.5.35
+  bump turned the `cyrius fmt <file>` subcommand into a silent no-op — it emits
+  zero bytes and exits 0. The gate did
+  `diff <(cyrius fmt "$f" 2>/dev/null) "$f"`, so it was diffing an empty stream
+  against all 14 source files and failing them all with `needs fmt`. **There
+  was no actual formatting drift** — every file already matches `cyrfmt` output
+  byte-for-byte. The gate now invokes the `cyrfmt` binary directly (it still
+  writes formatted source to stdout) and, critically, **fails loudly as a
+  tooling error if the formatter ever produces empty output again** rather than
+  laundering that into a source-drift report. Drift reports now also print the
+  first 20 diff lines, so a future failure is diagnosable from the log alone.
+  `scripts/audit.sh` gains the same check as **gate 8 of 12** (`fmt drift`) — it
+  had no fmt gate at all, so the drift check lived only in CI and nothing
+  caught the breakage locally before the push.
 
 - **agnos builds referenced an undefined `_agnos_getenv`.** `[deps] stdlib`
   declared `io` but never `args`, and `lib/io.cyr`'s `getenv()` delegates to

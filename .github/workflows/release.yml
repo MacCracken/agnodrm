@@ -71,9 +71,18 @@ jobs:
           fi
 
       - name: Build (DCE)
+        # Grep the log as well as the exit code: `warning: undefined
+        # function 'X'` exits 0 when DCE proves the call site unreachable
+        # (see the agnos cross-build step below). Redirect to a file rather
+        # than `| tee` — the default step shell is `bash -e` with no
+        # pipefail, so a pipeline would mask cyrius's exit code.
         run: |
           mkdir -p build
-          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm
+          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm > /tmp/build_x86_64.log 2>&1 || {
+            cat /tmp/build_x86_64.log; echo "ERROR: x86_64 build failed"; exit 1; }
+          cat /tmp/build_x86_64.log
+          grep -q "warning: undefined function" /tmp/build_x86_64.log && {
+            echo "ERROR: x86_64 build references undefined function(s)"; exit 1; }
           echo "agnodrm: $(wc -c < build/agnodrm) bytes"
 
       - name: Cross-build aarch64 (best-effort)
@@ -83,11 +92,44 @@ jobs:
         # Archive step ships both x86 + aarch64 binaries when present.
         run: |
           if [ -x "$HOME/.cyrius/bin/cycc_aarch64" ]; then
-            CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnodrm-aarch64
+            CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnodrm-aarch64 \
+              > /tmp/build_aarch64.log 2>&1 || {
+              cat /tmp/build_aarch64.log; echo "ERROR: aarch64 build failed"; exit 1; }
+            cat /tmp/build_aarch64.log
+            grep -q "warning: undefined function" /tmp/build_aarch64.log && {
+              echo "ERROR: aarch64 build references undefined function(s)"; exit 1; }
             echo "agnodrm-aarch64: $(wc -c < build/agnodrm-aarch64) bytes"
           else
             echo "::warning::cycc_aarch64 not in toolchain — aarch64 binary skipped in release"
           fi
+
+      - name: Cross-build agnos (verify only)
+        # Verified, not shipped. build/agnodrm is a smoke-test binary for a
+        # library; agnos consumers take the .cyr bundle and build it
+        # themselves with --agnos, so an agnos ELF in the release assets
+        # would carry no consumer value. What matters is that the tag's
+        # source actually compiles for agnos, with its
+        # #ifdef CYRIUS_TARGET_AGNOS codepaths across
+        # drm/udev/fuse/bootloader/netns/journald/update, and that it
+        # resolves every symbol it calls.
+        #
+        # The grep is the real gate: at 1.5.2 a missing `args` entry in
+        # `[deps] stdlib` left lib/io.cyr's getenv() delegating to an
+        # undefined `_agnos_getenv`, DCE marked the call site unreachable,
+        # and the build warned but exited 0. No toolchain guard is needed —
+        # --agnos is the stock x86_64 backend plus the CYRIUS_TARGET_AGNOS
+        # define, not a separate cross compiler.
+        run: |
+          CYRIUS_DCE=1 cyrius build --agnos src/main.cyr build/agnodrm-agnos \
+            > /tmp/build_agnos.log 2>&1 || {
+            cat /tmp/build_agnos.log; echo "ERROR: agnos build failed"; exit 1; }
+          cat /tmp/build_agnos.log
+          grep -q "warning: undefined function" /tmp/build_agnos.log && {
+            echo "ERROR: agnos build references undefined function(s) —"
+            echo "check [deps] stdlib in cyrius.cyml for a missing module"; exit 1; }
+          xxd -l 4 build/agnodrm-agnos | grep -q "7f45 4c46" || {
+            echo "ERROR: build/agnodrm-agnos is not an ELF"; exit 1; }
+          echo "agnodrm-agnos: $(wc -c < build/agnodrm-agnos) bytes (verified, not shipped)"
 
       - name: Test
         run: |

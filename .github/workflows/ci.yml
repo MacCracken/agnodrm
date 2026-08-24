@@ -75,16 +75,40 @@ jobs:
         run: cyrius capacity --check src/main.cyr
 
       - name: Format check
-        # cyrius fmt <file> emits the formatted source to stdout; diff
-        # against the committed file to enforce no drift. (The --check
-        # flag became a no-op in cyrius 5.9.x — emits nothing, exits 0
-        # regardless of drift — so we rely on diff for the gate.)
+        # Drift gate: the formatter's output must match the committed file.
+        #
+        # Invoke `cyrfmt` directly, NOT `cyrius fmt`. As of cyrius 6.5.35 the
+        # `cyrius fmt` subcommand is a silent no-op — it emits zero bytes and
+        # exits 0 — so diffing its output against the file reported *every*
+        # file as drifted while the sources were in fact correctly formatted.
+        # That is what broke CI on the 6.5.27 -> 6.5.35 pin bump at 1.5.2.
+        # `cyrfmt <file>` still emits formatted source to stdout, which is
+        # what this gate needs. Do not "simplify" this back to `cyrius fmt`.
+        #
+        # The empty-output guard is the durable lesson: a formatter that
+        # silently produces nothing must fail as a TOOLING error, never be
+        # laundered into a source-drift report. The old gate's `2>/dev/null`
+        # plus no output check is exactly what hid this.
         run: |
+          command -v cyrfmt >/dev/null 2>&1 || {
+            echo "ERROR: cyrfmt not on PATH — toolchain install is incomplete"; exit 1; }
           fail=0
+          out="$(mktemp)"
+          trap 'rm -f "$out"' EXIT
           for f in src/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do
             [ -f "$f" ] || continue
-            if ! diff -q <(cyrius fmt "$f" 2>/dev/null) "$f" > /dev/null; then
+            if ! cyrfmt "$f" > "$out"; then
+              echo "ERROR: cyrfmt exited non-zero on $f — formatter error, not drift"
+              exit 1
+            fi
+            if [ -s "$f" ] && [ ! -s "$out" ]; then
+              echo "ERROR: cyrfmt produced no output for non-empty $f —"
+              echo "       formatter is broken; this is NOT source drift."
+              exit 1
+            fi
+            if ! diff -q "$out" "$f" > /dev/null; then
               echo "needs fmt: $f"
+              diff -u "$f" "$out" | head -20 || true
               fail=1
             fi
           done
@@ -131,9 +155,21 @@ jobs:
           echo "all 2 dist bundles match src/"
 
       - name: Build (DCE)
+        # `warning: undefined function 'X'` exits 0 when DCE proves the call
+        # site unreachable, so the log has to be grepped — that is how
+        # 1.5.2's `_agnos_getenv` reached a release (see the agnos
+        # cross-build step below). A *reachable* undefined function is
+        # already a hard build error; this covers the unreachable half.
+        # Logs go to a file, not a `| tee` pipe: the default step shell is
+        # `bash -e` with no pipefail, so a pipeline would mask cyrius's
+        # own exit code behind tee's.
         run: |
           mkdir -p build
-          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm
+          CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm > /tmp/build_x86_64.log 2>&1 || {
+            cat /tmp/build_x86_64.log; echo "ERROR: x86_64 build failed"; exit 1; }
+          cat /tmp/build_x86_64.log
+          grep -q "warning: undefined function" /tmp/build_x86_64.log && {
+            echo "ERROR: x86_64 build references undefined function(s)"; exit 1; }
           echo "agnodrm: $(wc -c < build/agnodrm) bytes"
 
       - name: Verify ELF
@@ -151,7 +187,12 @@ jobs:
             echo "::warning::cycc_aarch64 not shipped with Cyrius $CYRIUS_VERSION — skipping aarch64 cross-build"
             exit 0
           fi
-          CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnodrm-aarch64
+          CYRIUS_DCE=1 cyrius build --aarch64 src/main.cyr build/agnodrm-aarch64 \
+            > /tmp/build_aarch64.log 2>&1 || {
+            cat /tmp/build_aarch64.log; echo "ERROR: aarch64 build failed"; exit 1; }
+          cat /tmp/build_aarch64.log
+          grep -q "warning: undefined function" /tmp/build_aarch64.log && {
+            echo "ERROR: aarch64 build references undefined function(s)"; exit 1; }
           for f in fuzz/*.fcyr; do
             [ -f "$f" ] || continue
             name=$(basename "$f" .fcyr)
@@ -163,6 +204,33 @@ jobs:
               echo "ERROR: $bin is not an aarch64 ELF"; exit 1; }
           done
           echo "agnodrm-aarch64: $(wc -c < build/agnodrm-aarch64) bytes"
+
+      - name: Cross-build agnos
+        # agnodrm carries #ifdef CYRIUS_TARGET_AGNOS gating across
+        # drm/udev/fuse/bootloader/netns/journald/update (added 1.4.6 +
+        # 1.5.0). Without this step those codepaths are only ever compiled
+        # in the Linux configuration and nothing verifies the agnos one.
+        #
+        # No toolchain guard, unlike --aarch64: --agnos needs no extra
+        # compiler binary — it is the stock x86_64 backend plus the
+        # CYRIUS_TARGET_AGNOS define — so this always runs.
+        #
+        # The exit code alone is not enough. At 1.5.2 `[deps] stdlib`
+        # declared `io` but not `args`, so lib/io.cyr's getenv() delegated
+        # to a never-included `_agnos_getenv`; DCE proved the call site
+        # unreachable, cyrius warned, and the build exited 0. Any getenv()
+        # on agnos would have jumped to an unresolved symbol.
+        run: |
+          CYRIUS_DCE=1 cyrius build --agnos src/main.cyr build/agnodrm-agnos \
+            > /tmp/build_agnos.log 2>&1 || {
+            cat /tmp/build_agnos.log; echo "ERROR: agnos build failed"; exit 1; }
+          cat /tmp/build_agnos.log
+          grep -q "warning: undefined function" /tmp/build_agnos.log && {
+            echo "ERROR: agnos build references undefined function(s) —"
+            echo "check [deps] stdlib in cyrius.cyml for a missing module"; exit 1; }
+          xxd -l 4 build/agnodrm-agnos | grep -q "7f45 4c46" || {
+            echo "ERROR: build/agnodrm-agnos is not an ELF"; exit 1; }
+          echo "agnodrm-agnos: $(wc -c < build/agnodrm-agnos) bytes"
 
       - name: Smoke test
         run: |

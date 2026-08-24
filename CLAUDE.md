@@ -102,7 +102,7 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 
 ### P(-1): Scaffold / Project Hardening (before any new features)
 
-1. **Cleanliness** — `scripts/audit.sh` clean; all 11 gates pass
+1. **Cleanliness** — `scripts/audit.sh` clean; all 12 gates pass
 2. **Benchmark baseline** — `cyrius bench tests/bcyr/bench_all.bcyr`, record CSV via `scripts/bench-history.sh`
 3. **Internal deep review** — gaps, optimizations, correctness, docs
 4. **External research** — domain completeness, best practices, current CVE landscape for the kernel interfaces we bind
@@ -198,12 +198,13 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 - **Dead code elimination**: every `cyrius build` in CI and release runs with `CYRIUS_DCE=1`. Binary size is a release metric — track it in `docs/development/state.md`.
 - **Tag filter**: release workflow accepts both `vX.Y.Z` and `X.Y.Z` tag shapes; the version-verify step strips a leading `v` and asserts `VERSION == tag`.
 - **Lockfile**: `cyrius.lock` (when present) gates dep hashes via `cyrius deps --verify`. Skip-if-absent on first-push.
-- **fmt drift gate**: `cyrius fmt <file>` per file (no `--check` — that flag is a no-op in cyrius 5.9.x); CI fails on any diff against the committed file.
+- **fmt drift gate**: run the **`cyrfmt` binary** per file (`cyrfmt <file>` writes formatted source to stdout) and diff against the committed file; CI fails on any diff. **Do not use `cyrius fmt <file>`** — as of cyrius 6.5.35 that subcommand is a silent no-op (emits zero bytes, exits 0), which made the gate diff an empty stream against every file and report all of them as drifted at 1.5.2. `--check` is likewise not usable (a no-op since 5.9.x). The gate must also **fail as a tooling error when the formatter returns empty output** — a formatter that produces nothing is broken, and must never be reported as source drift.
 - **lint warn-fail**: `cyrius lint` per file; any `warn ` line fails CI.
+- **cross-target build gate**: every build (x86_64, aarch64, **agnos**) runs in CI, in release, and in `scripts/audit.sh` gate 5. `--agnos` runs unconditionally — it is the stock x86_64 backend plus the `CYRIUS_TARGET_AGNOS` define, not a separate cross compiler, so there is no `cycc_*` presence check to skip it. Every build log is greped for **`warning: undefined function`** and that is promoted to a hard failure: a *reachable* undefined function is already a build error, but when DCE proves the call site unreachable cyrius only warns and exits 0 (this is how `_agnos_getenv` shipped at 1.5.2). Capture build output to a file, never `| tee` — the default GitHub Actions step shell is `bash -e` with no `pipefail`, so a pipeline masks the compiler's exit status behind tee's.
 - **dist staleness gate**: CI runs `cyrius distlib` and fails if `dist/agnosys.cyr` differs from the committed copy.
 - **Workflow layout**:
-  - `.github/workflows/ci.yml` — toolchain → syntax → API surface → capacity → deps → fmt → lint → vet → dist gate → DCE build → ELF verify → aarch64 cross (best-effort) → smoke → tests → fuzz → bench
-  - `.github/workflows/release.yml` — version gate → CI gate → DCE build → aarch64 cross → tests → fuzz → regenerate dist → archive (source tar, single-file `.cyr`, prebuilt x86_64 + aarch64 binaries, cyrius.lock, SHA256SUMS)
+  - `.github/workflows/ci.yml` — toolchain → syntax → API surface → capacity → deps → fmt → lint → vet → dist gate → DCE build → ELF verify → aarch64 cross (best-effort) → agnos cross → smoke → tests → fuzz → bench
+  - `.github/workflows/release.yml` — version gate → CI gate → DCE build → aarch64 cross → agnos cross (verify only) → tests → fuzz → regenerate dist → archive (source tar, single-file `.cyr`, prebuilt x86_64 + aarch64 binaries, cyrius.lock, SHA256SUMS)
 - **Concurrency**: CI uses `cancel-in-progress: true` keyed on workflow + ref.
 
 ## Docs
