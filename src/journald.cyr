@@ -491,9 +491,9 @@ fn journald_query(filter): i64 {
             continue;
         }
 
-        var parse_res = journald_parse_json(line);
-        if (is_ok(parse_res) == 1) {
-            vec_push(entries, payload(parse_res));
+        var parse_res_t, parse_res_v = journald_parse_json(line);
+        if (is_ok(parse_res_t) == 1) {
+            vec_push(entries, parse_res_v);
         }
         # Skip unparseable lines silently
 

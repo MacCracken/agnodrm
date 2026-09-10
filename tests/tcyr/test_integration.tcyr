@@ -54,8 +54,9 @@ fn test_error() {
     assert_eq(is_syscall_err(0 - 999), 1, "err_neg2");
     assert_eq(is_syscall_err(0), 0, "err_zero");
     assert_eq(is_syscall_err(1), 0, "err_pos");
-    assert(is_ok(wrap_syscall(42)) == 1, "wrap_ok");
-    assert_eq(payload(wrap_syscall(42)), 42, "wrap_v");
+    var ws_t, ws_v = wrap_syscall(42);
+    assert(is_ok(ws_t) == 1, "wrap_ok");
+    assert_eq(ws_v, 42, "wrap_v");
     assert(is_err_result(wrap_syscall(0 - 1)) == 1, "wrap_e");
     assert(is_ok(wrap_syscall(0)) == 1, "wrap_0");
     assert(is_err_result(drm_err_from_errno(EPERM)) == 1, "errno_perm");
@@ -116,9 +117,9 @@ fn test_update() {
     assert(file_write_all(mpath, mbuf, mp) == mp, "big_write");
     var bcfg = update_config_new();
     update_config_set_url(bcfg, "file:///tmp/agnos-update-bigmanifest.json");
-    var bres = update_check(bcfg, "2026.1.0");
-    assert(is_ok(bres) == 1, "big_check_ok");
-    assert(payload(bres) != 0, "big_check_newer");
+    var bres_t, bres_v = update_check(bcfg, "2026.1.0");
+    assert(is_ok(bres_t) == 1, "big_check_ok");
+    assert(bres_v != 0, "big_check_newer");
     sys_unlink(mpath);
     return 0;
 }
@@ -192,9 +193,9 @@ fn test_fuse() {
     # /proc/mounts filled the buffer (~90 mounts). Buffer is 8192 + 1 now.
     # This exercises the real read+parse path against the live /proc/mounts.
     var marr = alloc(8 * 128);
-    var mres = fuse_parse_proc_mounts(marr, 128, 0);
-    assert(is_ok(mres) == 1, "fpm_ok");
-    assert(payload(mres) >= 0, "fpm_count");
+    var mres_t, mres_v = fuse_parse_proc_mounts(marr, 128, 0);
+    assert(is_ok(mres_t) == 1, "fpm_ok");
+    assert(mres_v >= 0, "fpm_count");
     return 0;
 }
 

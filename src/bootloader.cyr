@@ -249,9 +249,9 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
 
     var cap = 65536;
     var buf = alloc(cap + 1);
-    var res = agnodrm_run_capture(args, buf, cap, "bootctl list failed");
-    if (is_ok(res) == 1) {
-        var nbytes = payload(res);
+    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "bootctl list failed");
+    if (is_ok(res_t) == 1) {
+        var nbytes = res_v;
         if (nbytes > 0) {
             store8(buf + nbytes, 0);
             return bootloader_parse_bootctl_list(buf, result_arr, max_entries);

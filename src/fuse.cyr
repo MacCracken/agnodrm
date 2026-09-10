@@ -340,9 +340,9 @@ fn fuse_validate_mountpoint(path): i64 {
 # Returns Result: Ok(vec_of_mounts) or Err.
 fn fuse_list_mounts(): i64 {
     var arr = alloc(1024);  # up to 128 mount pointers
-    var res = fuse_parse_proc_mounts(arr, 128, 1);
-    if (is_err_result(res) == 1) { return res; }
-    var count = payload(res);
+    var res_t, res_v = fuse_parse_proc_mounts(arr, 128, 1);
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
+    var count = res_v;
 
     var mounts = vec_new();
     var i = 0;
@@ -372,9 +372,9 @@ fn fuse_get_status(mountpoint): i64 {
     }
 
     var arr = alloc(1024);
-    var res = fuse_parse_proc_mounts(arr, 128, 1);
-    if (is_err_result(res) == 1) { return Ok(FUSE_ERROR); }
-    var count = payload(res);
+    var res_t, res_v = fuse_parse_proc_mounts(arr, 128, 1);
+    if (is_err_result(res_t) == 1) { return Ok(FUSE_ERROR); }
+    var count = res_v;
 
     var mplen = strlen(mountpoint);
     var i = 0;

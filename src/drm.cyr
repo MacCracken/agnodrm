@@ -358,9 +358,9 @@ fn drm_get_capability(fd, cap): i64 {
 # Check if device supports dumb buffers.
 # Returns Result: Ok(1) or Ok(0).
 fn drm_supports_dumb_buffer(fd): i64 {
-    var res = drm_get_capability(fd, DRM_CAP_DUMB_BUFFER);
-    if (is_err_result(res) == 1) { return res; }
-    var val = payload(res);
+    var res_t, res_v = drm_get_capability(fd, DRM_CAP_DUMB_BUFFER);
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
+    var val = res_v;
     if (val != 0) { return Ok(1); }
     return Ok(0);
 }

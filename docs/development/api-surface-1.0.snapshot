@@ -77,7 +77,7 @@ error::drm_syserr_new/3
 error::drm_syserr_pack/2
 error::drm_syserr_print/1
 error::is_syscall_err/1
-error::result_print_err/1
+error::result_print_err/2
 error::wrap_syscall/1
 fuse::fuse_extract_field/3
 fuse::fuse_get_status/1

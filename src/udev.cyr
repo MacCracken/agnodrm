@@ -236,10 +236,10 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
     # 1 MiB is truncated (graceful: fewer device blocks parsed, no crash).
     var cap = 1048576;
     var buf = alloc(cap + 1);
-    var res = agnodrm_run_capture(args, buf, cap, "udevadm info --export-db failed");
-    if (is_err_result(res) == 1) { return res; }
+    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "udevadm info --export-db failed");
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
 
-    var nbytes = payload(res);
+    var nbytes = res_v;
     if (nbytes == 0) {
         return Ok(0);
     }
@@ -271,9 +271,9 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
                 memcpy(block, output + block_start, blen);
                 store8(block + blen, 0);
 
-                var dev_res = udev_parse_udevadm_info(block);
-                if (is_ok(dev_res) == 1) {
-                    var dev = payload(dev_res);
+                var dev_res_t, dev_res_v = udev_parse_udevadm_info(block);
+                if (is_ok(dev_res_t) == 1) {
+                    var dev = dev_res_v;
                     var include = 1;
                     if (subsystem_filter != 0) {
                         if (strlen(subsystem_filter) > 0) {
@@ -350,10 +350,10 @@ fn udev_get_device_info(syspath): i64 {
     # (+1 for the NUL) is ample.
     var cap = 65536;
     var buf = alloc(cap + 1);
-    var res = agnodrm_run_capture(args, buf, cap, "udevadm info --path failed");
-    if (is_err_result(res) == 1) { return res; }
+    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "udevadm info --path failed");
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
 
-    var nbytes = payload(res);
+    var nbytes = res_v;
     store8(buf + nbytes, 0);
     return udev_parse_udevadm_info(buf);
     #endif

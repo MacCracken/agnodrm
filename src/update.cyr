@@ -759,8 +759,8 @@ fn update_verify_manifest(manifest): i64 {
     }
 
     # Validate version format
-    var vres = update_validate_version(ver);
-    if (is_err_result(vres) == 1) { return vres; }
+    var vres_t, vres_v = update_validate_version(ver);
+    if (is_err_result(vres_t) == 1) { return Err(vres_v); }
 
     # Validate each file has a valid sha256 (64 hex chars)
     var fi = 0;
@@ -886,9 +886,9 @@ fn update_apply(config, manifest): i64 {
         return drm_err_invalid_argument("manifest contains no files to apply");
     }
 
-    var current_res = update_get_current_slot();
+    var current_res_t, current_res_v = update_get_current_slot();
     var current = SLOT_A;
-    if (is_ok(current_res) == 1) { current = payload(current_res); }
+    if (is_ok(current_res_t) == 1) { current = current_res_v; }
 
     var target_slot = update_other_slot(current);
     var target_dev = update_config_device_for_slot(config, target_slot);
@@ -933,15 +933,15 @@ fn update_apply(config, manifest): i64 {
     vec_push(args, "bs=4M");
     vec_push(args, "conv=fsync");
 
-    var dd_res = agnodrm_run_checked(args, "dd image write failed");
-    if (is_err_result(dd_res) == 1) { return dd_res; }
+    var dd_res_t, dd_res_v = agnodrm_run_checked(args, "dd image write failed");
+    if (is_err_result(dd_res_t) == 1) { return Err(dd_res_v); }
 
     # Update persistent state
     var state_file = update_config_state_file(config);
-    var load_res = update_load_state(state_file);
+    var load_res_t, load_res_v = update_load_state(state_file);
     var state = 0;
-    if (is_ok(load_res) == 1) {
-        state = payload(load_res);
+    if (is_ok(load_res_t) == 1) {
+        state = load_res_v;
     } else {
         state = update_state_new(current, "");
     }
@@ -971,8 +971,8 @@ fn update_switch_slot(config, slot): i64 {
     var marker = "/var/lib/agnos/next-slot";
     var suffix = update_slot_suffix(slot);
     var slen = strlen(suffix);
-    var res = update_atomic_write(marker, suffix, slen);
-    if (is_err_result(res) == 1) { return res; }
+    var res_t, res_v = update_atomic_write(marker, suffix, slen);
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
 
     # Try efibootmgr (best effort)
     var efi_args = vec_new();
@@ -988,10 +988,10 @@ fn update_switch_slot(config, slot): i64 {
 
     # Update persistent state
     var state_file = update_config_state_file(config);
-    var load_res = update_load_state(state_file);
+    var load_res_t, load_res_v = update_load_state(state_file);
     var state = 0;
-    if (is_ok(load_res) == 1) {
-        state = payload(load_res);
+    if (is_ok(load_res_t) == 1) {
+        state = load_res_v;
     } else {
         state = update_state_new(update_other_slot(slot), "");
     }
@@ -1017,9 +1017,9 @@ fn update_rollback(config): i64 {
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
-    var load_res = update_load_state(state_file);
-    if (is_err_result(load_res) == 1) { return load_res; }
-    var state = payload(load_res);
+    var load_res_t, load_res_v = update_load_state(state_file);
+    if (is_err_result(load_res_t) == 1) { return Err(load_res_v); }
+    var state = load_res_v;
 
     if (update_state_rollback_available(state) == 0) {
         return drm_err_invalid_argument("no rollback image available");
@@ -1034,8 +1034,8 @@ fn update_rollback(config): i64 {
     vec_push(stop_args, "daimon");
     exec_vec(stop_args);  # best effort — ignore failure (execve needs the abs path above)
 
-    var switch_res = update_switch_slot(config, previous);
-    if (is_err_result(switch_res) == 1) { return switch_res; }
+    var switch_res_t, switch_res_v = update_switch_slot(config, previous);
+    if (is_err_result(switch_res_t) == 1) { return Err(switch_res_v); }
 
     # Clear pending state
     update_state_set_pending(state, 0);
@@ -1057,9 +1057,9 @@ fn update_mark_boot_successful(config): i64 {
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
-    var load_res = update_load_state(state_file);
-    if (is_err_result(load_res) == 1) { return load_res; }
-    var state = payload(load_res);
+    var load_res_t, load_res_v = update_load_state(state_file);
+    if (is_err_result(load_res_t) == 1) { return Err(load_res_v); }
+    var state = load_res_v;
 
     var bc = update_state_boot_count(state) + 1;
     update_state_set_boot_count(state, bc);

@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-09-10
+
+**Migrated to the cyrius 6.6.x value form.** A minor rather than a patch: one public
+function changed arity. All four trees green — main, integration tcyr, bcyr, 3 fuzz harnesses.
+
+### Changed — cyrius pin 6.5.35 → **6.6.2**
+
+cyrius 6.6.0 flipped `Result` / `Option` / `Either` declared `: stack` to a **value form**: a
+payload variant returns a `(tag, payload)` REGISTER PAIR and allocates nothing. `payload()` is
+deleted permanently. 6.6.2 is the repair release for that flip.
+
+**27 sites migrated** across 8 `src/` modules plus the integration test. The compiler enumerated
+every one — a single-variable bind of a pair is a hard error at 6.6.2 — so the surface was
+measured, not estimated.
+
+⚠ **13 of them were the propagation trap.** The naive migration of
+
+```
+var res = f();
+if (is_err_result(res) == 1) { return res; }
+```
+
+returns the **payload alone**, so `Err(77)` reaches the caller as `tag=77`,
+`is_err_result == 0` — an error that reads as SUCCESS. That shape cost yukti 19 silent defects
+at the flip. Every propagation site here re-wraps: `return Err(res_v);`. Sites fixed that way live
+in `drm`, `fuse`, `netns` (×4), `udev` (×2), and `update` (×6) — including the update-slot and
+bootloader paths, where an Err reading as Ok would report a failed image write as a successful one.
+
+⚠ **`netns_create` needed restructuring, not renaming.** It declared `var res` once and
+**reassigned** it twice (`res = netns_run_ip(args2)`, then `args3`). There is no `t, v = f();`
+reassignment form in cyrius — only `var t, v = f();` binds a pair. Each result is consumed by its
+own guard, so the three calls now bind three distinct pairs. Written the obvious way it would have
+compiled and silently kept only the tag.
+
+### ⚠ BREAKING — `result_print_err` takes both halves
+
+```
+- fn result_print_err(res)
++ fn result_print_err(res_tag, res)
+```
+
+A `Result` passed as a *parameter* is now two registers. Call it as
+`var t, v = f(); result_print_err(t, v);`.
+
+⭐ **Signature matches sigil's `result_print_err`, which made this same move first** — sigil's
+`src/sys_error.cyr` already carries the 2-arity form with the same reasoning. agnodrm and
+**kavach** were the two repos still on the 1-arity boxed form; kavach follows.
+
+Only public-surface change in the release: `docs/development/api-surface-1.0.snapshot` moves by
+exactly one line, `error::result_print_err/1` → `/2`, against **315** public fns.
+
+### Fixed — a doc comment that taught the trap
+
+`src/error.cyr`'s "Propagate error" block documented the pre-flip idiom verbatim, ending
+`if (is_err_result(res) == 1) { return res; }` — the exact silent-failure shape, sitting in the
+file whose job is to define error handling. Rewritten to the value form, with the failure mode
+spelled out so it is not copied back in from folklore.
+
+
 ### Changed
 
 - **Retired the `break`-in-`var`-declaring-`while`-loop rule from CLAUDE.md.**
