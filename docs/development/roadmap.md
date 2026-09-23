@@ -25,31 +25,39 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
 
-## Moving the cyrius pin to 6.6.5
+## Moving the cyrius pin to 6.6.5 ✅ (done at 1.6.1, 2026-09-22 — pin went straight to 6.6.6)
 
 ⛔ Before bumping the pin to 6.6.5: cross-reference the two deferral notes
 that turn the CI *Lint* step (`.github/workflows/ci.yml:117`) and the lint
 stage of `scripts/audit.sh` red. 6.6.5's cyrlint folds case, so a capital
 "For now" now counts.
 
-cyrius 6.6.5 is not tagged yet. Nothing below can land against the pin until
-it is, except items marked **(can land now)**. The pin is 6.6.2 today, and
-this section lists only what 6.6.5 itself changes.
+This section lists only what 6.6.5 itself changes.
 
-- [ ] ⛔ Put a tracking pointer (CHANGELOG / issue / roadmap / `docs/` path) on
-      a line the phrase itself touches, or mark it `#skip-lint`. **(can land
-      now)** — a same-line pointer or `#skip-lint` does not depend on the
-      toolchain.
-  - `src/bootloader.cyr:262` — "For now, return 0 entries on failure".
+- [x] ⛔ Put a tracking pointer (CHANGELOG / issue / roadmap / `docs/` path) on
+      a line the phrase itself touches, or mark it `#skip-lint`.
+  - `src/bootloader.cyr:262` (now :267) — "For now, return 0 entries on failure".
+    Pointer added; the deferral had no tracked entry, so **V1.6.x** below
+    now records it.
   - `src/update.cyr:458` — "For now, manifest validation checks structural
-    integrity only". The `roadmap.md V1.5.x` pointer is on `:457`, which
-    does not track `:458`.
+    integrity only". Same-line `roadmap.md V1.5.x` pointer added.
 
   See the cyrius CHANGELOG [6.6.5] entry "cyrlint read every rule ONE
-  PHYSICAL LINE at a time".
-- [ ] At the bump, re-run `cyrius deps` — the aarch64 syscall peer moved
+  PHYSICAL LINE at a time". Re-checked with 6.6.6's cyrlint over all four
+  source globs: these two were the only matches.
+- [x] At the bump, re-run `cyrius deps` — the aarch64 syscall peer moved
       SYS_UNLINKAT 35 → 263, so an un-re-vendored peer's sys_unlink would run
-      nanosleep.
+      nanosleep. `lib/` rebuilt clean (38 files, byte-identical to the 6.6.6
+      snapshot). `sys_unlink` verified under `qemu-aarch64`: it removes the
+      file, then returns `-ENOENT`.
+- [x] Not in the original list, surfaced at the bump: the cyrius 6.6.4 notes
+      ask agnodrm to spell its decimal `O_*` literals. `src/drm.cyr` and
+      `src/bootloader.cyr` passed a raw `0x10000` — `O_DIRECTORY` on x86_64,
+      **`O_DIRECT` on arm64** — so aarch64 `drm_list_devices` got `EINVAL` on
+      `/dev/dri`. Both sites now spell `O_DIRECTORY`, which raises the consumer
+      floor to cyrius 6.6.4 (CHANGELOG 1.6.1). And 6.6.5's aarch64 routing of
+      raw syscall 44 (x86 `sendto`) makes `journald_send` actually send on
+      arm64 — it ran `fstatfs` through 6.6.4.
 
 ## Resolved — P1 (AGNOS ABI) ✅ (1.5.0, 2026-07-11)
 
@@ -551,7 +559,8 @@ a CHANGELOG / roadmap / issue entry).
   parsed and stored but never checked, so `update_verify_manifest` validates
   **structural integrity only** — it is not an authenticity check and must not be
   relied on as one. Blocked on a SHA-256 primitive: cyrius stdlib ships `sha1`
-  and `keccak` but no `sha256` leaf (verified against the 6.5.35 snapshot), and
+  and `keccak` but no `sha256` leaf (verified against the 6.5.35 snapshot;
+  re-verified against 6.6.6 at 1.6.1), and
   agnodrm takes no non-stdlib runtime dependency, so vendoring sigil's
   implementation is not an option. Lands when cyrius stdlib grows `sha256`.
 - [ ] **Network manifest fetch** (`update_check`). Local paths and `file://`
@@ -559,6 +568,44 @@ a CHANGELOG / roadmap / issue entry).
   in cyrius stdlib. Note this is a deliberate *security* boundary as much as a
   gap — fetching an unauthenticated manifest over the network without the
   digest check above would be strictly worse than refusing.
+
+#### V1.6.x — `bootloader` deferred capability (documented 2026-09-22 at 1.6.1)
+
+One more bare in-code deferral, surfaced when cyrius 6.6.5's cyrlint began
+folding case — a capital "For now" had never matched before. Recorded here so
+the code can cite a tracked entry, the same way V1.5.x records `update`'s.
+
+- [ ] **Loader-entries fallback** (`bootloader_list_boot_entries`). Entries come
+  from `/usr/bin/bootctl list` only. When bootctl is missing, fails, or prints
+  nothing, the function returns `Ok(0)`; the intended fallback — parsing
+  `/boot/loader/entries/*.conf` directly — is not implemented. Note the result
+  shape: a failed `bootctl` reads as a successful "no entries", not as an error,
+  so a caller cannot tell the two apart today. Parked with the rest of the
+  deferred Linux-eccentric group; the agnos build already returns `Ok(0)` by
+  design (gnoboot, no systemd-boot entries).
+
+#### V1.6.x — harness follow-ups from the 6.6.6 bump (opened 2026-09-22 at 1.6.1)
+
+Found while explaining the 1.6.1 bench delta and reading the 6.6.6 build logs.
+None affects the library; each makes a gate or a measurement more trustworthy.
+
+- [ ] **Move `bench_all.bcyr` onto `bench_batch_start` / `bench_batch_stop`.**
+  Its `batch_record` writes the stdlib bench struct at fixed offsets. Since
+  6.6.5 that struct is 64 B and its min/max fields hold picoseconds, so every
+  row's `min=` / `max=` repeats the mean. The recorded average is unaffected.
+- [ ] **Make the string benches alignment-independent.** `strlen_16ch` reads
+  11 or 21 ns depending only on where the linker lands `"hello_world_test"`,
+  because stdlib `strlen` walks bytes to 8-alignment first. Copy bench inputs
+  into 8-aligned buffers so a toolchain bump stops moving these rows by up to
+  2×. It is best landed in a release with no pin change, so the step in the
+  history is attributable.
+- [ ] **`fuzz/fuse_parse.fcyr` omits `src/util.cyr`.** Its build prints
+  `warning: undefined function` for `agnodrm_run_checked` /
+  `agnodrm_cstr_starts_with` and three dropped-tag warnings that follow from
+  them. The same five warnings appear on 6.6.2, and the library build is clean.
+  Neither the CI fuzz step nor `audit.sh` gate 11 reads fuzz build logs; the
+  x86_64 / aarch64 / agnos gates' `undefined function` promotion does not
+  extend to them.
 
 #### Toolchain rule verification — `break` in `var`-declaring while loops (opened 2026-08-24 at 1.5.3)
 
@@ -634,9 +681,9 @@ Volatile per-consumer status lives in [`state.md`](state.md). The mapping itself
 | soorat | drm |
 | hoosh | certpin |
 
-## Moving the cyrius pin to 6.6.6
+## Moving the cyrius pin to 6.6.6 ✅ (done at 1.6.1, 2026-09-22)
 
-Current pin: `cyrius = "6.6.2"` (`cyrius.cyml`). Nothing needs to change first.
+Pin at the time of this pre-check: `cyrius = "6.6.2"`. Nothing needed to change first.
 
 agnodrm truncates in three places, all with the flag word written as a raw hex literal:
 `src/netns.cyr:603`, `src/update.cyr:72` and `src/update.cyr:136`, each
@@ -666,3 +713,22 @@ Everything else checked and empty:
 
 After bumping, verify the full `.tcyr` suite per-file and one `agnodrm update` staging cycle —
 write a manifest, rewrite it shorter, and confirm the file ends where it should.
+
+**Done at 1.6.1.** The `.tcyr` suite passes per file with DCE, on x86_64 and under
+`qemu-aarch64`. The staging cycle is a 32-assertion scratch harness run on both arches:
+
+- `update_atomic_write` and `update_atomic_copy` each rewrite a file shorter over a planted,
+  longer, stale `.tmp`; the file ends at the new length.
+- An `update_save_state` cycle shrinks the state file, which still ends at `}\n`.
+- Mutation check: with `O_TRUNC` dropped, the harness fails exactly the two length checks.
+
+The PE fix was Windows-only, so on Linux this confirms behaviour rather than a fix.
+
+Two things this pre-check did not cover, both found in a full read of the 6.6.6 notes:
+
+- Block-scoped `var`s now apply to any top-level `if` / `while` / `for` body, not just bare `{`
+  blocks. The five in the fuzz harnesses' top-level loops are never read after their block, so
+  there is nothing to change.
+- `lib/process.cyr` now gives every child `PR_SET_PDEATHSIG(SIGKILL)`, and adds an opt-in
+  `proc_set_timeout_ms`. That is a behaviour change for agnodrm's `dd` / `bootctl` / `udevadm` /
+  `ip` helpers, recorded in CHANGELOG 1.6.1.

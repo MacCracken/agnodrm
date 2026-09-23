@@ -2,7 +2,7 @@
 
 > Volatile snapshot. Refreshed every release. Durable rules live in [`CLAUDE.md`](../../CLAUDE.md). Historical release narrative is in [`CHANGELOG.md`](../../CHANGELOG.md). Future work is in [`roadmap.md`](roadmap.md).
 
-**Last refresh:** 2026-08-24 (1.5.3 — P(-1) audit / hardening sweep).
+**Last refresh:** 2026-09-22 (1.6.1 — cyrius pin 6.6.2 → 6.6.6). 1.6.0 shipped without a refresh, so this one covers both releases.
 
 > **Renamed `agnosys` → `agnodrm` at 1.4.4** — decomposed from the AGNOS kernel-interface library to the **device / DRM model** (udev + DRM/KMS on error/util support). 15 modules moved to their proper homes (trust→sigil, security/mac/audit→kavach, pam→aegis, logging→sakshi, syscall layer→cyrius). See the [decomposition plan](2026-06-18-agnosys-to-agnodrm-decomposition-plan.md). Metrics below predating 1.4.4 describe the old 20-module surface and are being refreshed as touched.
 
@@ -10,24 +10,25 @@
 
 | Item | Value |
 |---|---|
-| `VERSION` | **1.5.3** |
-| `cyrius.cyml [package].cyrius` | **6.5.35** |
-| Min Cyrius (consumer) | 6.2.11 |
-| Last cyrius bump | 6.5.27 → **6.5.35** at 1.5.2 (2026-08-24; 6.5.x maintenance line, current release). Vendored `./lib/` rebuilt from a clean `rm -rf lib && cyrius deps` and verified **byte-identical** to the 6.5.35 toolchain snapshot — 35 files (31 + the 4-file `args` family). This also cleared a stale `patra 1.13.0` (pinned: 1.13.8) shadow the prior working-tree `lib sync --full` dump carried. Shipped **alongside** the `[deps] stdlib += args` fix that resolves `_agnos_getenv` on agnos builds (see CHANGELOG `[1.5.2]`). Audit clean (11/11), 93 tests, all three targets (x86_64 / aarch64 / agnos) build warning-free; dist bundles regenerated (core `.deps` gained `args` + `syscalls`). **Perf:** toolchain-only wins — `compare_versions` −26.8%, `validate_ver_good` −16.5%, `is_dangerous_token_miss` −12.6%, `is_dangerous_token_hit` −10.3%; no regressions (`parse_subsystem` +2 ns is noise, matching its 1.5.0 value). Prior: 6.4.50 → 6.5.27 at 1.5.1 (2026-08-17, matching the AGNOS desktop stack), 6.4.25 → 6.4.50 at 1.5.0 (shipped with the three ungated agnos `sys_open` fixes), 6.2.11 → 6.4.25 at 1.4.6 (agnos-readiness sweep), 6.2.1 → 6.2.11 at 1.4.3 (6.2.x maintenance), 6.1.23 → 6.2.1 at 1.4.2 (dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 at 1.4.1 (first 6.1.x; **v6.0.64 thread-safe allocator** — `[deps] stdlib += atomic`). |
+| `VERSION` | **1.6.1** |
+| `cyrius.cyml [package].cyrius` | **6.6.6** |
+| Min Cyrius (consumer) | **6.6.4**. 1.6.0's value-form `Result` set the floor at 6.6.0; 1.6.1 spells the per-target `O_DIRECTORY`, which first ships in 6.6.4. Verified at 1.6.1: the sources fail on 6.6.0–6.6.3 with `undefined variable 'O_DIRECTORY'`, and build and pass 111/111 on 6.6.4, 6.6.5 and 6.6.6. |
+| Last cyrius bump | 6.6.2 → **6.6.6** at 1.6.1 (2026-09-22), spanning the four 6.6.x repair releases. Vendored `./lib/` rebuilt clean and **byte-identical** to the 6.6.6 snapshot, **38** files (+`alloc_cx.cyr`). The consumer items those releases asked for landed in the same release. **6.6.5:** two case-folded "For now" deferrals got pointers, and the aarch64 `SYS_UNLINKAT` renumber forced the re-vendor. **6.6.4:** a raw `0x10000` became `O_DIRECTORY` — it is `O_DIRECT` on arm64, so aarch64 `drm_list_devices` had been getting `EINVAL`. Inherited from the toolchain: aarch64 `journald_send` now really calls `sendto` (raw 44 ran `fstatfs` through 6.6.4), and every `lib/process.cyr` child gets `PR_SET_PDEATHSIG(SIGKILL)`. Audit clean (12/12); all three targets warning-free; 111/111 on x86_64 and under `qemu-aarch64`. **Perf:** the moved bench rows are placement artifacts, not codegen — literal alignment for `strlen`/`streq`, code placement for `compare_versions`/`validate_ver_good`; see CHANGELOG `[1.6.1]`. Prior: 6.5.35 → 6.6.2 at 1.6.0 (2026-09-10, the value-form `Result` migration; `result_print_err` became 2-arity). Before that: 6.5.27 → 6.5.35 at 1.5.2 (2026-08-24; 6.5.x maintenance line). Vendored `./lib/` rebuilt from a clean `rm -rf lib && cyrius deps` and verified **byte-identical** to the 6.5.35 toolchain snapshot — 35 files (31 + the 4-file `args` family). This also cleared a stale `patra 1.13.0` (pinned: 1.13.8) shadow the prior working-tree `lib sync --full` dump carried. Shipped **alongside** the `[deps] stdlib += args` fix that resolves `_agnos_getenv` on agnos builds (see CHANGELOG `[1.5.2]`). Audit clean (11/11), 93 tests, all three targets (x86_64 / aarch64 / agnos) build warning-free; dist bundles regenerated (core `.deps` gained `args` + `syscalls`). **Perf:** toolchain-only wins — `compare_versions` −26.8%, `validate_ver_good` −16.5%, `is_dangerous_token_miss` −12.6%, `is_dangerous_token_hit` −10.3%; no regressions (`parse_subsystem` +2 ns is noise, matching its 1.5.0 value). Prior: 6.4.50 → 6.5.27 at 1.5.1 (2026-08-17, matching the AGNOS desktop stack), 6.4.25 → 6.4.50 at 1.5.0 (shipped with the three ungated agnos `sys_open` fixes), 6.2.11 → 6.4.25 at 1.4.6 (agnos-readiness sweep), 6.2.1 → 6.2.11 at 1.4.3 (6.2.x maintenance), 6.1.23 → 6.2.1 at 1.4.2 (dropped stale `"json"` dep — carved into bayan at 6.1.25), 6.0.56 → 6.1.23 at 1.4.1 (first 6.1.x; **v6.0.64 thread-safe allocator** — `[deps] stdlib += atomic`). |
 
 ## Build Metrics
 
 | Metric | Value | Notes |
 |---|---|---|
-| Binary size (DCE) | **140,776 B** (1.5.3) | Byte-identical to 1.5.2 — the 1.5.3 security fixes land in DCE-eliminated or already-live paths. `--agnos` 132,320 B, `--aarch64` 333,248 B. Dead-code floor 554 unreachable fns. |
-| `dist/agnodrm.cyr` size | 4,382 lines (1.5.3) | Full bundle = the 9 surviving modules. Plus `dist/agnodrm-core.cyr` (error/util/udev/drm), 1,196 lines. |
-| Fn-table utilization | 603 / 32,768 (2%) | Ceiling grew 8,192 → 32,768 in 6.5.x; count rose with the 6.5.35 stdlib snapshot + `args` |
-| Var-table | 393 / 8,192 (5%) | |
-| Fixup-table | 928 / 1,048,576 (<1%) | Ceiling grew 262,144 → 1,048,576 in 6.5.x |
-| String-data | 2,077 / 2,097,152 (<1%) | |
-| Code-size | 134,320 / 67,108,864 (<1%) | Ceiling grew 1,048,576 → 67,108,864 in 6.5.x |
+| Binary size (DCE) | **22,672 B** (1.6.1) | `--agnos` 22,328 B; `--aarch64` 399,424 B. Since 6.6.x the x86_64 and agnos backends *remove* dead code, which is why these are ~22 KB against 1.5.3's 140,776 B. The aarch64 backend still only NOPs it: 357,324 B of the 399,424 are NOPed dead stdlib code, and live aarch64 code is ~42 KB. Dead-code floor on x86_64: 616 unreachable fns, 129,138 B eliminated. 1.6.0 on 6.6.2 was 22,016 / 21,816 / 333,272 B. |
+| `dist/agnodrm.cyr` size | 4,394 lines (1.6.1) | Full bundle = the 9 surviving modules. Plus `dist/agnodrm-core.cyr` (error/util/udev/drm), 1,203 lines. |
+| Fn-table utilization | 658 / 131,072 (<1%) | Ceiling grew 32,768 → 131,072 in 6.6.x; count rose with the 6.6.6 stdlib snapshot |
+| Var-table | 426 / 1,048,576 (<1%) | Ceiling grew 8,192 → 1,048,576 in 6.6.x |
+| Fixup-table | 1,016 / 1,048,576 (<1%) | |
+| String-data | 2,492 / 2,097,152 (<1%) | |
+| Code-size | 145,056 / 67,108,864 (<1%) | |
+| Fn-name hash | 658 / 4,096 slots (16%), max probe 3 | Reported since 6.6.x; now the highest-utilization table, far under the 85% gate |
 | Compile time | ~460 ms | recorded at 1.0.0 closeout; not re-measured since |
-| Identifiers | 16,216 / 524,288 (3%) | |
+| Identifiers | 17,689 / 8,388,608 (<1%) | Ceiling grew 524,288 → 8,388,608 in 6.6.x |
 
 ## Module Count
 
@@ -53,21 +54,19 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 
 | Category | Count | Where |
 |---|---|---|
-| Integration tests passed | **111 / 111** | `cyrius test` — trimmed to the 9 survivors at 1.4.4 (was 252 for the 20-module surface) |
+| Integration tests passed | **111 / 111** | `cyrius test` — trimmed to the 9 survivors at 1.4.4 (was 252 for the 20-module surface). At 1.6.1 also passes under `qemu-aarch64`, and on every toolchain from 6.6.4 to 6.6.6. |
 | Fuzz harnesses | 3 | `fuzz/fuse_parse.fcyr`, `fuzz/journald_filter.fcyr`, `fuzz/bootloader_cmdline.fcyr` (added 1.5.3, covering the kernel-cmdline denylist validator) |
 | Benchmarks | 18 (6 groups) | `tests/bcyr/bench_all.bcyr` (was 30 / 11 groups; `bench_compare` removed at 1.4.4) |
 
 ## Local Audit Gates (`scripts/audit.sh`)
 
-12 gates, all green at 1.5.3: syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → **fmt drift** → **lint** → vet → fuzz → benchmarks. Mirrors CI.
-
-**Gate 8 (fmt drift)**, added 1.5.2, diffs the **`cyrfmt` binary's** output against every committed source file (`src/*.cyr`, `tests/tcyr/*.tcyr`, `tests/bcyr/*.bcyr`, `fuzz/*.fcyr`). It must call `cyrfmt` directly — `cyrius fmt <file>` is a silent no-op as of cyrius 6.5.35 (zero bytes, exit 0), which made the old CI gate diff an empty stream against every file and report all 14 as drifted when none had.
+12 gates, all green at 1.6.1: syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → **fmt drift** → **lint** → vet → fuzz → benchmarks. Mirrors CI. 1.6.0 shipped with gates 2 and 3 red on a clean tree (stale API-surface prose, capability map still stamped 1.5.3); both were regenerated at 1.6.1.
 
 **Gate 9 (lint)** was rewritten at 1.5.3. It had been **inert since it was written**: it ran `cyrius lint "$f" || fail`, but `cyrius lint` exits 0 even when it reports findings, so it could only fire if cyrlint failed to execute. It also covered `src/*.cyr` only. It now parses cyrlint's summary counters, gates **warnings and untracked deferrals**, and covers all four globs. CI's equivalent matched only `^\s*warn ` lines and so never saw deferrals — 15 had accumulated. Both gates now fail loudly if cyrlint's output shape changes, rather than silently passing.
 
-Gate 8 (fmt drift) was added at 1.5.2. It diffs the **`cyrfmt` binary's** output against every committed source file (same set as CI: `src/*.cyr`, `tests/tcyr/*.tcyr`, `tests/bcyr/*.bcyr`, `fuzz/*.fcyr`). Until 1.5.2 this check existed only in CI, which is why a broken fmt gate was not caught before a push. It must call `cyrfmt` directly — `cyrius fmt <file>` is a silent no-op as of cyrius 6.5.35 (zero bytes, exit 0), which made the old CI gate diff an empty stream against every file and report all 14 as drifted when none had. The gate fails **empty formatter output as a tooling error**, never as source drift.
+**Gate 8 (fmt drift)** was added at 1.5.2. It diffs the **`cyrfmt` binary's** output against every committed source file (same set as CI: `src/*.cyr`, `tests/tcyr/*.tcyr`, `tests/bcyr/*.bcyr`, `fuzz/*.fcyr`). Until 1.5.2 this check existed only in CI, which is why a broken fmt gate was not caught before a push. It must call `cyrfmt` directly. Since cyrius 6.5.28, `cyrius fmt <file>` **rewrites the file in place** and prints nothing, so a gate diffing its stdout compares an empty stream against every file. That reported all 14 files as drifted at 1.5.2, where it was misread as a "silent no-op". `cyrius fmt --check` does work at 6.6.6. The gate fails **empty formatter output as a tooling error**, never as source drift.
 
-Gate 5 (build) covers **three targets**: x86_64, aarch64 (skipped when `cycc_aarch64` is absent locally), and **agnos** (unconditional — `--agnos` is the stock x86_64 backend plus the `CYRIUS_TARGET_AGNOS` define, so it needs no extra compiler binary). Each build log is run through `check_build_log`, which promotes two warn-only-but-exit-0 diagnostics to hard failures: `non-exhaustive` matches, and **`warning: undefined function`** — the shape that let `_agnos_getenv` ship at 1.5.2 (see CHANGELOG `[Unreleased]`).
+Gate 5 (build) covers **three targets**: x86_64, aarch64 (skipped when `cycc_aarch64` is absent locally), and **agnos** (unconditional — `--agnos` is the stock x86_64 backend plus the `CYRIUS_TARGET_AGNOS` define, so it needs no extra compiler binary). Each build log is run through `check_build_log`, which promotes two warn-only-but-exit-0 diagnostics to hard failures: `non-exhaustive` matches, and **`warning: undefined function`** — the shape that let `_agnos_getenv` ship at 1.5.2 (see CHANGELOG `[1.5.3]`).
 
 ## CI Workflow Status
 
@@ -80,40 +79,33 @@ Gate 5 (build) covers **three targets**: x86_64, aarch64 (skipped when `cycc_aar
 - **Runtime**: 0
 - **Stdlib via `[deps] stdlib`**: `syscalls`, `string`, `alloc`, `atomic`, `fmt`, `vec`, `str`, `io`, `ct`, `slice`, `fnptr`, `tagged`, `assert`, `bench`, `fs`, `hashmap`, `net`, `process`, `args` (**19** — `ct` added 1.1.3 for `ct_eq_bytes`; `slice` added 1.1.11 for `slice<u8>` indexing; `fnptr`/`tagged` added 1.1.12 for `#derive(Serialize)`; `assert`/`bench`/`fs`/`hashmap`/`net`/`process` added across 1.2.x for downstream-bundle completeness; `atomic` added 1.4.1 for the thread-safe allocator; stale `json` dropped at 1.4.2; **`args` added 1.5.2** — `lib/io.cyr`'s `getenv()` delegates to `args_agnos.cyr`'s `_agnos_getenv` on the agnos target, which was otherwise an undefined symbol)
 - **Git-pinned**: 0 (no `[deps.<name>]` stanzas; no `cyrius.lock` needed today)
-- **Vendored stdlib refresh** (last): 2026-08-24 to cyrius 6.5.35 snapshot (`rm -rf lib && cyrius deps`; **35** stdlib files) — verified byte-identical to `~/.cyrius/versions/6.5.35/lib`. `./lib/` is gitignored — CI regenerates it fresh from the pin each run, so the working-tree copy is a dev convenience only. **Keep it a `cyrius deps` set, not a `cyrius lib sync --full` dump:** the full dump is a superset that masks missing `[deps] stdlib` entries (that is exactly how the `args` gap survived — see CHANGELOG `[1.5.2]`). Prior: 2026-07-11 to 6.4.50 (31 files), 2026-06-03 to 6.0.52 (29 files).
+- **Vendored stdlib refresh** (last): 2026-09-22 to the cyrius 6.6.6 snapshot (`rm -rf lib && cyrius deps`; **38** stdlib files — `alloc_cx.cyr` is new, pulled in by 6.6.6's `alloc.cyr`) — verified byte-identical to `~/.cyrius/versions/6.6.6/lib`. Since 6.6.6 `lib/io.cyr` includes `args_agnos.cyr` itself on agnos, so the explicit `args` entry is now belt-and-braces rather than load-bearing; it stays. Previous refreshes: 2026-09-10 to 6.6.2 (1.6.0; 37 files), 2026-08-24 to 6.5.35 (35 files), 2026-07-11 to 6.4.50 (31 files), 2026-06-03 to 6.0.52 (29 files). `./lib/` is gitignored — CI regenerates it fresh from the pin each run, so the working-tree copy is a dev convenience only. **Keep it a `cyrius deps` set, not a `cyrius lib sync --full` dump:** the full dump is a superset that masks missing `[deps] stdlib` entries (that is exactly how the `args` gap survived — see CHANGELOG `[1.5.2]`).
 
 ## Consumer Status
 
-13 / 13 consumer crates unblocked at 1.0. Each consumer pulls only the modules it needs.
+Verified 2026-09-22 by scanning the local AGNOS workspace for `[deps.agnodrm]` and for includes of the agnodrm bundles. There are two consumers, and both take the full bundle:
 
-| Consumer | Modules | Status |
-|---|---|---|
-| kavach | security (landlock, seccomp) | Ready |
-| aegis | mac | Ready |
-| shakti | pam | Ready |
-| libro | audit | Ready |
-| stiva | luks, dmverity | Ready |
-| sigil | tpm, ima, secureboot, certpin | Ready |
-| ark | fuse, update | Ready |
-| argonaut | journald, bootloader | Ready |
-| daimon | security (seccomp), certpin | Ready |
-| nein | netns | Ready |
-| yukti | udev | Ready |
-| soorat | drm | Ready |
-| hoosh | certpin | Ready |
+| Consumer | Pulls | Tag | Its cyrius pin | To take 1.6.1 |
+|---|---|---|---|---|
+| stiva | `dist/agnodrm.cyr` | 1.6.0 | 6.6.2 | pin → ≥ 6.6.4 (the `O_DIRECTORY` floor) |
+| aethersafha | `dist/agnodrm.cyr` (also `path = "../agnodrm"` for local dev) | 1.6.0 | 6.6.2 | pin → ≥ 6.6.4 |
+
+kavach and sigil no longer depend on agnodrm: both internalized what they used in the 1.4.4 decomposition. That matters because they are the two repos the nightly consumer-integration workflow still builds. `[lib.core]`'s comment in `cyrius.cyml` names ai-hwaccel and mabda as core consumers, but neither references agnodrm today. The 1.0-era 13-consumer table predates the decomposition and lives in git history.
 
 Automated consumer-integration CI is roadmap Phase 8 (item 5).
 
 ## Verification Hosts
 
 - **Linux x86_64** — primary; `cyrius build` + `cyrius test` self-host.
-- **Linux aarch64** — best-effort; CI cross-builds when `cycc_aarch64` (renamed from `cc5_aarch64` in Cyrius 6.0) is bundled in the toolchain release.
+- **Linux aarch64** — best-effort; CI cross-builds when `cycc_aarch64` (renamed from `cc5_aarch64` in Cyrius 6.0) is bundled in the toolchain release. CI never *runs* aarch64 binaries, so runtime checks are local, under `qemu-aarch64`: the full suite, fuzz and smoke at 1.5.3 and 1.6.1. `qemu-aarch64 -strace` is how 1.6.1 caught the `O_DIRECT`-for-`O_DIRECTORY` open and the untranslated `sendto`.
 - **macOS / Windows** — not supported. Most modules are kernel-Linux-only by definition (audit netlink, PAM, journald, dm-verity, IMA, secureboot). See roadmap Phase 8 (item 3).
 
 ## Recent Releases
 
 | Tag | Date | Headline |
 |---|---|---|
+| **1.6.1** | 2026-09-22 | **cyrius pin 6.6.2 → 6.6.6**, with the consumer items the 6.6.4 and 6.6.5 notes asked for. **aarch64 fixes:** `drm_list_devices` and `bootloader_detect` opened directories with a raw `0x10000`, which is `O_DIRECT` on arm64 (`EINVAL` on `/dev/dri`); both now spell `O_DIRECTORY`, raising the **consumer floor to 6.6.4**. `journald_send` now really sends on arm64 (toolchain fix; raw 44 ran `fstatfs`). Two "For now" deferrals got pointers (6.6.5 cyrlint folds case). `bench-history.sh` now parses fractional-µs rows (it crashed mid-append). Reconciles 1.6.0's gaps: bench row, API prose, capability map, state.md. Bench deltas traced to literal/code placement, not codegen. Audit 12/12; 111/111 on x86_64 and `qemu-aarch64`. See CHANGELOG `[1.6.1]`. |
+| **1.6.0** | 2026-09-10 | **cyrius pin 6.5.35 → 6.6.2 — migrated to the 6.6.x value-form `Result`.** 27 sites; 13 were the propagation trap (`return res;` of a pair returns the payload alone, so an `Err` reads as success), fixed by re-wrapping `return Err(res_v);`. ⚠ BREAKING: `result_print_err(res)` → `result_print_err(res_tag, res)`, matching sigil. *(Shipped without a bench-history row, API-prose and capability-map regeneration, or a state.md refresh — all reconciled at 1.6.1.)* |
 | **1.5.3** | 2026-08-24 | **P(-1) audit / hardening sweep — 1 HIGH, 2 MEDIUM, 4 LOW, all closed.** F-5 (HIGH): `fuse_parse_proc_mounts` wrote one byte past its 8192-byte heap buffer when `/proc/mounts` filled it (~90 mounts — routine on container hosts); third instance of a class already fixed at 1.3.0 and 1.3.1, proven by heap canary. F-1 (MEDIUM): kernel-cmdline denylist had no `rdinit=` entry at all and enumerated only three `init=` shells — widened 21 → 48 entries, `rdinit=` matched by prefix. F-6 (MEDIUM): netns firewall port unvalidated into an `alloc(8)` scratch. Plus F-3/F-4 (drm getdents/ioctl hardening) and F-7 (netns prefix_len). **Two inert gates repaired**: `audit.sh`'s lint gate had never been able to fire (`cyrius lint` exits 0 on findings) and covered only `src/`; CI's missed deferral lines entirely — 15 had accumulated. 93 → 111 tests (11 verified to fail on unfixed sources), 2 → 3 fuzz harnesses, SECURITY-NOTES pruned to the 9 live modules. Perf: `validate_cmdline_safe` 452 → 627 ns, a deliberate trade for F-1 coverage. See CHANGELOG `[1.5.3]` and `docs/audit/2026-08-24-audit.md`. |
 | **1.5.2** | 2026-08-24 | **cyrius pin 6.5.27 → 6.5.35 + the agnos `_agnos_getenv` gap closed.** `[deps] stdlib` declared `io` but not `args`, and `lib/io.cyr`'s `getenv()` delegates to `args_agnos.cyr`'s `_agnos_getenv` under `#ifdef CYRIUS_TARGET_AGNOS` — so `cyrius build --agnos` emitted `undefined function '_agnos_getenv'` and any agnos `getenv()` would have jumped to an unresolved symbol. Latent since the agnos target was adopted at 1.4.0, hidden by a `lib sync --full` working-tree dump and by CI never cross-building `--agnos`. Vendored `./lib/` rebuilt clean and verified byte-identical to the 6.5.35 snapshot (35 files); stale `patra 1.13.0` shadow cleared. Audit clean (11/11), 93 tests, all three targets warning-free (x86_64 140,776 B / agnos 132,320 B / aarch64 333,248 B). Dist bundles regenerated and consumer-verified; core `.deps` gained `args` + `syscalls`. capability-map + state.md reconciled (both had shipped stale at 1.5.1). Bench: toolchain-only wins, no regressions (`compare_versions` −26.8%, `validate_ver_good` −16.5%). See CHANGELOG `[1.5.2]`. |
 | **1.5.1** | 2026-08-17 | **cyrius pin 6.4.50 → 6.5.27**, matching the rest of the AGNOS desktop stack. Build 123,848 → 140,752 B; tests green. *(Shipped without the mandatory bench-history row, capability-map regen, or state.md refresh — all three reconciled at 1.5.2.)* |

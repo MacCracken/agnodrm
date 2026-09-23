@@ -101,13 +101,13 @@ pass "$(grep -oE '^[0-9]+ passed' /tmp/audit_test.log | head -1)"
 stage 8/12 "fmt drift"
 # Gate the FORMATTER, not just the sources.
 #
-# Invoke the `cyrfmt` binary directly — NOT `cyrius fmt <file>`. As of cyrius
-# 6.5.35 that subcommand is a silent no-op: zero bytes on stdout, exit 0. CI's
-# gate diffed its output against each file, so it compared an empty stream to
-# all 14 sources and failed every one with "needs fmt" while nothing had
-# actually drifted (hit on the 6.5.27 -> 6.5.35 pin bump at 1.5.2). This gate
-# did not exist locally at the time, which is why the false positive was not
-# caught until it reached CI.
+# Invoke the `cyrfmt` binary directly — NOT `cyrius fmt <file>`. Since cyrius
+# 6.5.28 that subcommand rewrites the file IN PLACE: zero bytes on stdout, exit 0
+# (1.5.2 misread that as a "silent no-op"). CI's gate diffed its output against
+# each file, so it compared an empty stream to all 14 sources and failed every
+# one with "needs fmt" while nothing had actually drifted (hit on the
+# 6.5.27 -> 6.5.35 pin bump at 1.5.2). This gate did not exist locally at the
+# time, which is why the false positive was not caught until it reached CI.
 #
 # The empty-output check is the durable part: a formatter that produces nothing
 # is BROKEN, and that must surface as a tooling failure rather than being

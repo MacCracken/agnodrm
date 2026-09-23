@@ -7,6 +7,10 @@
 #
 # Requires: src/error.cyr, lib/syscalls.cyr, lib/process.cyr
 
+# Included directly (as drm.cyr does) for the per-target O_DIRECTORY that
+# bootloader_detect opens with; include-once, so includers pay nothing.
+include "lib/syscalls.cyr"
+
 # ================================================================
 # Bootloader type constants
 # ================================================================
@@ -85,7 +89,8 @@ fn bootloader_detect(): i64 {
     #ifndef CYRIUS_TARGET_AGNOS
     # Check for systemd-boot: /boot/efi/EFI/systemd
     var sd_path = "/boot/efi/EFI/systemd";
-    var fd = sys_open(sd_path, 0x10000, 0);  # O_RDONLY | O_DIRECTORY
+    # O_RDONLY | O_DIRECTORY — the per-target symbol; a raw 0x10000 is O_DIRECT on arm64.
+    var fd = sys_open(sd_path, O_DIRECTORY, 0);
     if (fd >= 0) {
         sys_close(fd);
         return Ok(BOOT_SYSTEMD_BOOT);
@@ -259,7 +264,7 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     }
 
     # Fallback: try reading /boot/loader/entries/ directly
-    # For now, return 0 entries on failure
+    # For now, return 0 entries on failure (roadmap.md V1.6.x).
     return Ok(0);
     #endif
 }

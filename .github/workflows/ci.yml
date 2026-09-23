@@ -77,10 +77,11 @@ jobs:
       - name: Format check
         # Drift gate: the formatter's output must match the committed file.
         #
-        # Invoke `cyrfmt` directly, NOT `cyrius fmt`. As of cyrius 6.5.35 the
-        # `cyrius fmt` subcommand is a silent no-op — it emits zero bytes and
-        # exits 0 — so diffing its output against the file reported *every*
-        # file as drifted while the sources were in fact correctly formatted.
+        # Invoke `cyrfmt` directly, NOT `cyrius fmt`. Since cyrius 6.5.28 the
+        # `cyrius fmt` subcommand rewrites the file IN PLACE and emits zero
+        # bytes on stdout (1.5.2 misread that as a "silent no-op"), so diffing
+        # its output against the file reported *every* file as drifted while
+        # the sources were in fact correctly formatted.
         # That is what broke CI on the 6.5.27 -> 6.5.35 pin bump at 1.5.2.
         # `cyrfmt <file>` still emits formatted source to stdout, which is
         # what this gate needs. Do not "simplify" this back to `cyrius fmt`.

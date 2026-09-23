@@ -7,6 +7,210 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-09-22
+
+**cyrius pin 6.6.2 → 6.6.6**, across the four 6.6.x repair releases, with the consumer items those
+releases asked for. The release fixes two aarch64 defects that had shipped in every arm64 build:
+one by spelling a per-target open flag, one inherited from the toolchain. It also reconciles what
+1.6.0 shipped without: a `bench-history.csv` row, two regenerated docs, and a state.md refresh.
+1.6.0 left `scripts/audit.sh` red on a clean tree.
+
+⚠ **Consumer floor rises 6.6.0 → 6.6.4.** The `O_DIRECTORY` fix below spells the stdlib's per-target
+name, which first appears in cyrius 6.6.4. The 1.6.1 sources fail on 6.6.0–6.6.3 with
+`undefined variable 'O_DIRECTORY'` and build and pass 111/111 on 6.6.4, 6.6.5 and 6.6.6. The known
+consumers of `dist/agnodrm.cyr` — stiva and aethersafha, both on tag 1.6.0 and pinned to cyrius
+6.6.2 — must move their pin to ≥ 6.6.4 when they take 1.6.1.
+
+### Fixed
+
+- **aarch64: `drm_list_devices` and `bootloader_detect` opened directories with `O_DIRECT`.** Both
+  passed a raw `0x10000`, which is `O_DIRECTORY` on x86_64 but **`O_DIRECT` on arm64**, where the
+  flag pairs swap. Under `qemu-aarch64 -strace`, `drm_list_devices` issued
+  `openat("/dev/dri", O_RDONLY|O_DIRECT) = -EINVAL`, so every arm64 build reported "DRM not found"
+  on a host with a GPU; x86_64 on the same host found the card. `bootloader_detect` probed
+  `/boot/efi/EFI/systemd` the same way, so arm64 systemd-boot was never detected.
+  - Both sites now spell `O_DIRECTORY` (`src/drm.cyr`, `src/bootloader.cyr`). The flag is traced
+    as `O_RDONLY|O_DIRECTORY`, and `drm_list_devices` returns `Ok(1)` on aarch64.
+  - `src/bootloader.cyr` now includes `lib/syscalls.cyr` itself, as `drm.cyr` already did, so its
+    standalone `cyrius check` (audit gate 1) resolves the name.
+  - x86_64 and agnos DCE binaries are **byte-identical** to the pre-fix build.
+  - The cyrius 6.6.4 notes list agnodrm among the repos whose decimal `O_*` literals should be
+    spelled "at the next bump". The other flag literals (`0x80002`, `0x241`) mean the same thing
+    on both architectures.
+- **aarch64: `journald_send` / `journald_send_fields` never sent anything.** Toolchain fix, no source
+  change. `src/journald.cyr` inlines the x86 `sendto` number, 44. Through 6.6.4 that number was not
+  translated on aarch64, where 44 is `fstatfs`. From 6.6.5 it is routed to `sendto`. Traced with a
+  side-effect-free probe on fd −1: `fstatfs(-1, …)` on 6.6.2 and 6.6.4, `sendto(-1, …)` on 6.6.5
+  and 6.6.6. `socket` (41) was already translated.
+- **Two deferral comments that 6.6.5's cyrlint newly flags.** 6.6.5's cyrlint folds case, so a
+  capital "For now" became an untracked deferral, which would have turned CI's *Lint* step and
+  `scripts/audit.sh` gate 9 red at the bump. Neither was incidental prose, so neither got
+  `#skip-lint`:
+  - `src/update.cyr:458` gained a same-line `roadmap.md V1.5.x` pointer. The existing pointer sat
+    on :457, and cyrlint reads each physical line separately.
+  - `src/bootloader.cyr:267` (262 before this release's `include` moved it) is the unimplemented
+    `/boot/loader/entries/` fallback in `bootloader_list_boot_entries` and had no tracked entry at
+    all. Roadmap **V1.6.x** now records it, including the result shape: a failed `bootctl` reads as
+    `Ok(0)`, i.e. "no entries".
+
+  No other deferral phrase in the four source globs matches under 6.6.6's cyrlint.
+- **`scripts/bench-history.sh` could not record a benchmark over 1 µs.** Above 1 µs, `bench_report`
+  prints `<major>.<fff>us` (e.g. `1.070us`). The recorder's `([0-9]+)us` pattern failed to match,
+  arithmetic expansion then errored, and under `set -e` the script died partway through appending,
+  leaving a partial run in the tracked CSV. `validate_cmdline_safe` crossed 1 µs at the 6.6.x pin,
+  so the mandatory per-version bench step could not complete. An `ms` row was never recognized at
+  all. The recorder now:
+  - converts `ns` / `us` / `ms` / `s` exactly to integer ns;
+  - parses the whole run before appending anything;
+  - on an unrecognized row, fails and leaves the CSV untouched.
+- **The `cyrius fmt` description was wrong.** CLAUDE.md, README, `ci.yml` and `scripts/audit.sh`
+  called `cyrius fmt <file>` a silent no-op. Since cyrius 6.5.28 — a change flagged as breaking in
+  that release's notes — it **rewrites the file in place** and prints nothing. On an
+  already-formatted tree that looks exactly like a no-op, which is how 1.5.2 misread it.
+  `cyrius fmt --check` works: at 6.6.6 it exits 1 on unformatted input. The gates are unaffected,
+  because they diff `cyrfmt`'s stdout, which is still the right tool. Only the wording changed.
+
+### Changed — cyrius pin 6.6.2 → **6.6.6**
+
+- Vendored `./lib/` rebuilt from a clean `rm -rf lib && cyrius deps` and verified **byte-identical**
+  to the 6.6.6 toolchain snapshot — **38** files. That is the previous 37 plus `alloc_cx.cyr`, the
+  cyrius-x bytecode heap arm that 6.6.6's `lib/alloc.cyr` includes under `#ifdef CYRIUS_TARGET_CX`.
+  18 of the 37 carried-over files changed upstream.
+- The re-vendor was required, not optional: 6.6.5 moved the aarch64 peer's `SYS_UNLINKAT` 35 → 263
+  (the x86 number, which ESYSXLAT now renumbers), so a stale peer's `sys_unlink` and `sys_rmdir`
+  would have run nanosleep. `sys_unlink` is verified on aarch64 below.
+- **Inherited behaviour change: subprocesses now die with agnodrm.** Since 6.6.6, every
+  `exec_*` / `run*` child in `lib/process.cyr` gets `PR_SET_PDEATHSIG(SIGKILL)` plus a parent-pid
+  re-check (Linux, unconditional).
+  - Affected: `bootctl`, `udevadm`, `journalctl`, `ip` (including `ip netns exec … nft`), `mkdir`,
+    `efibootmgr`, `argonaut`, and the update path's `dd` image write. If the agnodrm process is
+    killed mid-update, `dd` is now killed with it instead of finishing unattended.
+  - Not affected: setuid helpers (`fusermount`) and self-daemonising FUSE helpers, because both
+    clear the flag.
+  - 6.6.6 also adds an opt-in process-wide deadline, `proc_set_timeout_ms`, which agnodrm does not
+    set. An embedder that sets it bounds those same children.
+- `[deps] stdlib` unchanged (19 entries). No git-pinned deps, so there is no `cyrius.lock` to
+  refresh. `dist/*.deps` sidecars unchanged: 19 leaves full, 9 core.
+- Dist bundles regenerated. Module bodies differ from 1.6.0 only by the `O_DIRECTORY` fix, the
+  one `include`, and the comments above.
+
+### Reconciled — what 1.6.0 shipped without
+
+- `docs/development/api-surface-1.0.md` still showed the 1-arity `result_print_err(arg)`, so gate 2
+  ("api-surface prose stale") failed on a clean 1.6.0 tree. Regenerated. The snapshot itself was
+  correct.
+- `docs/development/capability-map.md` was still stamped 1.5.3, so gate 3 failed. Regenerated;
+  only the header changed, with no capability drift.
+- **No `bench-history.csv` row for 1.6.0.** The recorder bug above is a plausible cause. The
+  baseline below was measured fresh.
+- `docs/development/state.md` still described 1.5.3. Refreshed.
+- `docs/development/capacity-baseline.md` gains a 1.6.1 refresh note: ceilings grew again in 6.6.x.
+
+### Performance
+
+Measured on one host with identical source: five interleaved runs per toolchain, median ns. The
+18 benchmarks run in 6 groups (`tests/bcyr/bench_all.bcyr`); the 6.6.2 baseline comes from the
+1.6.0 tree with its vendored lib. The final 1.6.1 bench binary is byte-identical to the one
+measured — the `O_DIRECTORY` edit does not change x86_64 code.
+
+| Benchmark | 6.6.2 | 6.6.6 | Δ |
+|---|---:|---:|---:|
+| `strlen_16ch` | 11 | 21 | +90.9% |
+| `streq_16ch` | 53 | 71 | +34.0% |
+| `compare_versions` | 118 | 149 | +26.3% |
+| `validate_ver_good` | 62 | 75 | +21.0% |
+| `is_dangerous_token_miss` | 102 | 115 | +12.7% |
+| `is_dangerous_token_hit` | 107 | 112 | +4.7% |
+| `validate_cmdline_safe` | 990 | 998 | +0.8% (runs span 502–1,664) |
+| `starts_with_hit` / `_miss` | 12 / 6 | 14 / 7 | +2 / +1 ns |
+| the other 10 | — | — | within ±1 ns |
+
+6.6.5 also changed how averages round: half-up from picoseconds instead of truncation, so any row
+can move by up to 1 ns on that alone.
+
+⚠ **The moved rows are code and data placement, not codegen.** A toolchain bisect puts the jumps at
+6.6.5 (`strlen`, `streq`) and 6.6.6 (`compare_versions`, `validate_ver_good`). Neither survives
+isolation:
+
+- **String-literal alignment.** Stdlib `strlen` walks bytes until the pointer is 8-aligned, then
+  reads a word at a time. Timed on a heap buffer at offsets 0–7, it costs **10.8 ns aligned and
+  20–23 ns misaligned — identical on 6.6.4, 6.6.5 and 6.6.6**. 6.6.5's `bench.cyr` added string
+  literals, which moved `"hello_world_test"` off 8-alignment in the bench binary. With every bench
+  input copied into an 8-aligned buffer, `strlen_16ch` reads 11 ns and `streq_16ch` 52 ns on
+  every toolchain from 6.6.2 to 6.6.6.
+- **Code placement.** With aligned inputs, `compare_versions` on 6.6.6 still ranges **95–126 ns
+  depending only on a padding function** inserted ahead of the agnodrm sources. One padding size
+  reproduces 6.6.5's 95 ns exactly, and `validate_ver_good` behaves the same way (50–66 ns).
+  Timed in isolation, `update_parse_version`'s parse loop (36 ns) and its `alloc(24)` (9.3 ns)
+  are identical on 6.6.5 and 6.6.6. The token and `starts_with` rows show the same pattern.
+- **`validate_cmdline_safe` is noisy on every 6.6.x pin.** Its 48-entry danger map is a stdlib
+  hashmap, and since cyrius v6.5.39 that hashmap uses a per-process random seed plus a finalizer
+  (the hash-flooding DoS fix), so each run gets a different probe layout. Runs vary 2–3× on
+  either pin. The same change most likely explains what 1.6.0 never recorded against the 1.5.3
+  row: `validate_cmdline_safe` went 617 → ~1,000 ns, and `map_get_hit` / `map_get_miss` rose
+  11–18%. 1.6.0's value-form `Result` moved the other way — `ok_create` 12 → 2 ns,
+  `from_errno_eperm` 19 → 9 ns — and `compare_versions` (156 → 118 ns) and `validate_ver_good`
+  (87 → 62 ns) also improved. The fresh baseline and the 1.5.3 row were measured on different
+  days, so treat those cross-release numbers as indicative only.
+
+Harness caveat: `batch_record` in `bench_all.bcyr` writes the stdlib bench struct at fixed
+offsets. 6.6.5 grew that struct and switched its min/max fields to picoseconds, so every row's
+`min=` / `max=` now just repeats the mean. The average is unaffected: it is still raw total ÷
+iterations, and it is the only value `bench-history.csv` records. The fix is to move to the
+stdlib's `bench_batch_start` / `bench_batch_stop`, left for a separate change so this bump keeps
+the bench methodology fixed.
+
+### Build Metrics
+
+| Target (DCE) | 1.6.0 on 6.6.2 | 1.6.1 on 6.6.6 | Δ |
+|---|---:|---:|---:|
+| x86_64 | 22,016 B | 22,672 B | +656 B |
+| agnos | 21,816 B | 22,328 B | +512 B |
+| aarch64 | 333,272 B | 399,424 B | +66,152 B |
+
+The aarch64 growth is all dead stdlib code: that backend NOPs unreachable code rather than removing
+it, and NOPed bytes rose 283,628 → 357,324. Live aarch64 code *shrank* 49,644 → 42,100 B.
+
+x86_64 dead-code floor: 616 unreachable fns, 129,138 bytes eliminated (6.6.2: 572 fns,
+121,130 bytes). The x86_64 and agnos backends have eliminated dead code outright since 6.6.x, which
+is why these binaries are ~22 KB against 1.5.3's 140,776 B.
+
+Compiler-table utilization at the new pin; ceilings grew in 6.6.x:
+
+| Table | Used / ceiling |
+|---|---|
+| `fn_table` | 658 / 131,072 |
+| `identifiers` | 17,689 / 8,388,608 |
+| `var_table` | 426 / 1,048,576 |
+| `fixup_table` | 1,016 / 1,048,576 |
+| `string_data` | 2,492 / 2,097,152 |
+| `code_size` | 145,056 / 67,108,864 |
+| `fn_name_hash` | 658 / 4,096 slots (16%, max probe 3) — now the highest-utilization table |
+
+### Verification
+
+- `scripts/audit.sh` clean, 12/12. 111/111 tests, 3 fuzz harnesses, 18 benchmarks.
+- 315 public fns, no API-surface drift. CI's security-scan patterns pass locally.
+- x86_64, aarch64 and agnos all build warning-free. 1.6.0's aarch64 build printed a stdlib warning
+  (`raw syscall 32 is x86_64 dup`, the aarch64 arm of `lib/io.cyr`'s flock wrapper); agnodrm never
+  calls it, and 6.6.6's `io.cyr` no longer emits it.
+- CI shape, DCE builds: each `.tcyr` per file and all 3 fuzz harnesses pass on x86_64. Under
+  `qemu-aarch64`, the 111-assertion suite, all 3 fuzz harnesses and the smoke binary pass.
+- **The staging-cycle check from the 6.6.6 roadmap**, as a 32-assertion scratch harness, run
+  natively and under `qemu-aarch64`. The 6.6.6 `O_TRUNC` / `O_APPEND` repair was PE-only, so on
+  Linux this confirms behaviour rather than a fix.
+  - `update_atomic_write` and `update_atomic_copy` each rewrite a file *shorter* over a planted,
+    longer, stale `.tmp`; the target ends exactly at the new length and no `.tmp` is left behind.
+  - An `update_save_state` cycle shrinks the state file, which still ends at `}\n` and loads back
+    as the short state.
+  - `sys_unlink` removes the file and then returns `-ENOENT`, which covers the aarch64 peer
+    renumbering.
+
+  Mutation check: with `O_TRUNC` dropped from both `sys_open(…, 0x241, …)` sites, the harness fails
+  exactly the two length checks (`got 9000, expected 100` / `expected 50`).
+- The `O_DIRECTORY` and journald fixes were traced under `qemu-aarch64 -strace`, as described in
+  *Fixed*.
+
 ## [1.6.0] — 2026-09-10
 
 **Migrated to the cyrius 6.6.x value form.** A minor rather than a patch: one public

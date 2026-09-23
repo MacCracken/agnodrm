@@ -130,7 +130,7 @@ build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks
 | API surface prose staleness | [`scripts/gen-api-surface-prose.sh`](scripts/gen-api-surface-prose.sh) `--check` |
 | Capability map staleness | [`scripts/gen-capability-map.sh`](scripts/gen-capability-map.sh) `--check` |
 | Capacity (<85% all tables) | `cyrius capacity --check src/main.cyr` |
-| Fmt drift | `cyrfmt <file>` output must match the committed file (**not** `cyrius fmt` — no-op since 6.5.35) |
+| Fmt drift | `cyrfmt <file>` output must match the committed file (**not** `cyrius fmt` — it rewrites in place and prints nothing) |
 | Tests (247 assertions) | `cyrius test` |
 | Fuzz (7 harnesses) | `fuzz/*.fcyr` under `timeout 10 ... 500` |
 | Benchmarks (30 across 11 groups) | `tests/bcyr/bench_all.bcyr` |

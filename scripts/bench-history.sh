@@ -55,21 +55,45 @@ BENCH_OUTPUT=$(./build/bench 2>&1)
 echo "$BENCH_OUTPUT"
 echo ""
 
-# Parse output lines like: "  getpid: 307ns avg (min=303ns max=372ns) [1000000 iters]"
-while IFS= read -r line; do
-    if [[ "$line" == *"ns avg"* ]]; then
-        BENCH_NAME=$(echo "$line" | sed -E 's/:.*//' | xargs)
-        NS=$(echo "$line" | sed -E 's/.*: ([0-9]+)ns avg.*/\1/')
-        echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${NS}" >> "$HISTORY_FILE"
-    elif [[ "$line" == *"us avg"* ]]; then
-        BENCH_NAME=$(echo "$line" | sed -E 's/:.*//' | xargs)
-        US=$(echo "$line" | sed -E 's/.*: ([0-9]+)us avg.*/\1/')
-        NS=$((US * 1000))
-        echo "${TIMESTAMP},${COMMIT},${BRANCH},${BENCH_NAME},${NS}" >> "$HISTORY_FILE"
-    fi
-done <<< "$BENCH_OUTPUT"
+# Parse result rows like: "  getpid: 307ns avg (min=303ns max=372ns) [1000000 iters]".
+#
+# bench_report prints "<int>ns" below 1us and "<major>.<fff><us|ms|s>" above it,
+# where fff is zero-padded thousandths of the unit (e.g. "1.070us") — so every
+# value converts to an exact integer ns. The old parser expected an integer
+# before "us", so the first bench to cross 1us ("validate_cmdline_safe", at the
+# 6.6.x pin) broke arithmetic expansion and killed the script mid-append, and an
+# "ms" row was never recognized at all.
+#
+# Rows are parsed in full BEFORE anything is appended, so a row the converter
+# does not understand fails the run with the CSV untouched rather than leaving
+# a partial run in the tracked history.
+ROWS=$(echo "$BENCH_OUTPUT" | awk -v ts="$TIMESTAMP" -v c="$COMMIT" -v br="$BRANCH" '
+    function to_ns(t,   n, u, dot, ip, fr) {
+        n = t; sub(/[a-z]+$/, "", n)
+        u = t; sub(/^[0-9.]+/, "", u)
+        if (n !~ /^[0-9]+(\.[0-9]+)?$/) return -1
+        dot = index(n, ".")
+        if (dot) { ip = substr(n, 1, dot - 1) + 0; fr = substr(substr(n, dot + 1) "000", 1, 3) + 0 }
+        else     { ip = n + 0; fr = 0 }
+        if (u == "ns") return ip
+        if (u == "us") return ip * 1000 + fr
+        if (u == "ms") return ip * 1000000 + fr * 1000
+        if (u == "s")  return ip * 1000000000 + fr * 1000000
+        return -1
+    }
+    / avg / && /: / {
+        name = $0; sub(/^[[:space:]]+/, "", name); sub(/:.*/, "", name)
+        val = $0;  sub(/^[^:]*: /, "", val);        sub(/ avg.*/, "", val)
+        ns = to_ns(val)
+        if (ns < 0) { print "unparseable bench row: " $0 > "/dev/stderr"; bad = 1; exit 1 }
+        printf "%s,%s,%s,%s,%d\n", ts, c, br, name, ns
+    }
+    END { if (bad) exit 1 }
+')
 
-COUNT=$(echo "$BENCH_OUTPUT" | grep -c "avg" || echo 0)
+COUNT=$(printf '%s' "$ROWS" | grep -c . || true)
+[ "$COUNT" -gt 0 ] || { echo "ERROR: no benchmark rows parsed — output format changed?"; exit 1; }
+printf '%s\n' "$ROWS" >> "$HISTORY_FILE"
 
 echo "════════════════════════════════════════════"
 echo "  ${COUNT} benchmarks recorded"

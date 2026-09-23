@@ -455,7 +455,7 @@ fn update_config_device_for_slot(c, slot): i64 {
 # UpdateManifest struct — 6 fields * 8 = 48 bytes.
 # Field name `files` matches 1.0 getter (not doc-comment `files_vec`).
 # Note: sha256_digest verification deferred — requires SHA-256 (roadmap.md V1.5.x).
-# For now, manifest validation checks structural integrity only.
+# For now, manifest validation checks structural integrity only (roadmap.md V1.5.x).
 # ================================================================
 
 #derive(accessors)

@@ -104,7 +104,7 @@
 - `drm_syserr_pack(arg1, arg2)` → Pack kind + errno into a single integer (zero allocation)
 - `drm_syserr_print(arg)` → (no behavioral docs)
 - `is_syscall_err(arg)` → Check if a syscall return value indicates error (negative = errno)
-- `result_print_err(arg)` → Print error from a Result if it's Err, then return the error code. Returns 0 if the Result is Ok.
+- `result_print_err(arg1, arg2)` → Print error from a Result if it's Err, then return the error code. Returns 0 if the Result is Ok....
 - `wrap_syscall(arg)` → Wrap a raw syscall return: Ok(ret) if >= 0, Err(from_errno) if < 0
 
 ### `fuse` (src/fuse.cyr)

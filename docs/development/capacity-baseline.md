@@ -13,6 +13,20 @@
 
 Numbers come from `CYRIUS_STATS=1 cyrius build <src> <out>`.
 
+> **Refresh note (1.6.1, 2026-09-22, Cyrius 6.6.6).** The gate build now measures as below.
+> Ceilings grew again in 6.6.x, already by the 6.6.2 pin 1.6.0 shipped on, which recorded no
+> refresh: `fn_table` 32,768 → 131,072, `identifiers` 524,288 → 8,388,608, and `var_table`
+> 8,192 → 1,048,576. The compiler also reports a **`fn_name_hash`** table now: 658 of
+> 4,096 slots, max probe 3. At 16% it is the highest-utilization table, still far under the
+> 85% gate. Every other table is under 1%. Counts rose against 1.5.2's row with the
+> 6.6.6 stdlib snapshot: +55 fns, +33 vars.
+>
+> | Build | fn_table | identifiers | var_table | fixup_table | string_data | code_size | fn_name_hash |
+> |-------|---------:|------------:|----------:|------------:|------------:|----------:|-------------:|
+> | `src/main.cyr` (device-model smoke: error+util+udev+drm) | 658 / 131 072 · <1% | 17 689 / 8 388 608 · <1% | 426 / 1 048 576 · <1% | 1 016 / 1 048 576 · <1% | 2 492 / 2 097 152 · <1% | 145 056 / 67 108 864 · <1% | 658 / 4 096 · 16% |
+>
+> The 1.5.2 note below is kept as history.
+
 > **Refresh note (1.5.2, 2026-08-24, Cyrius 6.5.35).** The gate build's current
 > numbers are below. The per-profile tables further down **predate the 1.4.4
 > decomposition** — they measure the old 20-module `agnosys` surface and the
