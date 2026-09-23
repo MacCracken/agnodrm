@@ -1,8 +1,15 @@
-# bench_all.cyr — comprehensive batch-amortized benchmarks
-# 12 agnosys modules, batch timing (10K iters x 100 rounds)
+# bench_all.bcyr — batch-amortized benchmarks
+# 18 benchmarks in 6 groups (error, bootloader, update, udev, fuse, string).
+# Every row times BA_WINDOWS windows of BA_OPS inline ops each, through the
+# stdlib's bench_batch_start / bench_batch_stop, so the book (raw total,
+# iterations, windows, and the per-op min/max in picoseconds that 6.6.5 added)
+# is kept by lib/bench.cyr rather than by offsets written here.
 #
-# Build: cyrb build tests/bench_all.cyr build/bench_all
+# Build: cyrius build tests/bcyr/bench_all.bcyr build/bench_all
 # Run:   ./build/bench_all
+#
+# The row NAMES are the keys of bench-history.csv — renaming one breaks the
+# cross-version record for that row.
 
 #define LINUX
 
@@ -26,16 +33,38 @@ include "src/update.cyr"
 include "src/fuse.cyr"
 include "src/udev.cyr"
 
-fn batch_record(b, elapsed, iters) {
-    var per_op = elapsed / iters;
-    store64(b + 16, load64(b + 16) + elapsed);
-    store64(b + 24, load64(b + 24) + iters);
-    if (per_op < load64(b + 32)) { store64(b + 32, per_op); }
-    if (per_op > load64(b + 40)) { store64(b + 40, per_op); }
-    return 0;
+# Batch shape: 10K ops per timed window x 100 windows (1M ops per row).
+enum BenchShape {
+    BA_OPS = 10000;
+    BA_WINDOWS = 100;
 }
 
 fn do_bench(name) { return bench_new(name); }
+
+# Copy a NUL-terminated bench input into a fresh 8-byte-aligned heap buffer.
+#
+# Why every string input goes through here, once, before its timed loop:
+# stdlib `strlen` walks BYTES until the pointer is 8-aligned and only then
+# reads a word at a time, and `streq`, the bootloader / update validators and
+# hashmap keys all start with a `strlen`. A string literal lands wherever the
+# toolchain packs the binary's data, so its alignment — and with it the cost of
+# every row that reads it — moves whenever ANY literal in the binary moves:
+# at 1.6.1 `strlen_16ch` went 11 -> 21 ns with no code change, because
+# 6.6.5's lib/bench.cyr added literals ahead of "hello_world_test".
+#
+# The copy is zero-padded to a whole number of words, so a word-at-a-time
+# reader never reads past the allocation. Literals the LIBRARY compares against
+# internally (udev's subsystem names, bootloader's danger map) are not inputs
+# and are not copied; they are part of what the row measures.
+fn ba_aligned_cstr(s) {
+    var n = strlen(s);
+    var words = (n + 8) & (0 - 8);
+    var p = alloc(words + 8);
+    var a = (p + 7) & (0 - 8);
+    memset(a, 0, words);
+    memcpy(a, s, n);
+    return a;
+}
 
 # ================================================================
 # 2. error
@@ -45,44 +74,44 @@ fn bench_errors() {
     println("-- error --");
     var b = do_bench("drm_syserr_pack");
     var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, EPERM); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { drm_syserr_pack(DRM_ERR_SYSCALL_FAILED, EPERM); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("from_errno_eperm");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { drm_err_from_errno(EPERM); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { drm_err_from_errno(EPERM); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("ok_create");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { Ok(42); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { Ok(42); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("wrap_syscall_ok");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { wrap_syscall(syscall(SYS_GETPID)); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { wrap_syscall(sys_getpid()); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
@@ -96,40 +125,42 @@ fn bench_errors() {
 
 fn bench_bootloader() {
     println("-- bootloader --");
-    var safe = "root=/dev/sda1 ro quiet splash";
-    var bad = "root=/dev/sda1 init=/bin/sh";
+    var safe = ba_aligned_cstr("root=/dev/sda1 ro quiet splash");
+    var bad = ba_aligned_cstr("root=/dev/sda1 init=/bin/sh");
+    var tok_hit = ba_aligned_cstr("init=/bin/sh");
+    var tok_miss = ba_aligned_cstr("emergency");
     var textlen = strlen(safe);
+    var badlen = strlen(bad);
 
     var b = do_bench("validate_cmdline_safe");
     var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { bootloader_validate_kernel_cmdline(safe); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { bootloader_validate_kernel_cmdline(safe); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("is_dangerous_token_hit");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        var badlen = strlen(bad);
-        while (k < 10000) { bootloader_is_dangerous_token(bad, badlen, "init=/bin/sh"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { bootloader_is_dangerous_token(bad, badlen, tok_hit); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("is_dangerous_token_miss");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { bootloader_is_dangerous_token(safe, textlen, "emergency"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { bootloader_is_dangerous_token(safe, textlen, tok_miss); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
@@ -143,35 +174,39 @@ fn bench_bootloader() {
 
 fn bench_updates() {
     println("-- update --");
+    var ver_good = ba_aligned_cstr("2025.3.1");
+    var ver_a = ba_aligned_cstr("2025.1.0");
+    var ver_b = ba_aligned_cstr("2025.2.0");
+
     var b = do_bench("validate_ver_good");
     var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { update_validate_version("2025.3.1"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { update_validate_version(ver_good); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("compare_versions");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { update_compare_versions("2025.1.0", "2025.2.0"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { update_compare_versions(ver_a, ver_b); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("slot_other");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { update_other_slot(SLOT_A); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { update_other_slot(SLOT_A); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
@@ -185,13 +220,15 @@ fn bench_updates() {
 
 fn bench_udev() {
     println("-- udev --");
+    var subsys = ba_aligned_cstr("block");
+
     var b = do_bench("parse_subsystem");
     var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { udev_parse_subsystem("block"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { udev_parse_subsystem(subsys); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
@@ -205,24 +242,28 @@ fn bench_udev() {
 
 fn bench_fuse() {
     println("-- fuse --");
+    var fs_hit = ba_aligned_cstr("fuse.sshfs");
+    var fs_miss = ba_aligned_cstr("ext4");
+    var prefix = ba_aligned_cstr("fuse");
+
     var b = do_bench("starts_with_hit");
     var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { fuse_starts_with("fuse.sshfs", "fuse"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { fuse_starts_with(fs_hit, prefix); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("starts_with_miss");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { fuse_starts_with("ext4", "fuse"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { fuse_starts_with(fs_miss, prefix); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
@@ -236,60 +277,69 @@ fn bench_fuse() {
 
 fn bench_strings() {
     println("-- string --");
+    # ONE copy passed as both arguments: cyrius interns identical literals, so
+    # streq("hello_world_test", "hello_world_test") always compared a pointer
+    # with itself — keep that, so only the alignment changes.
+    var hw = ba_aligned_cstr("hello_world_test");
+
     var b = do_bench("streq_16ch");
     var ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { streq("hello_world_test", "hello_world_test"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { streq(hw, hw); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("strlen_16ch");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { strlen("hello_world_test"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { strlen(hw); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("memeq_16");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { memeq("hello_world_test", "hello_world_test", 16); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { memeq(hw, hw, 16); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
+    # Same interning rule: the hit lookup used the very pointer that was
+    # stored, so the stored key and the looked-up key stay one buffer.
+    var key_hit = ba_aligned_cstr("key1");
+    var key_miss = ba_aligned_cstr("nonexistent");
     var m = map_new();
-    map_set(m, "key1", 42);
+    map_set(m, key_hit, 42);
 
     b = do_bench("map_get_hit");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { map_get(m, "key1"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { map_get(m, key_hit); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
 
     b = do_bench("map_get_miss");
     ri = 0;
-    while (ri < 100) {
-        var start = now_ns();
+    while (ri < BA_WINDOWS) {
+        bench_batch_start(b);
         var k = 0;
-        while (k < 10000) { map_get(m, "nonexistent"); k = k + 1; }
-        batch_record(b, now_ns() - start, 10000);
+        while (k < BA_OPS) { map_get(m, key_miss); k = k + 1; }
+        bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
     bench_report(b);
@@ -327,4 +377,4 @@ fn main() {
 }
 
 var r = main();
-syscall(SYS_EXIT, r);
+sys_exit(r);

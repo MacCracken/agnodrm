@@ -139,18 +139,34 @@ Next review slot: at v1.3.0 cut (paired with the next audit pass), or earlier if
 
 Active issues sit at the top level; resolved issues move to `archive/` when the upstream fix lands and a workaround is no longer needed. Per the agnosys agent's "don't pile on cyrius bug reports" rule, **active issues here are passive trackers** for upstream-blocked slots, not fresh tickets pushed to the cyrius bug tracker.
 
-### Active (3 — passive trackers, not refiled upstream)
+### Active (3)
 
 | File | Filed | Status | Notes |
 |---|---|---|---|
-| `2026-05-09-cyrius-derive-serialize-cstring.md` | 2026-05-09 | 🟠 Open — passive | cstring-pointer field gap in `#derive(Serialize)`. Workaround: 5 hand-rolled `_to_json` shims (V1.1.12). Reopens when cyrius extends the directive's type set. |
-| `2026-05-09-cyrius-ifplat-codegen.md` | 2026-05-09 | 🟠 Open — passive | `#ifplat` codegen regression already documented in cyrius's own `lib/syscalls.cyr` v5.4.19 note. Workaround: stay on `#ifdef CYRIUS_ARCH_<UPPER>`. Reopens when cyrius's stdlib migrates first. |
-| `2026-05-09-cyrius-deprecated-unproven.md` | 2026-05-09 | 🟠 Open — passive | `#deprecated` directive unproven across agnosticos consumers. Defer until another consumer adopts it OR until agnosys actually has a fn to deprecate. |
+| `2026-09-22-cyrius-defer-skipped-on-result-return.md` | 2026-09-22 | 🔴 Open — upstream defect, worked around | cyrius 6.6.0–6.6.6 skips `defer` on a value-form Result return; agnodrm leaked an fd per call in 9 fns through 1.6.1. No `defer` in `src/` since 1.6.2; `test_fd_hygiene` guards it. Filed with cyrius (`2026-09-22-agnodrm-defer-skipped-on-value-form-result-return.md`). |
+| `2026-09-22-cyrius-aarch64-undefined-fn-silent.md` | 2026-09-22 | 🟠 Open — upstream gap, not exposed | `cycc_aarch64` 6.6.x misses undefined *tail* calls (SIGILL binary, no diagnostic) and never prints `#deprecated` warnings. Filed with cyrius (2 issues). agnodrm has no aarch64-only code, so the x86_64 / agnos lanes cover it. |
+| `2026-05-09-cyrius-derive-serialize-cstring.md` | 2026-05-09 | 🟠 Open — passive | `#derive(Serialize)` still has no cstring field type at 6.6.6 (re-verified at 1.6.2), and any Serialize derive now also needs bayan. The 2 remaining hand-rolled `_to_json` fns stay. |
 
-### Archived (9 — resolved during V1.0 / V1.1 cycles)
+### Archived (14)
 
 | File | Resolved | Notes |
 |---|---|---|
+| `archive/2026-05-01-sys-stat-x86-portability.md` | 1.1.4 (cyrius 5.9.20) | sys_stat now in both arch peer files. |
+| `archive/2026-05-06-cyrius-api-surface-derive-blind.md` | 1.0.13 (cyrius 5.9.13) | --scope=project + --snapshot=PATH flags. |
+| `archive/2026-05-06-cyrius-ct-eq-bytes-stdlib.md` | 1.1.3 (cyrius 5.9.18) | ct_eq_bytes shipped in lib/ct.cyr. |
+| `archive/2026-05-06-cyrius-derive-accessors-32-struct-cap.md` | 1.0.11 (cyrius 5.9.7) | derive struct cap lifted. |
+| `archive/2026-05-06-cyrius-match-coverage-fn-name-dependent.md` | 1.1.6 (cyrius 5.9.25) | hash-bucket dispatch fixed. |
+| `archive/2026-05-07-cyrius-aarch64-sub-8-byte-struct-load.md` | 1.1.10 (cyrius 5.9.27) | aarch64 backend implements sub-8-byte loads. |
+| `archive/2026-05-07-cyrius-derive-serialize-incomplete.md` | 1.1.12 (lib-shadow root cause; cyrius 5.10.6+) | The big one — agnosys-side ./lib/ shadow misdiagnosis arc. |
+| `archive/2026-05-08-cyrius-derive-multi-stacking.md` | cyrius 5.10.14 | Stacked `#derive` directives now honored. |
+| `archive/2026-05-09-cyrius-api-surface-putc-brace-desync.md` | cyrius 5.10.16 | api-surface scanner tokenizes numeric literals. |
+| `archive/2026-05-09-cyrius-deprecated-unproven.md` | 1.6.2 | Adopted: `bootloader_is_dangerous_token` carries `#deprecated`, verified on 6.6.6. |
+| `archive/2026-05-09-cyrius-ifplat-codegen.md` | 1.6.2 (obsolete) | No arch-gated code left in agnodrm since the 1.4.4 decomposition. |
+| `archive/2026-06-12-cyrius-621-pin-json-carved-to-bayan.md` | 1.4.2 (archived 1.6.2) | Stale `json` dep dropped at 1.4.2; never moved to archive until now. |
+| `archive/2026-06-22-cyrius-agnosys-retired-consumer-rewire.md` | 1.6.2 (verified) | mihi / chakshu / iam all rewired off agnosys. |
+| `archive/2026-06-18-agnos-cross-target-abi-slant.md` | 1.6.2 | 31 sites: 18 moved out (1.4.4), 12 gated (1.4.6 / 1.5.0), 1 no-op; agnos API-probe build gate added. |
+
+---|---|---|
 | `archive/2026-05-01-sys-stat-x86-portability.md` | 1.1.4 (cyrius 5.9.20) | sys_stat now in both arch peer files. |
 | `archive/2026-05-06-cyrius-api-surface-derive-blind.md` | 1.0.13 (cyrius 5.9.13) | --scope=project + --snapshot=PATH flags. |
 | `archive/2026-05-06-cyrius-ct-eq-bytes-stdlib.md` | 1.1.3 (cyrius 5.9.18) | ct_eq_bytes shipped in lib/ct.cyr. |

@@ -96,9 +96,18 @@ fn test_update() {
     update_state_to_json(us, sb);
     var json = str_builder_build(sb);
     var sb_exp = str_builder_new();
-    str_builder_add_cstr(sb_exp, "{\"slot\":1,\"version\":\"2026.5.1\",\"pending\":0,");
+    str_builder_add_cstr(sb_exp, "{\"slot\":1,\"version\":\"2026.5.1\",\"pending\":null,");
     str_builder_add_cstr(sb_exp, "\"rollback_available\":0,\"boot_count\":7}");
     assert(str_eq(json, str_builder_build(sb_exp)) == 1, "us_json");
+    # Regression (1.6.2): a pending update is a cstring and must serialize as a
+    # quoted string — it used to print the string's heap address as an integer.
+    update_state_set_pending(us, "2026.9.1");
+    var sbp = str_builder_new();
+    update_state_to_json(us, sbp);
+    var sb_expp = str_builder_new();
+    str_builder_add_cstr(sb_expp, "{\"slot\":1,\"version\":\"2026.5.1\",\"pending\":\"2026.9.1\",");
+    str_builder_add_cstr(sb_expp, "\"rollback_available\":0,\"boot_count\":7}");
+    assert(str_eq(str_builder_build(sbp), str_builder_build(sb_expp)) == 1, "us_json_pending");
 
     # Regression (1.3.0): update_check on a manifest larger than the
     # 16384-byte read buffer must not overflow. The old read loop let
@@ -120,7 +129,7 @@ fn test_update() {
     var bres_t, bres_v = update_check(bcfg, "2026.1.0");
     assert(is_ok(bres_t) == 1, "big_check_ok");
     assert(bres_v != 0, "big_check_newer");
-    sys_unlink(mpath);
+    xunlink(mpath);
     return 0;
 }
 
@@ -164,6 +173,176 @@ fn test_bootloader() {
     # `rdinit` is matched as the prefix `rdinit=`, so a token that merely
     # starts with those letters must NOT trip it.
     assert(is_ok(bootloader_validate_kernel_cmdline("ro rdinitfoo=1")) == 1, "cmd_rdinit_noprefix");
+    return 0;
+}
+
+# ================================================================
+# bootloader loader-entries fallback (V1.6.x) — BLS Type #1 fixtures
+# ================================================================
+
+# Fixture helpers. Everything lives under a per-pid directory in /tmp and is
+# removed at the end; every path goes through the portable io.cyr / fs.cyr
+# helpers, the same ones the parser uses.
+fn _blfx_path(dir, name) {
+    return str_data(path_join(str_from(dir), str_from(name)));
+}
+
+fn _blfx_write(dir, name, text, files) {
+    vec_push(files, name);
+    return file_write_all(_blfx_path(dir, name), text, strlen(text));
+}
+
+# Write `len` bytes of `ch` (LF every 64 bytes) behind a "title" line, so the
+# file parses as an entry when it is within the cap.
+fn _blfx_write_sized(dir, name, len, files) {
+    var b = alloc(len + 1);
+    memset(b, 97, len);
+    var i = 63;
+    while (i < len) { store8(b + i, 10); i = i + 64; }
+    memcpy(b, "title Big\n", 10);
+    vec_push(files, name);
+    return file_write_all(_blfx_path(dir, name), b, len);
+}
+
+fn _blfx_find(arr, n, id) {
+    var i = 0;
+    while (i < n) {
+        var e = load64(arr + i * 8);
+        if (streq(bootloader_entry_id(e), id) == 1) { return e; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn test_bootloader_entries() {
+    println("-- bootloader loader entries --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-bls-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    var dir = _blfx_path(root, "entries");
+    var empty = _blfx_path(root, "empty");
+    xmkdir(root, 0x1C0);
+    assert_eq(xmkdir(dir, 0x1C0), 0, "bls_fx_mkdir");
+    xmkdir(empty, 0x1C0);
+    var files = vec_new();
+
+    # Written out of order; listing must come back byte-wise by file name.
+    _blfx_write(dir, "c-third.conf", "title Third\nlinux /vmlinuz-c\n", files);
+    # Repeated initrd / options, plus valid BLS keys with no struct field.
+    var sa = str_builder_new();
+    str_builder_add_cstr(sa, "title  Arch Linux\nversion 6.9.1-arch1\nlinux /vmlinuz-linux\n");
+    str_builder_add_cstr(sa, "initrd /intel-ucode.img\ninitrd /initramfs-linux.img\n");
+    str_builder_add_cstr(sa, "options root=UUID=abc rw\noptions quiet\n");
+    str_builder_add_cstr(sa, "machine-id 0123456789abcdef\nsort-key arch\nefi /ignored.efi\n");
+    _blfx_write(dir, "a-first.conf", str_data(str_builder_build(sa)), files);
+    # CRLF, tabs, trailing blanks, indented and trailing comments, blank lines.
+    var sc = str_builder_new();
+    str_builder_add_cstr(sc, "# leading comment\r\n\r\n  title\tWin Dows  \r\n");
+    str_builder_add_cstr(sc, "\tlinux\t\t/vmlinuz-b\r\n   # indented comment\r\noptions\tro \t\r\n\r\n");
+    _blfx_write(dir, "b-crlf.conf", str_data(str_builder_build(sc)), files);
+    # Missing title and linux; a key that merely starts with a known key; an
+    # empty value; no trailing newline.
+    _blfx_write(dir, "d-partial.conf", "linuxefi /not-linux\ntitlefoo bar\nlinux   \noptions quiet splash", files);
+    # Not entries: hidden, wrong/extra suffix, bare ".conf", no suffix, a
+    # suffix of the wrong case.
+    _blfx_write(dir, ".hidden.conf", "title Hidden\n", files);
+    _blfx_write(dir, "README", "title Readme\n", files);
+    _blfx_write(dir, "x.conf.bak", "title Backup\n", files);
+    _blfx_write(dir, ".conf", "title Dotconf\n", files);
+    _blfx_write(dir, "upper.CONF", "title Upper\n", files);
+    # A NUL byte: not a text entry.
+    var nulname = "e-nul.conf";
+    var nulbuf = alloc(32);
+    memcpy(nulbuf, "title Nul\n", 10);
+    store8(nulbuf + 10, 0);
+    memcpy(nulbuf + 11, "linux /x\n", 9);
+    vec_push(files, nulname);
+    file_write_all(_blfx_path(dir, nulname), nulbuf, 20);
+    # Exactly at the cap parses (the terminator lands at buf[cap], inside the
+    # cap + 1 buffer); one byte over is skipped, not truncated.
+    _blfx_write_sized(dir, "f-atcap.conf", BOOTLOADER_ENTRY_FILE_MAX, files);
+    _blfx_write_sized(dir, "g-overcap.conf", BOOTLOADER_ENTRY_FILE_MAX + 1, files);
+    # A directory named like an entry: not a regular file, skipped.
+    var subdir = _blfx_path(dir, "h-dir.conf");
+    xmkdir(subdir, 0x1C0);
+
+    var arr = alloc(8 * 16);
+    var r_t, r_v = bootloader_list_loader_entries(dir, arr, 16);
+    assert(is_ok(r_t) == 1, "bls_ok");
+    assert_eq(r_v, 5, "bls_count");
+    assert(streq(bootloader_entry_id(load64(arr)), "a-first.conf") == 1, "bls_order_0");
+    assert(streq(bootloader_entry_id(load64(arr + 8)), "b-crlf.conf") == 1, "bls_order_1");
+    assert(streq(bootloader_entry_id(load64(arr + 16)), "c-third.conf") == 1, "bls_order_2");
+    assert(streq(bootloader_entry_id(load64(arr + 24)), "d-partial.conf") == 1, "bls_order_3");
+    assert(streq(bootloader_entry_id(load64(arr + 32)), "f-atcap.conf") == 1, "bls_order_4");
+
+    var a = _blfx_find(arr, r_v, "a-first.conf");
+    assert(streq(bootloader_entry_title(a), "Arch Linux") == 1, "bls_title");
+    assert(streq(bootloader_entry_version(a), "6.9.1-arch1") == 1, "bls_version");
+    assert(streq(bootloader_entry_linux(a), "/vmlinuz-linux") == 1, "bls_linux");
+    assert(streq(bootloader_entry_initrd(a), "/intel-ucode.img /initramfs-linux.img") == 1, "bls_initrd_joined");
+    assert(streq(bootloader_entry_options(a), "root=UUID=abc rw quiet") == 1, "bls_options_joined");
+    assert_eq(bootloader_entry_is_default(a), 0, "bls_is_default_0");
+
+    var b = _blfx_find(arr, r_v, "b-crlf.conf");
+    assert(streq(bootloader_entry_title(b), "Win Dows") == 1, "bls_crlf_title");
+    assert(streq(bootloader_entry_linux(b), "/vmlinuz-b") == 1, "bls_crlf_linux");
+    assert(streq(bootloader_entry_options(b), "ro") == 1, "bls_crlf_options");
+    assert_eq(bootloader_entry_initrd(b), 0, "bls_crlf_no_initrd");
+
+    var d = _blfx_find(arr, r_v, "d-partial.conf");
+    assert_eq(bootloader_entry_title(d), 0, "bls_missing_title");
+    assert_eq(bootloader_entry_linux(d), 0, "bls_missing_linux");
+    assert(streq(bootloader_entry_options(d), "quiet splash") == 1, "bls_no_trailing_nl");
+
+    var f = _blfx_find(arr, r_v, "f-atcap.conf");
+    assert(streq(bootloader_entry_title(f), "Big") == 1, "bls_at_cap");
+    assert_eq(_blfx_find(arr, r_v, "g-overcap.conf"), 0, "bls_over_cap_skipped");
+    assert_eq(_blfx_find(arr, r_v, "e-nul.conf"), 0, "bls_nul_skipped");
+
+    # max_entries truncates AFTER sorting, so it is always the same prefix.
+    var arr2 = alloc(8 * 2);
+    var t_t, t_v = bootloader_list_loader_entries(dir, arr2, 2);
+    assert(is_ok(t_t) == 1, "bls_trunc_ok");
+    assert_eq(t_v, 2, "bls_trunc_count");
+    assert(streq(bootloader_entry_id(load64(arr2 + 8)), "b-crlf.conf") == 1, "bls_trunc_prefix");
+    var z_t, z_v = bootloader_list_loader_entries(dir, 0, 0);
+    assert(is_ok(z_t) == 1, "bls_max0_ok");
+    assert_eq(z_v, 0, "bls_max0_count");
+
+    # Empty directory → Ok(0); missing directory and a regular file → Err.
+    var e_t, e_v = bootloader_list_loader_entries(empty, arr, 16);
+    assert(is_ok(e_t) == 1, "bls_empty_ok");
+    assert_eq(e_v, 0, "bls_empty_zero");
+    assert(is_err_result(bootloader_list_loader_entries(_blfx_path(root, "missing"), arr, 16)) == 1, "bls_missing_err");
+    var regular = _blfx_path(dir, "c-third.conf");
+    assert(is_err_result(bootloader_list_loader_entries(regular, arr, 16)) == 1, "bls_file_err");
+    assert(is_err_result(bootloader_list_loader_entries(0, arr, 16)) == 1, "bls_null_dir_err");
+    assert(is_err_result(bootloader_list_loader_entries(dir, arr, 0 - 1)) == 1, "bls_neg_max_err");
+    assert(is_err_result(bootloader_list_loader_entries(dir, 0, 4)) == 1, "bls_null_arr_err");
+
+    # Name filter, called directly: a '/' or an over-long name cannot come out
+    # of a Linux directory listing, so the walk above cannot reach them; a
+    # control byte can. All three are refused before any open.
+    var longname = alloc(320);
+    memset(longname, 97, 300);
+    memcpy(longname + 295, ".conf", 5);
+    assert_eq(_bootloader_entry_name_ok(str_new(longname, 300)), 0, "bls_name_long");
+    assert_eq(_bootloader_entry_name_ok(str_from("a/b.conf")), 0, "bls_name_slash");
+    assert_eq(_bootloader_entry_name_ok(str_from("a\tb.conf")), 0, "bls_name_ctrl");
+    assert_eq(_bootloader_entry_name_ok(str_from("ok-1.conf")), 1, "bls_name_ok");
+
+    # Cleanup.
+    var fi = 0;
+    while (fi < vec_len(files)) {
+        xunlink(_blfx_path(dir, vec_get(files, fi)));
+        fi = fi + 1;
+    }
+    xrmdir(subdir);
+    xrmdir(dir);
+    xrmdir(empty);
+    assert_eq(xrmdir(root), 0, "bls_fx_cleanup");
     return 0;
 }
 
@@ -305,9 +484,9 @@ fn test_netns() {
     vec_push(margs, "-p");
     vec_push(margs, ed);
     exec_vec(margs);
-    assert(sys_access(ed, 0) == 0, "exec_vec_multiarg");
-    sys_rmdir("/tmp/agnos-netns-exec-test/sub");
-    sys_rmdir("/tmp/agnos-netns-exec-test");
+    assert(is_dir(str_from(ed)) == 1, "exec_vec_multiarg");
+    xrmdir("/tmp/agnos-netns-exec-test/sub");
+    xrmdir("/tmp/agnos-netns-exec-test");
     return 0;
 }
 
@@ -332,6 +511,156 @@ fn test_journald() {
 }
 
 # ================================================================
+# bootloader: bootctl list parser (regression, 1.6.2)
+# ================================================================
+
+fn test_bootctl_parse() {
+    println("-- bootloader bootctl list --");
+    # The real `bootctl list` shape (systemd 261): title BEFORE id, display
+    # marks on the title, continuation lines under initrd AND options (a UKI
+    # cmdline with a newline), a continuation under a key that is not joined,
+    # an Automatic entry. Through 1.6.1 each entry got the NEXT one's title.
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "         type: Boot Loader Specification Type #2 (UKI, .efi)\n");
+    str_builder_add_cstr(sb, "        title: Test OS (default) (not reported/new)\n");
+    str_builder_add_cstr(sb, "           id: test.efi\n");
+    str_builder_add_cstr(sb, "        linux: /boot//EFI/Linux/test.efi\n");
+    str_builder_add_cstr(sb, "      options: root=/dev/sda1 rw\n");
+    str_builder_add_cstr(sb, "              init=/bin/sh\n");
+    str_builder_add_cstr(sb, "\n");
+    str_builder_add_cstr(sb, "         type: Boot Loader Specification Type #1 (.conf)\n");
+    str_builder_add_cstr(sb, "        title: Arch Linux (linux)\n");
+    str_builder_add_cstr(sb, "           id: arch.conf\n");
+    str_builder_add_cstr(sb, "        linux: /boot//vmlinuz-linux\n");
+    str_builder_add_cstr(sb, "       initrd: /boot//intel-ucode.img\n");
+    str_builder_add_cstr(sb, "               /boot//initramfs-linux.img\n");
+    str_builder_add_cstr(sb, "      options: root=PARTUUID=abc rw\n");
+    str_builder_add_cstr(sb, "devicetree-overlay: /boot//o1.dtbo\n");
+    str_builder_add_cstr(sb, "               /boot//o2.dtbo\n");
+    str_builder_add_cstr(sb, "\n");
+    str_builder_add_cstr(sb, "         type: Automatic\n");
+    str_builder_add_cstr(sb, "        title: Reboot Into Firmware Interface\n");
+    str_builder_add_cstr(sb, "           id: auto-reboot-to-firmware-setup\n");
+    var text = str_data(str_builder_build(sb));
+    var arr = alloc(8 * 8);
+    var r_t, r_v = bootloader_parse_bootctl_list(text, arr, 8);
+    assert(is_ok(r_t) == 1, "bctl_ok");
+    assert_eq(r_v, 3, "bctl_count");
+    var e0 = load64(arr);
+    assert(streq(bootloader_entry_id(e0), "test.efi") == 1, "bctl_e0_id");
+    assert(streq(bootloader_entry_title(e0), "Test OS (default) (not reported/new)") == 1, "bctl_e0_title_as_printed");
+    assert_eq(bootloader_entry_is_default(e0), 0, "bctl_no_default_guess");
+    # the security-relevant one: a continued options line must not be dropped
+    assert(streq(bootloader_entry_options(e0), "root=/dev/sda1 rw init=/bin/sh") == 1, "bctl_e0_options_continued");
+    var e1 = load64(arr + 8);
+    assert(streq(bootloader_entry_title(e1), "Arch Linux (linux)") == 1, "bctl_e1_own_title");
+    var e1_initrd = "/boot//intel-ucode.img /boot//initramfs-linux.img";
+    assert(streq(bootloader_entry_initrd(e1), e1_initrd) == 1, "bctl_e1_initrd_joined");
+    assert(streq(bootloader_entry_options(e1), "root=PARTUUID=abc rw") == 1, "bctl_e1_overlay_not_joined");
+    var e2 = load64(arr + 16);
+    assert(streq(bootloader_entry_id(e2), "auto-reboot-to-firmware-setup") == 1, "bctl_e2_id");
+    assert(streq(bootloader_entry_title(e2), "Reboot Into Firmware Interface") == 1, "bctl_e2_own_title");
+    assert_eq(bootloader_entry_linux(e2), 0, "bctl_e2_no_kernel");
+
+    # id before title still works, and a block with no id (a header) is dropped.
+    var h_t, h_v = bootloader_parse_bootctl_list("Boot Loader Entries:\n\n  id: x.conf\n  title: X\n", arr, 8);
+    assert(is_ok(h_t) == 1, "bctl_hdr_ok");
+    assert_eq(h_v, 1, "bctl_header_dropped");
+    assert(streq(bootloader_entry_title(load64(arr)), "X") == 1, "bctl_id_first_title");
+
+    # max_entries still caps the result; bad arguments are errors, not crashes.
+    var m_t, m_v = bootloader_parse_bootctl_list(text, arr, 1);
+    assert(is_ok(m_t) == 1, "bctl_max_ok");
+    assert_eq(m_v, 1, "bctl_max_entries");
+    var n_t, n_v = bootloader_parse_bootctl_list(0, arr, 8);
+    assert(is_err_result(n_t) == 1, "bctl_null_text_err");
+    var a_t, a_v = bootloader_parse_bootctl_list(text, 0, 8);
+    assert(is_err_result(a_t) == 1, "bctl_null_arr_err");
+    return 0;
+}
+
+# ================================================================
+# fd hygiene (regression, 1.6.2)
+# ================================================================
+
+# Open descriptors, counted from /proc/self/fd. Counting (not the lowest free
+# fd) sees a leak of ANY descriptor: a leaked fd opened while a lower one was
+# still held leaves the lowest free fd unchanged once the lower one closes.
+fn _open_fd_count() {
+    return vec_len(dir_list(str_from("/proc/self/fd")));
+}
+
+# "file://" + path as a NUL-terminated cstring. (str_cat does not terminate,
+# so its data is not a C string.)
+fn _file_url(path) {
+    var sbu = str_builder_new();
+    str_builder_add_cstr(sbu, "file://");
+    str_builder_add_cstr(sbu, path);
+    return str_data(str_builder_build(sbu));
+}
+
+fn test_fd_hygiene() {
+    println("-- fd hygiene (defer is skipped on a Result return) --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-fd-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "fd_fx_mkdir");
+    var a = _blfx_path(root, "a.bin");
+    var b = _blfx_path(root, "b.bin");
+    var gone = _blfx_path(root, "no/such/file");
+    var st = _blfx_path(root, "state.json");
+    var empty = _blfx_path(root, "empty.json");
+    var man = _blfx_path(root, "manifest.json");
+    var nover = _blfx_path(root, "noversion.json");
+    file_write_all(empty, "", 0);
+    file_write_all(man, "{\"version\":\"9999.1.0\"}", 22);
+    file_write_all(nover, "{\"channel\":\"stable\"}", 20);
+    var arr = alloc(64 * 8);
+
+    var before = _open_fd_count();
+    var i = 0;
+    while (i < 3) {
+        # success paths
+        var w_t, w_v = update_atomic_write(a, "payload", 7);
+        assert(is_ok(w_t) == 1, "fd_write_ok");
+        var c_t, c_v = update_atomic_copy(a, b);
+        assert(is_ok(c_t) == 1, "fd_copy_ok");
+        var s_t, s_v = update_save_state(update_state_new(SLOT_B, "2026.9.1"), st);
+        assert(is_ok(s_t) == 1, "fd_save_ok");
+        var l_t, l_v = update_load_state(st);
+        assert(is_ok(l_t) == 1, "fd_load_ok");
+        var cfg = update_config_new();
+        update_config_set_url(cfg, _file_url(man));
+        var k_t, k_v = update_check(cfg, "2026.1.0");
+        assert(is_ok(k_t) == 1, "fd_check_ok");
+        var m_t, m_v = fuse_parse_proc_mounts(arr, 64, 0);
+        assert(is_ok(m_t) == 1, "fd_mounts_ok");
+        var d_t, d_v = drm_list_devices(arr, 8);
+        # error paths taken after a descriptor is already open
+        var ce_t, ce_v = update_atomic_copy(a, gone);
+        assert(is_err_result(ce_t) == 1, "fd_copy_dst_err");
+        var le_t, le_v = update_load_state(empty);
+        assert(is_err_result(le_t) == 1, "fd_load_empty_err");
+        var cfg2 = update_config_new();
+        update_config_set_url(cfg2, _file_url(nover));
+        var ke_t, ke_v = update_check(cfg2, "2026.1.0");
+        assert(is_err_result(ke_t) == 1, "fd_check_nover_err");
+        i = i + 1;
+    }
+    assert_eq(_open_fd_count(), before, "fd_no_leak");
+
+    xunlink(a);
+    xunlink(b);
+    xunlink(st);
+    xunlink(empty);
+    xunlink(man);
+    xunlink(nover);
+    assert_eq(xrmdir(root), 0, "fd_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
 # Main
 # ================================================================
 
@@ -344,6 +673,9 @@ fn main() {
     test_update();
     test_bootloader();
     bootloader_danger_reset();
+    test_bootloader_entries();
+    test_bootctl_parse();
+    test_fd_hygiene();
     test_fuse();
     test_udev();
     test_drm();
@@ -355,4 +687,4 @@ fn main() {
     return 0;
 }
 var r = main();
-syscall(SYS_EXIT, r);
+sys_exit(r);

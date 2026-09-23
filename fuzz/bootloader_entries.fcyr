@@ -1,0 +1,375 @@
+# Fuzz: BLS Type #1 loader-entry parser (_bootloader_parse_entry_text), the
+# entry-name filter (_bootloader_entry_name_ok) and the file-name comparator
+# (_bootloader_name_cmp) behind bootloader_list_loader_entries (roadmap
+# V1.6.x). Entry files and their names are external input.
+#
+# Must not crash on random bytes, CR / LF / tab / NUL / high-byte density,
+# lines far longer than any real entry, keys with no value, or a missing
+# trailing newline. Every field the parser fills must be 0 or a NUL-terminated
+# string no longer than the input, holding no LF, with no leading blank and no
+# trailing blank or CR; repeated initrd / options must join with one space.
+#
+# Deterministic: a fixed-seed xorshift64 drives the random phases, so a
+# failure reproduces. Output goes through sys_write and the exit through
+# sys_exit — the per-target helpers, not raw syscall(1/60, ...), whose numbers
+# are x86_64's only.
+#
+# CI invokes: build/bootloader_entries 500
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/hashmap.cyr"
+include "lib/process.cyr"
+include "lib/fs.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/bootloader.cyr"
+
+var fz_rng = 88172645463325252;
+
+# xorshift64 (13, 7, 17); the result is masked non-negative for callers.
+fn fz_next(): i64 {
+    var x = fz_rng;
+    x = x ^ (x << 13);
+    x = x ^ (x >> 7);
+    x = x ^ (x << 17);
+    fz_rng = x;
+    return (x >> 8) & 0x7FFFFFFF;
+}
+
+fn fz_fail(code): i64 {
+    sys_write(2, "bootloader_entries: FAIL\n", 25);
+    sys_exit(code);
+    return 0;
+}
+
+# 1 if `v` is 0, or a NUL-terminated string of at most `limit` bytes with no
+# LF and no leading space/tab. With `strict` (the input held no NUL byte) the
+# last byte must not be a space, tab or CR either; a NUL inside a line cuts
+# the C string before the trimmed end, so that check needs a NUL-free input.
+fn fz_field_ok(v, limit, strict): i64 {
+    if (v == 0) { return 1; }
+    var n = 0;
+    var go = 1;
+    while (go == 1) {
+        if (n > limit) { return 0; }
+        var c = load8(v + n);
+        if (c == 0) { go = 0; }
+        else {
+            if (c == 10) { return 0; }
+            n = n + 1;
+        }
+    }
+    if (n == 0) { return 1; }                   # a NUL-led value reads as empty
+    var f = load8(v);
+    if (f == 32) { return 0; }
+    if (f == 9) { return 0; }
+    if (strict != 1) { return 1; }
+    var l = load8(v + n - 1);
+    if (l == 32) { return 0; }
+    if (l == 9) { return 0; }
+    if (l == 13) { return 0; }
+    return 1;
+}
+
+# Parse `len` bytes at `text` into a fresh entry and check every field.
+fn fz_parse_check(text, len, code): i64 {
+    var e = bootloader_entry_new();
+    _bootloader_parse_entry_text(e, text, len);
+    var strict = 1;
+    if (memchr(text, 0, len) >= 0) { strict = 0; }
+    if (fz_field_ok(bootloader_entry_title(e), len, strict) != 1) { fz_fail(code); }
+    if (fz_field_ok(bootloader_entry_version(e), len, strict) != 1) { fz_fail(code + 1); }
+    if (fz_field_ok(bootloader_entry_linux(e), len, strict) != 1) { fz_fail(code + 2); }
+    if (fz_field_ok(bootloader_entry_initrd(e), len, strict) != 1) { fz_fail(code + 3); }
+    if (fz_field_ok(bootloader_entry_options(e), len, strict) != 1) { fz_fail(code + 4); }
+    if (bootloader_entry_id(e) != 0) { fz_fail(code + 5); }
+    if (bootloader_entry_is_default(e) != 0) { fz_fail(code + 6); }
+    return e;
+}
+
+# Reference model of the name filter, written independently of it.
+fn fz_name_model(p, n): i64 {
+    if (n <= 5) { return 0; }
+    if (n > 255) { return 0; }
+    if (load8(p) == 46) { return 0; }
+    var i = 0;
+    while (i < n) {
+        var c = load8(p + i);
+        if (c == 47) { return 0; }
+        if (c < 32) { return 0; }
+        if (c == 127) { return 0; }
+        i = i + 1;
+    }
+    if (load8(p + n - 5) != 46) { return 0; }
+    if (load8(p + n - 4) != 99) { return 0; }
+    if (load8(p + n - 3) != 111) { return 0; }
+    if (load8(p + n - 2) != 110) { return 0; }
+    if (load8(p + n - 1) != 102) { return 0; }
+    return 1;
+}
+
+alloc_init();
+
+# --- deterministic: a well-formed entry ---
+var good = "title Arch\nversion 6.9\nlinux /vmlinuz\ninitrd /a.img\ninitrd /b.img\noptions ro\noptions quiet\n";
+var ge = fz_parse_check(good, strlen(good), 10);
+if (streq(bootloader_entry_title(ge), "Arch") != 1) { fz_fail(20); }
+if (streq(bootloader_entry_initrd(ge), "/a.img /b.img") != 1) { fz_fail(21); }
+if (streq(bootloader_entry_options(ge), "ro quiet") != 1) { fz_fail(22); }
+
+# --- deterministic edge cases ---
+fz_parse_check("", 0, 30);
+fz_parse_check("\n", 1, 40);
+fz_parse_check("title", 5, 50);
+fz_parse_check("title \t \r", 9, 60);
+fz_parse_check("\r\n\r\n\r\n", 6, 70);
+fz_parse_check("#title x\n  # linux y", 20, 80);
+var nt = "linux /k";                                 # no trailing newline
+var ne = fz_parse_check(nt, strlen(nt), 90);
+if (streq(bootloader_entry_linux(ne), "/k") != 1) { fz_fail(97); }
+var kb = "linuxefi /x\ntitles y\ninitrdz /z\n";      # prefix-only keys never match
+var ke = fz_parse_check(kb, strlen(kb), 100);
+if (bootloader_entry_linux(ke) != 0) { fz_fail(107); }
+if (bootloader_entry_title(ke) != 0) { fz_fail(108); }
+if (bootloader_entry_initrd(ke) != 0) { fz_fail(109); }
+
+# A NUL inside a value: the parser takes an explicit length, so it must stay
+# in bounds; the walker skips such files before they get here.
+var nb = alloc(32);
+memcpy(nb, "title a", 7);
+store8(nb + 7, 0);
+memcpy(nb + 8, "b\nlinux /k\n", 11);
+fz_parse_check(nb, 19, 110);
+# A value that is empty as a C string must not open a join with a blank.
+var eb = alloc(32);
+memcpy(eb, "initrd ", 7);
+store8(eb + 7, 0);
+memcpy(eb + 8, "x\ninitrd /b\n", 12);
+var ee = fz_parse_check(eb, 20, 200);
+if (streq(bootloader_entry_initrd(ee), "/b") != 1) { fz_fail(207); }
+
+# One 60000-byte line with no LF at all.
+var ll = alloc(60001);
+memcpy(ll, "options ", 8);
+memset(ll + 8, 120, 59992);
+store8(ll + 60000, 0);
+var le = fz_parse_check(ll, 60000, 120);
+if (strlen(bootloader_entry_options(le)) != 59992) { fz_fail(127); }
+
+# 6000 repeated `options x` lines: the join is linear (str_builder) and exact.
+var rp = alloc(60001);
+var ri = 0;
+while (ri < 6000) {
+    memcpy(rp + ri * 10, "options x\n", 10);
+    ri = ri + 1;
+}
+var re = fz_parse_check(rp, 60000, 130);
+if (strlen(bootloader_entry_options(re)) != 11999) { fz_fail(137); }
+
+# --- random phase 1: raw bytes ---
+var buf = alloc(4097);
+var it = 0;
+while (it < 500) {
+    var len = fz_next() % 2048;
+    var bi = 0;
+    while (bi < len) { store8(buf + bi, fz_next() & 0xFF); bi = bi + 1; }
+    fz_parse_check(buf, len, 140);
+    it = it + 1;
+}
+
+# --- random phase 2: token soup biased toward keys and separators ---
+var toks = vec_new();
+vec_push(toks, "title");
+vec_push(toks, "version");
+vec_push(toks, "linux");
+vec_push(toks, "initrd");
+vec_push(toks, "options");
+vec_push(toks, "machine-id");
+vec_push(toks, "efi");
+vec_push(toks, "#");
+vec_push(toks, " ");
+vec_push(toks, "\t");
+vec_push(toks, "\r");
+vec_push(toks, "\n");
+vec_push(toks, "\r\n");
+vec_push(toks, "/vmlinuz");
+vec_push(toks, "root=/dev/sda1");
+vec_push(toks, "  ");
+var ntok = vec_len(toks);
+it = 0;
+while (it < 500) {
+    var pos = 0;
+    var want = fz_next() % 4000;
+    while (pos < want) {
+        var pick = fz_next() % (ntok + 1);
+        if (pick == ntok) {
+            store8(buf + pos, fz_next() & 0xFF);     # one raw byte, NUL included
+            pos = pos + 1;
+        } else {
+            var tk = vec_get(toks, pick);
+            var tl = strlen(tk);
+            if (pos + tl > 4096) { want = pos; }
+            else {
+                memcpy(buf + pos, tk, tl);
+                pos = pos + tl;
+            }
+        }
+    }
+    fz_parse_check(buf, pos, 150);
+    it = it + 1;
+}
+
+# --- random phase 3: byte mutations of a well-formed entry ---
+var glen = strlen(good);
+it = 0;
+while (it < 500) {
+    memcpy(buf, good, glen);
+    var flips = 1 + fz_next() % 8;
+    var fi = 0;
+    while (fi < flips) {
+        store8(buf + fz_next() % glen, fz_next() & 0xFF);
+        fi = fi + 1;
+    }
+    fz_parse_check(buf, glen, 160);
+    it = it + 1;
+}
+
+# --- name filter: fixed cases, then random names vs an independent model ---
+var nbuf = alloc(401);
+if (_bootloader_entry_name_ok(str_from("arch.conf")) != 1) { fz_fail(170); }
+if (_bootloader_entry_name_ok(str_from(".hidden.conf")) != 0) { fz_fail(171); }
+if (_bootloader_entry_name_ok(str_from(".conf")) != 0) { fz_fail(172); }
+if (_bootloader_entry_name_ok(str_from(".")) != 0) { fz_fail(173); }
+if (_bootloader_entry_name_ok(str_from("..")) != 0) { fz_fail(174); }
+if (_bootloader_entry_name_ok(str_from("a/b.conf")) != 0) { fz_fail(175); }
+if (_bootloader_entry_name_ok(str_from("a\tb.conf")) != 0) { fz_fail(176); }
+if (_bootloader_entry_name_ok(str_from("x.CONF")) != 0) { fz_fail(177); }
+if (_bootloader_entry_name_ok(str_from("x.conf.bak")) != 0) { fz_fail(178); }
+if (_bootloader_entry_name_ok(str_from("")) != 0) { fz_fail(179); }
+memset(nbuf, 97, 300);
+memcpy(nbuf + 250, ".conf", 5);                      # exactly 255 bytes: accepted
+if (_bootloader_entry_name_ok(str_from_buf(nbuf, 255)) != 1) { fz_fail(180); }
+memcpy(nbuf + 251, ".conf", 5);                      # 256 bytes: over NAME_MAX
+if (_bootloader_entry_name_ok(str_from_buf(nbuf, 256)) != 0) { fz_fail(181); }
+var names = vec_new();
+it = 0;
+while (it < 500) {
+    var nl = fz_next() % 400;
+    var ni = 0;
+    while (ni < nl) {
+        var c = fz_next() & 0xFF;
+        if ((fz_next() % 4) != 0) { c = 97 + fz_next() % 26; }   # mostly [a-z]
+        store8(nbuf + ni, c);
+        ni = ni + 1;
+    }
+    if (nl > 5) {
+        if ((fz_next() % 2) == 0) { memcpy(nbuf + nl - 5, ".conf", 5); }
+    }
+    if (nl > 0) {
+        if ((fz_next() % 8) == 0) { store8(nbuf, 46); }        # hidden
+    }
+    var ns = str_from_buf(nbuf, nl);
+    if (_bootloader_entry_name_ok(ns) != fz_name_model(nbuf, nl)) { fz_fail(185); }
+    vec_push(names, ns);
+    it = it + 1;
+}
+vec_sort_by(names, &_bootloader_name_cmp);
+var si = 1;
+while (si < vec_len(names)) {
+    var sa = vec_get(names, si - 1);
+    var sb = vec_get(names, si);
+    if (_bootloader_name_cmp(sa, sb) > 0) { fz_fail(190); }
+    if (_bootloader_name_cmp(sb, sa) < 0) { fz_fail(191); }   # antisymmetry
+    si = si + 1;
+}
+
+# --- bootctl list parser (rewritten 1.6.2): edge cases, then token soup ---
+# Invariants on every input: Ok, 0 <= count <= cap, every entry has an id, no
+# value holds an LF or starts with a blank, and is_default is never set (the
+# parser deliberately does not infer it from bootctl's display marks).
+var bc_arr = alloc(16 * 8);
+
+fn fz_bootctl_check(text, len, code): i64 {
+    var t, n = bootloader_parse_bootctl_list(text, bc_arr, 16);
+    if (is_ok(t) != 1) { fz_fail(code); }
+    if (n < 0) { fz_fail(code + 1); }
+    if (n > 16) { fz_fail(code + 1); }
+    var i = 0;
+    while (i < n) {
+        var e = load64(bc_arr + i * 8);
+        if (bootloader_entry_id(e) == 0) { fz_fail(code + 2); }
+        if (fz_field_ok(bootloader_entry_id(e), len, 0) != 1) { fz_fail(code + 3); }
+        if (fz_field_ok(bootloader_entry_title(e), len, 0) != 1) { fz_fail(code + 4); }
+        if (fz_field_ok(bootloader_entry_linux(e), len, 0) != 1) { fz_fail(code + 5); }
+        if (fz_field_ok(bootloader_entry_initrd(e), len, 0) != 1) { fz_fail(code + 6); }
+        if (fz_field_ok(bootloader_entry_options(e), len, 0) != 1) { fz_fail(code + 7); }
+        if (bootloader_entry_is_default(e) != 0) { fz_fail(code + 8); }
+        i = i + 1;
+    }
+    return n;
+}
+
+fz_bootctl_check("", 0, 300);
+fz_bootctl_check("\n\n\n", 3, 310);
+fz_bootctl_check("   \n\t\n", 6, 320);
+fz_bootctl_check("x", 1, 330);
+fz_bootctl_check("        /boot//a.img\n  id: a\n", 29, 340);      # continuation before any label
+fz_bootctl_check("  options:\n    more\n  id: b\n", 27, 350);       # key with no value, then a continuation
+fz_bootctl_check("  id: c\n  initrd: /x\n      /y", 29, 360);      # no trailing newline
+fz_bootctl_check("  id:\n  title: t\n", 17, 370);                  # empty id value: block dropped
+
+var bct = vec_new();
+vec_push(bct, "id: ");
+vec_push(bct, "title: ");
+vec_push(bct, "linux: ");
+vec_push(bct, "initrd: ");
+vec_push(bct, "options: ");
+vec_push(bct, "version: ");
+vec_push(bct, "type: ");
+vec_push(bct, "devicetree-overlay: ");
+vec_push(bct, "          ");
+vec_push(bct, "  ");
+vec_push(bct, "\t");
+vec_push(bct, "\n");
+vec_push(bct, "\n\n");
+vec_push(bct, " (default)");
+vec_push(bct, " (not reported/new)");
+vec_push(bct, "/boot//vmlinuz-linux");
+vec_push(bct, "init=/bin/sh");
+vec_push(bct, "x.conf");
+var nbct = vec_len(bct);
+it = 0;
+while (it < 500) {
+    var bpos = 0;
+    var bwant = fz_next() % 4000;
+    while (bpos < bwant) {
+        var bpick = fz_next() % (nbct + 1);
+        if (bpick == nbct) {
+            store8(buf + bpos, fz_next() & 0xFF);    # one raw byte, NUL included
+            bpos = bpos + 1;
+        } else {
+            var btk = vec_get(bct, bpick);
+            var btl = strlen(btk);
+            if (bpos + btl > 4095) { bwant = bpos; }
+            else {
+                memcpy(buf + bpos, btk, btl);
+                bpos = bpos + btl;
+            }
+        }
+    }
+    store8(buf + bpos, 0);
+    fz_bootctl_check(buf, bpos, 380);
+    it = it + 1;
+}
+
+sys_write(1, "bootloader_entries: ok\n", 23);
+sys_exit(0);

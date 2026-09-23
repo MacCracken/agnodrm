@@ -5,36 +5,32 @@
 # and query the journal via journalctl subprocess.
 #
 # Requires: lib/string.cyr, lib/str.cyr, lib/vec.cyr, lib/process.cyr,
-#           lib/syscalls.cyr, src/error.cyr
+#           lib/syscalls.cyr, lib/net.cyr, src/error.cyr
 #
 # All structs are bags of i64 fields accessed via store64/load64.
 # Strings are Str (fat pointer: data + length) from lib/str.cyr.
 
-# Socket-syscall numbers, formerly from src/syscall_arch.cyr (deleted in the
-# agnosys → agnodrm decomposition — the per-arch syscall layer moved to cyrius).
-# journald is in the deferred Linux-eccentric group (roadmap.md Scope; no consumer), so
-# the two x86_64 numbers are inlined to keep it self-contained. (Linux x86_64
-# only — journald is systemd-journal-specific; an aarch64 peer isn't tracked.)
-enum JournaldSyscall {
-    SYS_SOCKET_NR = 41;
-    SYS_SENDTO_NR = 44;
-}
+# The journal socket is reached through the stdlib's per-target sys_socket /
+# sys_sendto wrappers (lib/syscalls.cyr), which carry each target's own
+# syscall number. This module used to inline the x86_64 numbers 41 / 44; on
+# aarch64 44 is fstatfs, and it only worked once cyrius 6.6.5 began routing
+# the x86 number (CHANGELOG 1.6.1). SOCK_DGRAM is lib/net.cyr's name;
+# include-once, so includers pay nothing.
+include "lib/syscalls.cyr"
+include "lib/net.cyr"
 
 # ================================================================
 # Constants
 # ================================================================
 
 enum JournalConst {
-    # AF_UNIX = 1, SOCK_DGRAM = 2
+    # AF_UNIX = 1 (the stdlib names AF_INET / AF_INET6 only)
     AF_UNIX = 1;
     # sockaddr_un: { family(2), path(108) } = 110 bytes
     SOCKADDR_UN_SIZE = 110;
     # Journal socket path length (including null)
     JOURNAL_SOCKET_PATH_LEN = 33;
 }
-
-# Socket-syscall numbers (SYS_SOCKET_NR, SYS_SENDTO_NR) are inlined at the top
-# of this file (x86_64) — they were in src/syscall_arch.cyr before the rename.
 
 # Syslog priority levels
 enum JournalPriority {
@@ -207,8 +203,8 @@ fn journald_make_sockaddr(): i64 {
 fn journald_send(message, priority, identifier): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     # agnos has no systemd-journald AF_UNIX socket — it logs via sakshi, not
-    # journald. SYS_SOCKET_NR/SYS_SENDTO_NR here target the Linux journal socket;
-    # not supported on agnos. (See the journald Linux-eccentric deferral.)
+    # journald. The send path targets the Linux journal socket; not supported
+    # on agnos. (See the journald Linux-eccentric deferral.)
     return drm_err_not_supported("journald send (use sakshi on agnos)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
@@ -245,18 +241,19 @@ fn journald_send(message, priority, identifier): i64 {
     var payload = str_builder_build(sb);
 
     # Create AF_UNIX SOCK_DGRAM socket
-
-    var fd = syscall(SYS_SOCKET_NR, AF_UNIX, 2, 0);  # SOCK_DGRAM = 2
+    var fd = sys_socket(AF_UNIX, SOCK_DGRAM, 0);
     if (fd < 0) {
         return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
     }
-    defer { sys_close(fd); }
+    # Closed explicitly on every return, not with `defer`: cyrius skips a defer
+    # block when the fn returns a value-form Result (see src/error.cyr).
 
     # Build sockaddr_un
     var sa = journald_make_sockaddr();
 
     # sendto(fd, buf, len, flags, dest_addr, addrlen)
-    var ret = syscall(SYS_SENDTO_NR, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
+    var ret = sys_sendto(fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
+    sys_close(fd);
     if (ret < 0) {
         return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
     }
@@ -272,8 +269,8 @@ fn journald_send(message, priority, identifier): i64 {
 fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     # agnos has no systemd-journald AF_UNIX socket — it logs via sakshi, not
-    # journald. SYS_SOCKET_NR/SYS_SENDTO_NR here target the Linux journal socket;
-    # not supported on agnos. (See the journald Linux-eccentric deferral.)
+    # journald. The send path targets the Linux journal socket; not supported
+    # on agnos. (See the journald Linux-eccentric deferral.)
     return drm_err_not_supported("journald send (use sakshi on agnos)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
@@ -329,14 +326,16 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
 
     var payload = str_builder_build(sb);
 
-    var fd = syscall(SYS_SOCKET_NR, AF_UNIX, 2, 0);
+    var fd = sys_socket(AF_UNIX, SOCK_DGRAM, 0);
     if (fd < 0) {
         return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
     }
-    defer { sys_close(fd); }
+    # Closed explicitly on every return, not with `defer`: cyrius skips a defer
+    # block when the fn returns a value-form Result (see src/error.cyr).
 
     var sa = journald_make_sockaddr();
-    var ret = syscall(SYS_SENDTO_NR, fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
+    var ret = sys_sendto(fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
+    sys_close(fd);
     if (ret < 0) {
         return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
     }

@@ -58,12 +58,12 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 
 ## netns
 
-- Raw `syscall()` for setns/unshare.
+- Namespace work runs `/usr/sbin/ip` via argv (`exec_vec`, no shell); no raw syscalls in this module since 1.6.2.
 - **Privilege: CAP_SYS_ADMIN** required for namespace operations.
 - **Irreversible (unshare):** creates new namespace for calling thread.
 - Per-PID nftables temp file instead of fixed path (avoids races).
 - nftables buffer increased to 16KB with bounds checking.
-- **nftables ruleset is pass-through.** `netns_apply_nftables_ruleset` invokes `nft -f -` with the caller-supplied ruleset string via argv (`exec_vec`, no shell). agnosys does **not** parse or sanitize the ruleset content; the kernel nft surface is exposed to whatever the caller provides. Consumers (nein) must trust their ruleset source. Recent kernel CVEs in this surface include CVE-2026-31407 (conntrack netlink validation) and CVE-2026-23231 (UAF in `nft_chain`); agnosys is on the data path, not the vulnerability sink.
+- **nftables ruleset is pass-through.** `netns_apply_nftables_ruleset` writes the caller-supplied ruleset to `/run/agnos/nft-tmp-<pid>.conf` and runs `ip netns exec <ns> nft -f <that file>` via argv (`exec_vec`, no shell). Since 1.6.2 a short or failed write of that file fails the call (a truncated ruleset would silently drop rules), and the temp file is removed after every run — through 1.6.1 its cleanup was a `defer` that never ran (see *All modules* below). agnosys does **not** parse or sanitize the ruleset content; the kernel nft surface is exposed to whatever the caller provides. Consumers (nein) must trust their ruleset source. Recent kernel CVEs in this surface include CVE-2026-31407 (conntrack netlink validation) and CVE-2026-23231 (UAF in `nft_chain`); agnosys is on the data path, not the vulnerability sink.
 - **F-6 (MEDIUM, 1.5.3): firewall-rule ports are now range-checked.**
   `netns_fw_rule_new` accepts any i64; ports outside 1..65535 were formatted
   into an 8-byte scratch buffer and overflowed it. Out-of-range ports are now
@@ -91,10 +91,9 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 
 ## update
 
-- `atomic_write()`: temp file → fsync → rename → dir sync. Crash-safe.
-- `atomic_swap()` uses renameat2(RENAME_EXCHANGE) when available, three-way rename fallback.
-- Temp files use PID suffix for uniqueness.
-- Cross-filesystem rename will fail (checked via device ID comparison).
+- `update_atomic_write` / `update_atomic_copy`: write `<path>.tmp` (`O_WRONLY|O_CREAT|O_TRUNC`, 0644), fsync, then rename over `<path>`. There is no directory fsync, so the rename itself is not guaranteed durable across a crash. The temp name is `<path>.tmp`, not per-PID: two concurrent writers to the same path race.
+- Since 1.6.2, `update_atomic_copy` fails when the fsync fails, as `update_atomic_write` always did. Before, it renamed an unflushed file over the target.
+- `update_state_to_json` emitted the `pending` cstring as an integer through 1.6.1, so a pending update exposed a heap address in the JSON. Since 1.6.2 it is a quoted string, or `null`.
 
 ## journald
 
@@ -107,6 +106,22 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 ## bootloader
 
 - Reads /boot/loader/entries/*.conf and /boot/grub/grub.cfg.
+- **Loader-entries reader (1.6.2) treats entry files as untrusted.**
+  - Each file is read into a 64 KiB + 1 buffer; a larger file is skipped, not truncated, because a
+    cut `options` line could drop a parameter.
+  - Files holding a NUL byte are skipped.
+  - Only names that stat as regular files are opened, and names are filtered first: `*.conf` only,
+    no hidden names, no `/` or control bytes, at most 255 bytes.
+  - Remaining gap (LOW): the stat and the open are separate calls, so a FIFO swapped in between them
+    can block the read. Doing that needs write access to the entries directory, i.e. root on `$BOOT`.
+- **`bootctl list` output is parsed as display text.**
+  - Titles keep bootctl's marks, and linux / initrd keep its `<root>//` prefix and
+    "(No such file or directory)" notes.
+  - `is_default` is never inferred from those marks: an entry's own title can imitate them.
+  - Continued `options` / `initrd` lines are joined, so no kernel parameter is dropped before a
+    caller checks the options with `bootloader_validate_kernel_cmdline`. Through 1.6.1 every
+    continuation line was dropped.
+  - Output that fills the 64 KiB capture buffer is refused rather than parsed truncated.
 - **Privilege: read access to /boot.**
 - Kernel cmdline validation uses single-pass tokenizer with hashmap danger lookup.
 - **`bootloader_validate_kernel_cmdline` is a DENYLIST, not an authorisation
@@ -126,3 +141,15 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
   API surface is frozen. Prefer `bootloader_validate_kernel_cmdline`. Removal
   is roadmap V2.0 (F-2, 1.5.3).
 
+## All modules
+
+- **No `defer` for cleanup in a Result-returning fn.** cyrius 6.6.0–6.6.6 skips a `defer` block
+  when the fn returns a value-form Result. Through 1.6.1, agnodrm leaked one fd or socket per call
+  in eight fns (`journald_send` leaked a socket per log line, a slow path to `EMFILE`), and left the
+  nft temp file behind in a ninth. Since 1.6.2 every release is explicit, and
+  `tests/tcyr/test_integration.tcyr` `test_fd_hygiene` counts `/proc/self/fd` around repeated calls.
+  Tracker: `docs/development/issues/2026-09-22-cyrius-defer-skipped-on-result-return.md`.
+- **No raw syscalls or flag literals** (1.6.2). Every syscall goes through a stdlib per-target
+  helper and every open flag / stat offset is a per-target name. Raw values caused 1.6.1's aarch64
+  `O_DIRECT`-for-`O_DIRECTORY` bug and 1.6.2's aarch64 `st_uid`-for-`st_mode` bug in
+  `fuse_validate_mountpoint`, which rejected every directory.

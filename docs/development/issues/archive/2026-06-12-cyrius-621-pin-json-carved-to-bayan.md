@@ -2,8 +2,7 @@
 
 **Filed:** 2026-06-12
 **Severity:** HIGH — blocks the cyrius 6.2.1 pin (CI `cyrius deps` fails)
-**Status:** OPEN — diagnosis below; one-line fix; NOT yet applied (filed instead of
-patched after the working session went off the rails)
+**Status:** RESOLVED at agnosys 1.4.2 (2026-06-12). The stale `"json"` entry was dropped from `[deps] stdlib` exactly as proposed; archived at agnodrm 1.6.2.
 
 ## Symptom (CI, on a 6.2.1 pin)
 
@@ -64,3 +63,10 @@ bug fix this cut carries. It is independent of the pin question.
 `cyrius.cyml` currently has the pin set to 6.2.1 (uncommitted) but `[deps]` still
 lists `"json"` — i.e. the half-done state. `git restore cyrius.cyml` to reset, then
 apply the one-line `[deps]` edit above.
+
+## Resolution (archived 2026-09-22, agnodrm 1.6.2)
+
+Fixed at **1.4.2**: CHANGELOG `[1.4.2]` records the `"json"` removal alongside the 6.1.23 → 6.2.1 pin
+move. Re-verified at the 6.6.6 pin: `cyrius.cyml [deps] stdlib` has no `json` entry, `cyrius deps`
+resolves cleanly, and agnodrm still calls no stdlib-json symbol (its JSON is hand-emitted in `src/util.cyr`,
+`src/drm.cyr` and `src/update.cyr`). The issue was simply never moved to `archive/`.

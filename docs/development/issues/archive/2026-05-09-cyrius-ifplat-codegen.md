@@ -1,6 +1,6 @@
 # cyrius `#ifplat <arch>` directive doesn't gate the non-matching arch's body
 
-**Status:** OPEN (passive — tracked internally, not refiled upstream; cyrius's own stdlib already documents the regression).
+**Status:** CLOSED — obsolete for agnodrm (archived 2026-09-22 at 1.6.2). The two arch-peer files it would have migrated left the repo in the 1.4.4 decomposition; agnodrm now has no arch-gated code at all.
 **Filed:** 2026-05-09
 **Reporter:** agnosys 1.1.14 (during V1.1.15 / V1.2.1 `#ifplat` migration attempt — see `docs/development/state.md` V1.1.x slot list).
 **cyrius version observed:** 5.10.19 (verified `cc5_aarch64 5.10.19`).
@@ -103,3 +103,14 @@ The two pre-migration files (working) are committed at agnosys HEAD; the migrate
 
 - agnosys cyrius pin: 5.10.19 (no change — pin stays).
 - agnosys V1.1.15 / V1.2.1: deferred. Slot reopens when cyrius lands the `#ifplat` codegen fix.
+
+## Resolution (archived 2026-09-22, agnodrm 1.6.2)
+
+**Nothing left to migrate.** `src/syscall_x86_64_linux.cyr` and `src/syscall_aarch64_linux.cyr` moved to
+cyrius's stdlib with the rest of the syscall layer in the agnosys → agnodrm decomposition (1.4.4). A grep
+of `src/`, `tests/` and `fuzz/` at 1.6.2 finds **zero** `CYRIUS_ARCH_*` or `#ifplat` sites: per-arch
+differences are now the stdlib peers' job (per-target `SYS_*` / `O_*` names, which 1.6.1 and 1.6.2 adopted).
+
+The underlying upstream note is still in place at cyrius 6.6.6 — `lib/syscalls.cyr` keeps its own call
+sites on `#ifdef CYRIUS_ARCH_*` — so the advice stands for any future arch-gated code: use
+`#ifdef CYRIUS_ARCH_<UPPER>`, not `#ifplat`. CONTRIBUTING.md carries that rule and now links here.

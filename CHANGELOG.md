@@ -7,6 +7,186 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.2] — 2026-09-22
+
+The roadmap **V1.6.x** items, a review of every open issue, and every raw syscall in agnodrm's own
+sources moved onto the stdlib's per-target helpers. No pin change: the cyrius pin stays 6.6.6.
+
+⚠ **Consumer floor rises 6.6.4 → 6.6.5.** `journald` now calls the stdlib's `sys_socket` /
+`sys_sendto`, which first ship in cyrius 6.6.5. On 6.6.4, `sys_sendto` is undefined and the new
+loader-entries tests fail. The 202-test suite passes on 6.6.5 and 6.6.6. stiva and aethersafha, both
+on 1.6.0 and pinned to 6.6.2, need ≥ 6.6.5 to take 1.6.2.
+
+### Fixed
+
+- **fd, socket and temp-file leaks in nine fns.** cyrius 6.6.0–6.6.6 skips a `defer` block when the
+  fn returns a value-form Result, and every `defer` in agnodrm sat in such a fn. None of them ever
+  ran, since 1.6.0:
+  - one fd per call: `drm_list_devices`, `fuse_parse_proc_mounts`, `update_atomic_write`,
+    `update_load_state`, `update_check`;
+  - two fds per call: `update_atomic_copy`;
+  - one socket per call: `journald_send`, `journald_send_fields`;
+  - `netns_apply_nftables_ruleset` never removed its `/run/agnos/nft-tmp-<pid>.conf`.
+
+  No `defer` remains in `src/`, and each fn releases what it acquired on every exit path.
+  `test_fd_hygiene` counts `/proc/self/fd` around repeated success and error paths. Against the
+  1.6.1 code it fails with 33 leaked fds; with only `update_atomic_copy`'s `dst_fd` leaked, it fails
+  with 3. Tracker: `docs/development/issues/2026-09-22-cyrius-defer-skipped-on-result-return.md`.
+- **aarch64: `fuse_validate_mountpoint` rejected every directory.** It read `st_mode` at a raw
+  offset `+24`, which is `st_uid` in the aarch64 stat layout. It now uses the stdlib's per-arch
+  `STAT_MODE` / `STAT_BUFSZ`. Verified under `qemu-aarch64`.
+- **`bootloader_parse_bootctl_list` (the primary bootctl path):**
+  - It opened a new entry on `id:`, but bootctl prints `title:` first, so every entry got the next
+    entry's title and the last got none. It now treats each blank-line-separated block as an entry.
+  - It dropped every unlabelled continuation line. A multi-line `options` value (a UKI cmdline with
+    a newline) lost its later lines, so a parameter such as `init=/bin/sh` never reached a caller
+    checking the options with `bootloader_validate_kernel_cmdline`. Continued `options` and
+    `initrd` lines are now joined with a space; continuations under other keys are ignored.
+  - Output that filled the 64 KiB capture buffer was parsed truncated. It is now refused with an
+    `Err`.
+  - A null `text` or `result_arr` crashed; both are now `Err(invalid_argument)`.
+
+  Values stay bootctl's display text: titles keep marks such as `(default)` or
+  `(not reported/new)`, and paths keep the `<root>//` prefix. `is_default` is not inferred from
+  those marks, because an entry's own title can imitate them. Both behaviours are the same as 1.6.1
+  and are now documented.
+- **`update_state_to_json` printed a heap address.** `pending` holds a cstring but was emitted with
+  `str_builder_add_int`. It is now a quoted string, or `null` when unset (was `0`).
+- **`update_atomic_copy` ignored a failed fsync** and renamed the unflushed file over the target. It
+  now fails, as `update_atomic_write` always did.
+- **`netns_apply_nftables_ruleset` ignored its ruleset write.** A short write would have loaded a
+  truncated ruleset; the call now fails instead.
+- **agnos (latent): `agnodrm_fsync` / `agnodrm_rename` issued the wrong syscalls.** Their inlined
+  x86_64 numbers 74 / 82 are agnos `shm_free` / `gpu_dispatch`. They now go through `lib/io.cyr`'s
+  `xfsync` (agnos `sync`) and `file_rename` (the length-carrying agnos rename).
+- `drm_syserr_print` wrote 25 bytes of the 26-byte `"kernel module not loaded: "` label.
+- `fuzz/fuse_parse.fcyr` did not include `src/util.cyr`, so its build printed two undefined-function
+  warnings and three dropped-tag warnings.
+
+### Added
+
+- **Loader-entries fallback** (roadmap V1.6.x). When bootctl is missing, fails or prints nothing,
+  `bootloader_list_boot_entries` reads Boot Loader Specification Type #1 entries from the first
+  readable directory among `/boot/loader/entries`, `/efi/loader/entries` and
+  `/boot/efi/loader/entries`. The reader is exposed as the new public
+  `bootloader_list_loader_entries(dir, result_arr, max_entries)` (API 315 → 316, additive).
+  - It uses stdlib helpers only.
+  - Ids are the file name with `.conf`, matching bootctl.
+  - Repeated `initrd` / `options` lines are joined with a space.
+  - Files over 64 KiB, files holding a NUL byte and non-regular files are skipped, and names are
+    filtered.
+  - ⚠ **Behaviour change:** when bootctl yields nothing *and* no entries directory is readable, the
+    call returns `Err(not_supported)`; it used to return `Ok(0)`, which read as "no entries". No
+    caller was found in the workspace.
+- `fuzz/bootloader_entries.fcyr`, covering the entry parser, the name filter and comparator, and the
+  bootctl parser (edge cases plus token soup). Harnesses: 3 → 4. **New file: `git add` it.**
+- `scripts/gen-api-probe.sh`: a compile-only probe that calls every public fn in the API snapshot.
+- Tests: 111 → 202.
+
+### Changed
+
+- **No raw syscalls in agnodrm's sources.** `drm` (`sys_getdents64`, `sys_ioctl`), `journald`
+  (`sys_socket`, `sys_sendto`; its inlined `41` / `44` enum is gone), `util` (`xfsync`,
+  `file_rename`; its inlined `74` / `82` enum is gone), `main` / tests / bench (`sys_exit`,
+  `sys_getpid`) and the fuzz harnesses (`sys_exit` / `sys_write` for `syscall(60|1, …)`). Open
+  flags are per-target `O_*` names in `drm`, `update`, `netns`, `fuse` and `bootloader`. Linux
+  syscalls are unchanged, per before/after traces on x86_64 and aarch64. `update`, `netns` and
+  `fuse` now include `lib/syscalls.cyr` directly.
+- **Build gates.**
+  - Every compile's log goes through `scripts/audit.sh --check-build-log`: the three target builds,
+    plus the test, fuzz and bench builds, in audit, CI and release. Test, fuzz and bench logs were
+    never read before.
+  - The check fails on `the tag is dropped` (a value-form Result returned as a single value) as
+    well as undefined functions and non-exhaustive matches. It reads binary logs (`grep -a`), fails
+    on an unreadable log, and ignores `#deprecated` lines.
+  - The agnos lane also builds the API probe. `src/main.cyr` reaches only the core modules, so the
+    agnos arms of journald / netns / bootloader / update / fuse were never compiled by any gate. A
+    planted undefined call in one of them passes the old build and fails the probe.
+  - `scripts/audit.sh` and both doc generators pin `LC_ALL=C`: gates 2 and 3 failed under a UTF-8
+    login locale. The audit writes its logs to a private temp dir, and gate 12 reports its real
+    benchmark count.
+  - CI's version check now requires a `## [<VERSION>]` heading. The old regex matched any
+    substring.
+- **Bench harness** (roadmap V1.6.x):
+  - It records through the stdlib's `bench_batch_start` / `bench_batch_stop`, so `min=` / `max=`
+    are real again (since 6.6.5 they had repeated the mean).
+  - Every input is an 8-byte-aligned copy.
+  - Row names and groups are unchanged. See *Performance*.
+- `scripts/bench-history.sh` now writes `BENCHMARKS.md` (newest run against the previous one), as
+  CLAUDE.md always said it did.
+- CLAUDE.md / CONTRIBUTING:
+  - New rules: no raw syscalls; no `defer` in a Result-returning fn.
+  - The error-propagation example taught the pre-6.6 `return res;` shape, which returns an `Err` as
+    success. It now shows the value form.
+  - `#define LINUX` is a no-op.
+  - The distlib step lists only the `core` profile.
+
+### Deprecated
+
+- `bootloader_is_dangerous_token` now carries cyrius's `#deprecated("…")`, so every call site warns
+  on x86_64 and agnos. The build gates ignore deprecation lines. Removal stays at 2.0.0.
+
+### Issues
+
+- Closed (moved to `archive/`):
+  - `#deprecated` unproven: adopted.
+  - `#ifplat` codegen: obsolete, since agnodrm has no arch-gated code.
+  - `json` carved to bayan: fixed at 1.4.2, never archived.
+  - consumer rewire: mihi / chakshu / iam verified rewired.
+  - agnos cross-target ABI slant: all 31 cited sites dispositioned — 18 moved out at 1.4.4, 12 gated
+    since 1.4.6 / 1.5.0, 1 makes no syscall — plus the probe gate above.
+- Still open: `#derive(Serialize)` cstring fields, re-verified on 6.6.6 as unsupported, so the two
+  hand-rolled serializers stay.
+- New trackers: the `defer` defect and the aarch64 lane's blind spots (undefined *tail* calls,
+  `#deprecated`). Both are filed in the cyrius repo's `docs/development/issues/`, with the
+  api-surface Serialize-arity mismatch as a fourth filing.
+
+### Performance
+
+Same host, five interleaved runs, 1.6.1 bench vs 1.6.2 bench, median ns. No benchmarked library
+path changed in this release; every moved row comes from the harness:
+
+| Benchmark | 1.6.1 | 1.6.2 | Δ | Why |
+|---|---:|---:|---:|---|
+| `strlen_16ch` | 22 | 12 | −45.5% | input now 8-aligned |
+| `streq_16ch` | 75 | 56 | −25.3% | input now 8-aligned |
+| `compare_versions` | 152 | 115 | −24.3% | aligned inputs + placement |
+| `validate_ver_good` | 78 | 62 | −20.5% | aligned inputs + placement |
+| `is_dangerous_token_miss` | 119 | 107 | −10.1% | aligned inputs + placement |
+| `wrap_syscall_ok` | 289 | 306 | +5.9% | the bench now calls `sys_getpid()` instead of an inline syscall |
+| `parse_subsystem` | 43 | 45 | +2 ns | noise / placement |
+| `validate_cmdline_safe` | 953 | 907 | −4.8% | hash-seed noise (runs span 493–1,327) |
+| the other 10 | | | ±1 ns | |
+
+The average is now net of one clock read per 10K-op window, about 0.13 ns/op. The recorded
+`bench-history.csv` row carries this step: compare 1.6.2+ rows with each other, not with ≤1.6.1.
+
+### Build Metrics
+
+| Target (DCE) | 1.6.1 | 1.6.2 |
+|---|---:|---:|
+| x86_64 | 22,672 B | 22,656 B |
+| agnos | 22,328 B | 22,312 B |
+| aarch64 | 399,424 B | 399,408 B |
+
+The x86_64 dead-code floor is 615 unreachable fns (128,969 B eliminated). Capacity: `fn_table`
+658 / 131,072, `var_table` 424 / 1,048,576, `fn_name_hash` 658 / 4,096 slots.
+
+### Verification
+
+- `scripts/audit.sh` passes 12/12 under the C locale and under `en_US.UTF-8`.
+- 202/202 tests on x86_64, and under `qemu-aarch64`.
+- All 4 fuzz harnesses pass on x86_64 and aarch64.
+- The API probe builds clean for x86_64 and agnos. There are 316 public fns and no API-surface
+  drift.
+- Mutation-checked:
+  - the fd test catches a single leaked fd;
+  - the options-continuation test fails on the pre-review parser;
+  - the probe catches an undefined call in an agnos arm;
+  - the bootctl fuzz phase catches entries stored without an id.
+- The small-PID case, which exposed a non-terminated `str_cat` URL in the new fd test, passes in a
+  PID namespace.
+
 ## [1.6.1] — 2026-09-22
 
 **cyrius pin 6.6.2 → 6.6.6**, across the four 6.6.x repair releases, with the consumer items those

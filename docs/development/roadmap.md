@@ -575,31 +575,38 @@ One more bare in-code deferral, surfaced when cyrius 6.6.5's cyrlint began
 folding case — a capital "For now" had never matched before. Recorded here so
 the code can cite a tracked entry, the same way V1.5.x records `update`'s.
 
-- [ ] **Loader-entries fallback** (`bootloader_list_boot_entries`). Entries come
-  from `/usr/bin/bootctl list` only. When bootctl is missing, fails, or prints
-  nothing, the function returns `Ok(0)`; the intended fallback — parsing
-  `/boot/loader/entries/*.conf` directly — is not implemented. Note the result
-  shape: a failed `bootctl` reads as a successful "no entries", not as an error,
-  so a caller cannot tell the two apart today. Parked with the rest of the
-  deferred Linux-eccentric group; the agnos build already returns `Ok(0)` by
-  design (gnoboot, no systemd-boot entries).
+- [x] **Loader-entries fallback** (`bootloader_list_boot_entries`) — **done at
+  1.6.2.** Entries used to come from `/usr/bin/bootctl list` only; when bootctl
+  was missing, failed, or printed nothing, the function returned `Ok(0)`, so a
+  failed `bootctl` read as a successful "no entries". Now:
+  - The fallback reads Boot Loader Specification Type #1 entries from the first
+    readable directory among `/boot/loader/entries`, `/efi/loader/entries` and
+    `/boot/efi/loader/entries`, through the new public
+    `bootloader_list_loader_entries(dir, …)` and stdlib helpers only.
+  - When bootctl yields nothing and no such directory is readable, it returns
+    `Err(not_supported)`.
+  - The same work found and fixed the bootctl path's own bug: it opened a new entry on
+    `id:`, so every entry got the next entry's title.
+  - Both paths now report the same id shape (`<name>.conf`).
+  - The agnos build still returns `Ok(0)` by design (gnoboot, no systemd-boot
+    entries). See CHANGELOG `[1.6.2]`.
 
 #### V1.6.x — harness follow-ups from the 6.6.6 bump (opened 2026-09-22 at 1.6.1)
 
 Found while explaining the 1.6.1 bench delta and reading the 6.6.6 build logs.
 None affects the library; each makes a gate or a measurement more trustworthy.
 
-- [ ] **Move `bench_all.bcyr` onto `bench_batch_start` / `bench_batch_stop`.**
+- [x] **Move `bench_all.bcyr` onto `bench_batch_start` / `bench_batch_stop`.** — done at 1.6.2; rows report real min/max again.
   Its `batch_record` writes the stdlib bench struct at fixed offsets. Since
   6.6.5 that struct is 64 B and its min/max fields hold picoseconds, so every
   row's `min=` / `max=` repeats the mean. The recorded average is unaffected.
-- [ ] **Make the string benches alignment-independent.** `strlen_16ch` reads
+- [x] **Make the string benches alignment-independent.** — done at 1.6.2 (no pin change that release); every bench input is an 8-aligned copy. `strlen_16ch` reads
   11 or 21 ns depending only on where the linker lands `"hello_world_test"`,
   because stdlib `strlen` walks bytes to 8-alignment first. Copy bench inputs
   into 8-aligned buffers so a toolchain bump stops moving these rows by up to
   2×. It is best landed in a release with no pin change, so the step in the
   history is attributable.
-- [ ] **`fuzz/fuse_parse.fcyr` omits `src/util.cyr`.** Its build prints
+- [x] **`fuzz/fuse_parse.fcyr` omits `src/util.cyr`.** — done at 1.6.2, and every test / fuzz / bench build log is now gated like the target builds. Its build prints
   `warning: undefined function` for `agnodrm_run_checked` /
   `agnodrm_cstr_starts_with` and three dropped-tag warnings that follow from
   them. The same five warnings appear on 6.6.2, and the library build is clean.
@@ -639,14 +646,16 @@ reproduce.
 
 The first major bump folds the API-breaking removals deferred from the 1.3.0
 audit (Tier-3 hygiene). **Deprecated as of 1.3.0** — noted here and in
-CHANGELOG `[Unreleased] Deprecated`; no code `#deprecated` annotation (cyrius's
-attribute is still unproven, see V1.2.4), so the notice lives in docs. Consumers
-should migrate before 2.0.0.
+CHANGELOG `[Unreleased] Deprecated`. Since 1.6.2 the one deprecated fn still in
+agnodrm, `bootloader_is_dangerous_token`, also carries cyrius's
+`#deprecated("…")` attribute, so every call site warns at compile time (issue
+`archive/2026-05-09-cyrius-deprecated-unproven.md`). Consumers should migrate
+before 2.0.0.
 
-- [ ] **Remove `agnosys_checked_syscall`** — public but 0 callers and byte-redundant with `wrap_syscall` (`src/error.cyr`). *Migration:* use `wrap_syscall`.
-- [ ] **Remove `bootloader_is_dangerous_token`** (audit F-2, 1.5.3) — public, **0 production callers** (only the bench suite), and its semantics *diverge* from the validator beside it: it is a case-insensitive **substring** search while `bootloader_validate_kernel_cmdline` matches **exact tokens**. A consumer reaching for the obvious-looking helper gets looser behaviour than the library's own validator. *Migration:* use `bootloader_validate_kernel_cmdline`.
+- [x] ~~**Remove `agnosys_checked_syscall`**~~ — obsolete for agnodrm: the fn left with `src/syscall.cyr` in the 1.4.4 decomposition (commit `6308083`) and no longer exists here. *Migration (for older bundles):* use `wrap_syscall`.
+- [ ] **Remove `bootloader_is_dangerous_token`** (audit F-2, 1.5.3; `#deprecated` since 1.6.2) — public, **0 production callers** (only the bench suite), and its semantics *diverge* from the validator beside it: it is a case-insensitive **substring** search while `bootloader_validate_kernel_cmdline` matches **exact tokens**. A consumer reaching for the obvious-looking helper gets looser behaviour than the library's own validator. *Migration:* use `bootloader_validate_kernel_cmdline`.
 - [ ] **Allowlist-based kernel-cmdline validation** (audit F-1, 1.5.3) — the structural answer to the denylist. `bootloader_validate_kernel_cmdline` can only ever report "nothing listed matched"; 1.5.3 widened the list 21 → 48 entries and added a `rdinit=` prefix rule, but an unlisted interpreter or a novel parameter still passes. An allowlist API (permit a declared set, reject the rest) is a breaking contract change, hence 2.0.
-- [ ] **Remove the unused `label` parameter of `dmverity_validate_hex`** (arity 2 → 1) — the argument is ignored today; the error message is fixed. *Migration:* drop the second argument.
+- [x] ~~**Remove the unused `label` parameter of `dmverity_validate_hex`**~~ — obsolete for agnodrm: dmverity moved to sigil in the 1.4.4 decomposition; the item belongs to sigil's roadmap if it still applies there.
 - [ ] Sweep for any other `src/util.cyr` consolidation candidates whose extraction would be API-breaking, and fold them in the same major.
 
 Each removal gets a `Breaking` section in CHANGELOG with a migration note and an `api-surface` snapshot bump at the 2.0.0 tag.

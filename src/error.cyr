@@ -217,7 +217,7 @@ fn drm_syserr_print(e): i64 {
             sys_write(2, "resource temporarily unavailable", 32);
         }
         DRM_ERR_MODULE_NOT_LOADED => {
-            sys_write(2, "kernel module not loaded: ", 25);
+            sys_write(2, "kernel module not loaded: ", 26);
             sys_write(2, msg, msglen);
         }
         DRM_ERR_NOT_SUPPORTED => {
@@ -267,6 +267,11 @@ fn result_print_err(res_tag, res): i64 {
 # ⛔ NOT `return res_t;` and NOT `return res_v;`. Returning the payload alone
 #    delivers Err(77) to the caller as tag=77 / is_err_result==0 — an error that
 #    reads as SUCCESS. That shape cost yukti 19 silent defects at the flip.
+# ⛔ `defer` does NOT run when a fn returns a value-form Result (cyrius 6.6.0 –
+#    6.6.6; a plain single-value return still runs it). Every fd / temp file a
+#    Result-returning fn acquires is therefore released explicitly on each exit
+#    path — agnodrm had leaked one fd per call in nine fns through 1.6.1. See
+#    docs/development/issues/2026-09-22-cyrius-defer-skipped-on-result-return.md.
 
 # Check if a syscall return value indicates error (negative = errno)
 fn is_syscall_err(ret): i64 {

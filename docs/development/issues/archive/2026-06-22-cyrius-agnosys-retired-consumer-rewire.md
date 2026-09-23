@@ -1,5 +1,7 @@
 # agnosys → agnodrm decomposition: cyrius retired its stale stdlib snapshot → consumer rewire
 
+**Status:** RESOLVED (archived 2026-09-22 at agnodrm 1.6.2). All three consumers rewired off agnosys; no agnodrm-side action was ever required.
+
 **Filed:** 2026-06-22 · **Type:** decomposition completion + downstream rewire (ecosystem-owned) · **Driver:** cyrius v6.2.37 deleted its vendored `lib/agnosys.cyr`. This closes the **cyrius-stdlib side** of the `agnosys → agnodrm` decomposition (see `2026-06-18-agnosys-to-agnodrm-decomposition-plan.md`) and tracks the last consumer migrations.
 
 ## What changed (cyrius v6.2.37)
@@ -35,3 +37,15 @@ cyrius v6.2.37 deletes the stdlib module **before** chakshu rewires (cyrius user
 
 ## Cross-ref
 - cyrius CHANGELOG **[6.2.37]** (the deletion) · cyrius `docs/development/issues/archived/2026-06-22-agnosys-stdlib-security-fns-not-agnos-gated.md` (the originating agnos-filed issue, RESOLVED-by-retirement).
+
+## Resolution (archived 2026-09-22, agnodrm 1.6.2)
+
+Verified against the local workspace (read-only):
+- **mihi** — `src/kernel.cyr` calls cyrius `lib/sys.cyr` `sys_uname` (wrapping the raw `0` / `-errno` return
+  as a Result, per the API note above); its `cyrius.cyml` keeps only a comment recording the 2026-06-22
+  migration. No `agnosys_*` reference remains in `src/`.
+- **chakshu** — no `"agnosys"` stdlib entry and no `[deps.agnosys]`; no `agnosys_*` reference in `src/`.
+- **iam** — the transitive `[deps.agnosys]` git dep is gone (comment records the drop at cyrius 6.2.37);
+  no `agnosys_*` reference in `src/`.
+
+The rewire was ecosystem-owned and is complete, so this tracker closes.

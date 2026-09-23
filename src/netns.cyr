@@ -7,6 +7,10 @@
 #
 # Requires: src/error.cyr, lib/syscalls.cyr, lib/process.cyr
 
+# Included directly (as drm.cyr does) for the per-target O_* open flags;
+# include-once, so includers pay nothing.
+include "lib/syscalls.cyr"
+
 # ================================================================
 # Traffic direction / protocol / action constants
 # ================================================================
@@ -600,16 +604,20 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     exec_vec(mkdir_args);
 
     # Write ruleset to file
-    var fd = sys_open(tmp_path, 0x241, 0x1A4);  # O_WRONLY|O_CREAT|O_TRUNC, 0644
+    var fd = sys_open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);  # mode 0644
     if (fd < 0) {
         return drm_err_io(0 - fd, "failed to create nft temp file");
     }
+    # A short or failed write would hand nft a truncated ruleset, silently
+    # dropping rules, so it fails the call instead of being applied.
     var rlen = strlen(ruleset);
-    sys_write(fd, ruleset, rlen);
+    var wrote = sys_write(fd, ruleset, rlen);
     sys_close(fd);
-
-    # Clean up temp file on any return path
-    defer { sys_unlink(tmp_path); }
+    if (wrote != rlen) {
+        sys_unlink(tmp_path);
+        if (wrote < 0) { return drm_err_io(0 - wrote, "failed to write nft temp file"); }
+        return drm_err_io(0, "short write to nft temp file");
+    }
 
     # ip netns exec <ns> nft -f <path>
     # (the inner `nft` is PATH-resolved by `ip netns exec`, so it stays bare)
@@ -618,6 +626,12 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     vec_push(nft_args, ns_name); vec_push(nft_args, "nft"); vec_push(nft_args, "-f");
     vec_push(nft_args, tmp_path);
 
-    return netns_run_ip(nft_args);
+    # Unlinked explicitly after the run, not with `defer`: cyrius skips a defer
+    # block when the fn returns a value-form Result (see src/error.cyr), so the
+    # old `defer { sys_unlink(tmp_path); }` left every temp file behind.
+    var run_t, run_v = netns_run_ip(nft_args);
+    sys_unlink(tmp_path);
+    if (is_err_result(run_t) == 1) { return Err(run_v); }
+    return Ok(run_v);
     #endif
 }

@@ -71,18 +71,21 @@ jobs:
           fi
 
       - name: Build (DCE)
-        # Grep the log as well as the exit code: `warning: undefined
-        # function 'X'` exits 0 when DCE proves the call site unreachable
-        # (see the agnos cross-build step below). Redirect to a file rather
-        # than `| tee` — the default step shell is `bash -e` with no
-        # pipefail, so a pipeline would mask cyrius's exit code.
+        # Read the log as well as the exit code: cyrius exits 0 on an
+        # undefined function DCE proved unreachable (see the agnos
+        # cross-build step below), on a dropped value-form Result tag, and
+        # on a non-exhaustive match. `scripts/audit.sh --check-build-log` is
+        # the one definition of those classes, shared with ci.yml and the
+        # local audit; deprecation / duplicate-fn warnings do not fail it.
+        # Redirect to a file rather than `| tee` — the default step shell is
+        # `bash -e` with no pipefail, so a pipeline would mask cyrius's exit
+        # code.
         run: |
           mkdir -p build
           CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm > /tmp/build_x86_64.log 2>&1 || {
             cat /tmp/build_x86_64.log; echo "ERROR: x86_64 build failed"; exit 1; }
           cat /tmp/build_x86_64.log
-          grep -q "warning: undefined function" /tmp/build_x86_64.log && {
-            echo "ERROR: x86_64 build references undefined function(s)"; exit 1; }
+          scripts/audit.sh --check-build-log x86_64 /tmp/build_x86_64.log
           echo "agnodrm: $(wc -c < build/agnodrm) bytes"
 
       - name: Cross-build aarch64 (best-effort)
@@ -96,8 +99,7 @@ jobs:
               > /tmp/build_aarch64.log 2>&1 || {
               cat /tmp/build_aarch64.log; echo "ERROR: aarch64 build failed"; exit 1; }
             cat /tmp/build_aarch64.log
-            grep -q "warning: undefined function" /tmp/build_aarch64.log && {
-              echo "ERROR: aarch64 build references undefined function(s)"; exit 1; }
+            scripts/audit.sh --check-build-log aarch64 /tmp/build_aarch64.log
             echo "agnodrm-aarch64: $(wc -c < build/agnodrm-aarch64) bytes"
           else
             echo "::warning::cycc_aarch64 not in toolchain — aarch64 binary skipped in release"
@@ -124,20 +126,35 @@ jobs:
             > /tmp/build_agnos.log 2>&1 || {
             cat /tmp/build_agnos.log; echo "ERROR: agnos build failed"; exit 1; }
           cat /tmp/build_agnos.log
-          grep -q "warning: undefined function" /tmp/build_agnos.log && {
-            echo "ERROR: agnos build references undefined function(s) —"
-            echo "check [deps] stdlib in cyrius.cyml for a missing module"; exit 1; }
+          scripts/audit.sh --check-build-log agnos /tmp/build_agnos.log || {
+            echo "hint: an undefined function on agnos usually means [deps] stdlib"
+            echo "      in cyrius.cyml is missing a module"; exit 1; }
           xxd -l 4 build/agnodrm-agnos | grep -q "7f45 4c46" || {
             echo "ERROR: build/agnodrm-agnos is not an ELF"; exit 1; }
           echo "agnodrm-agnos: $(wc -c < build/agnodrm-agnos) bytes (verified, not shipped)"
+          # src/main.cyr reaches only the core modules, and cyrius reports an
+          # undefined function only inside a reachable fn, so the build above
+          # never compiled the agnos arms of journald / netns / bootloader /
+          # update / fuse. The API probe calls every public fn (1.6.2).
+          scripts/gen-api-probe.sh > /tmp/api_probe.cyr
+          CYRIUS_DCE=1 cyrius build --agnos /tmp/api_probe.cyr /tmp/api_probe_agnos \
+            > /tmp/build_probe_agnos.log 2>&1 || {
+            cat /tmp/build_probe_agnos.log; echo "ERROR: agnos API-probe build failed"; exit 1; }
+          scripts/audit.sh --check-build-log "agnos API probe" /tmp/build_probe_agnos.log
 
+      # Same build-log check as the builds above (and as ci.yml's test /
+      # fuzz steps). Log to a file, never `| tee`.
       - name: Test
         run: |
           for t in tests/tcyr/*.tcyr; do
             [ -f "$t" ] || continue
             name=$(basename "$t" .tcyr)
             echo "=== $name ==="
-            CYRIUS_DCE=1 cyrius build "$t" "/tmp/ci_$name"
+            log="/tmp/ci_$name.build.log"
+            CYRIUS_DCE=1 cyrius build "$t" "/tmp/ci_$name" > "$log" 2>&1 || {
+              cat "$log"; echo "ERROR: test build failed: $name"; exit 1; }
+            cat "$log"
+            scripts/audit.sh --check-build-log "test $name" "$log"
             "/tmp/ci_$name"
             rm -f "/tmp/ci_$name"
           done
@@ -147,7 +164,11 @@ jobs:
           for f in fuzz/*.fcyr; do
             [ -f "$f" ] || continue
             name=$(basename "$f" .fcyr)
-            CYRIUS_DCE=1 cyrius build "$f" "build/$name"
+            log="/tmp/fuzz_$name.build.log"
+            CYRIUS_DCE=1 cyrius build "$f" "build/$name" > "$log" 2>&1 || {
+              cat "$log"; echo "ERROR: fuzz build failed: $name"; exit 1; }
+            cat "$log"
+            scripts/audit.sh --check-build-log "fuzz $name" "$log"
             timeout 10 "build/$name" 500 || { echo "FUZZ CRASH: $name"; exit 1; }
             echo "  $name: ok"
           done

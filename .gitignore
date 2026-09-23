@@ -18,7 +18,7 @@ core
 core.*
 qemu_*.core
 # bench-history.csv is tracked — the cross-version perf record.
-# BENCHMARKS.md is regenerated from it by scripts/bench-history.sh (and CI), so ignore it.
+# BENCHMARKS.md is regenerated from it by scripts/bench-history.sh, so ignore it.
 BENCHMARKS.md
 .claude/
 .env

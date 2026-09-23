@@ -32,6 +32,7 @@ bootloader::bootloader_extract_value/3
 bootloader::bootloader_is_dangerous_token/3
 bootloader::bootloader_line_starts_with/3
 bootloader::bootloader_list_boot_entries/2
+bootloader::bootloader_list_loader_entries/3
 bootloader::bootloader_parse_bootctl_list/3
 bootloader::bootloader_parse_loader_conf/1
 bootloader::bootloader_type_str/1

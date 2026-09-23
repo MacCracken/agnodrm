@@ -20,6 +20,9 @@
 #   scripts/gen-api-surface-prose.sh --check # exit 1 on drift (for audit gate)
 
 set -euo pipefail
+# Deterministic output: byte-wise truncation and C collation, whatever the
+# caller's locale (the committed docs are generated this way).
+export LC_ALL=C
 
 SNAPSHOT="docs/development/api-surface-1.0.snapshot"
 OUT="docs/development/api-surface-1.0.md"

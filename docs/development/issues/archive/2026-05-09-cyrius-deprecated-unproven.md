@@ -1,6 +1,6 @@
 # cyrius `#deprecated("reason")` attribute — unproven across agnosticos
 
-**Status:** OPEN (passive — defer until proven elsewhere; not a bug, just untested in production by any first-party consumer).
+**Status:** RESOLVED at agnodrm 1.6.2 (2026-09-22) — reopen condition (b) was met, and the attribute is adopted and verified on cyrius 6.6.6. Archived.
 **Filed:** 2026-05-09
 **Reporter:** agnosys 1.2.0 (during V1.2.4 slot scoping — `#deprecated` adoption channel for graceful API drift before removal).
 **cyrius version observed:** 5.10.19.
@@ -44,3 +44,31 @@ When agnosys actually needs to deprecate something, this issue reopens — at th
 
 - agnosys cyrius pin: 5.10.19.
 - agnosys V1.2.4: deferred indefinitely. Reopens when (a) another agnosticos consumer adopts the directive in production, OR (b) agnosys actually has a fn to deprecate.
+
+## Resolution (1.6.2, 2026-09-22)
+
+Reopen condition **(b)** held: agnodrm had a fn to deprecate. `bootloader_is_dangerous_token` has
+been deprecated since 1.5.3 in docs only (roadmap V2.0: 0 production callers, and its substring
+semantics diverge from `bootloader_validate_kernel_cmdline`'s exact-token match). 1.6.2 annotates it:
+
+```cyr
+#deprecated("use bootloader_validate_kernel_cmdline (exact-token match); removed in agnodrm 2.0.0")
+fn bootloader_is_dangerous_token(text, textlen, token): i64 {
+```
+
+Verified against cyrius 6.6.6 (the attribute exists since v5.6.4, and the tail-call gap was fixed in
+6.6.4):
+- Every call site warns at compile time on x86_64 and agnos, tail calls included. The bench's two
+  calls print `warning:<source>:120:59: 'bootloader_is_dangerous_token' is deprecated: use
+  bootloader_validate_kernel_cmdline (exact-token match); removed in agnodrm 2.0.0` and the build
+  exits 0.
+- Behaviour is unchanged on x86_64, aarch64 (under qemu) and agnos.
+- `cyrius api-surface` is unaffected: the fn stays in the snapshot at arity 3.
+- `cyrius distlib` keeps the attribute line above the fn in `dist/agnodrm.cyr`, so consumers of the
+  bundle get the warning too.
+- `cyrfmt` shows no drift and `cyrlint` reports 0 warnings.
+- The build gates ignore deprecation lines by design (`scripts/audit.sh` `check_build_log` drops
+  them before matching), so a deprecated API never fails a build.
+
+Caveat: `cycc_aarch64` 6.6.6 prints no deprecation warning at all — tracked with its missing
+undefined-function diagnostic in `2026-09-22-cyrius-aarch64-undefined-fn-silent.md`.

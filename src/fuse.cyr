@@ -6,6 +6,10 @@
 #
 # Requires: src/error.cyr, lib/syscalls.cyr, lib/process.cyr
 
+# Included directly (as drm.cyr does) for the per-target O_* open flags and
+# the per-arch struct stat offsets; include-once, so includers pay nothing.
+include "lib/syscalls.cyr"
+
 # ================================================================
 # FuseMount struct
 # 4 ptr fields * 8 = 32 bytes. Accessors auto-generated.
@@ -125,11 +129,12 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     # Read /proc/mounts
-    var fd = sys_open("/proc/mounts", 0, 0);  # O_RDONLY
+    var fd = sys_open("/proc/mounts", O_RDONLY, 0);
     if (fd < 0) {
         return drm_err_io(0 - fd, "failed to open /proc/mounts");
     }
-    defer { sys_close(fd); }
+    # Closed explicitly on every return, not with `defer`: cyrius skips a defer
+    # block when the fn returns a value-form Result (see src/error.cyr).
 
     # `8192 + 1`: the read loop can fill all 8192 bytes, and the NUL below
     # is written at `buf + total_read`, i.e. index 8192 on a full read — one
@@ -145,6 +150,7 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
         if (total_read >= 8192) { break; }
         nread = sys_read(fd, buf + total_read, 8192 - total_read);
     }
+    sys_close(fd);
     store8(buf + total_read, 0);
 
     # Parse line by line
@@ -289,7 +295,7 @@ fn fuse_is_available(): i64 {
     return 0;               # agnos has no /dev/fuse — FUSE unavailable
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    return sys_access("/dev/fuse", 0) == 0;
+    return sys_access("/dev/fuse", 0) == 0;   # mode 0 = F_OK; the stdlib names no access modes
     #endif
 }
 
@@ -314,15 +320,17 @@ fn fuse_validate_mountpoint(path): i64 {
         return drm_err_invalid_argument("cannot use filesystem root as mountpoint");
     }
 
-    # Check path exists and is a directory
-    # stat64 struct: 144 bytes, mode at offset 24
-    var statbuf = alloc(144);
+    # Check path exists and is a directory. struct stat is per-arch: st_mode
+    # sits at +24 on x86_64 but +16 on aarch64, where a raw +24 reads st_uid
+    # and rejected every directory. Size and offset come from the stdlib's
+    # per-target Stat enum.
+    var statbuf = alloc(STAT_BUFSZ);
     var ret = sys_stat(path, statbuf);
     if (ret < 0) {
         return drm_err_invalid_argument("mountpoint does not exist");
     }
 
-    var mode = load32(statbuf + 24);
+    var mode = load32(statbuf + STAT_MODE);
     # S_IFDIR = 0x4000 = 16384
     if ((mode & 0xF000) != 0x4000) {
         return drm_err_invalid_argument("mountpoint is not a directory");

@@ -17,6 +17,9 @@
 # resolution requires a real cyrius AST walker and is deferred.
 
 set -euo pipefail
+# Deterministic output: byte-wise truncation and C collation, whatever the
+# caller's locale (the committed docs are generated this way).
+export LC_ALL=C
 
 OUT="docs/development/capability-map.md"
 TMP="$(mktemp)"

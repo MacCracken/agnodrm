@@ -11,8 +11,17 @@ include "lib/vec.cyr"
 include "lib/str.cyr"
 include "lib/tagged.cyr"
 include "lib/syscalls.cyr"
+include "lib/io.cyr"
 include "lib/process.cyr"
 include "src/error.cyr"
+# src/fuse.cyr calls agnodrm_run_checked / agnodrm_cstr_starts_with, so it
+# needs src/util.cyr (and util's own stdlib deps, lib/io.cyr among them).
+# Without it the build only WARNED "undefined function" — DCE proves the
+# call sites unreachable from this harness — plus three dropped-tag warnings
+# on fuse_mount / fuse_unmount / fuse_unmount_lazy, because an undefined
+# callee's `: stack` Result shape is unknown. audit.sh gate 11 and the CI
+# Fuzz step now fail on both classes.
+include "src/util.cyr"
 include "src/fuse.cyr"
 
 alloc_init();
@@ -20,65 +29,65 @@ alloc_init();
 # --- well-formed lines ---
 var l1 = "src /mnt fuse.x rw 0 0";
 var f1a = fuse_extract_field(l1, strlen(l1), 0);
-if (streq(f1a, "src") != 1) { syscall(60, 10); }
+if (streq(f1a, "src") != 1) { sys_exit(10); }
 var f1b = fuse_extract_field(l1, strlen(l1), 2);
-if (streq(f1b, "fuse.x") != 1) { syscall(60, 11); }
+if (streq(f1b, "fuse.x") != 1) { sys_exit(11); }
 
 # --- octal escape: \040 → space ---
 var l2 = "dev /mnt/with\\040space ext4 rw 0 0";
 var f2 = fuse_extract_field(l2, strlen(l2), 1);
-if (streq(f2, "/mnt/with space") != 1) { syscall(60, 20); }
+if (streq(f2, "/mnt/with space") != 1) { sys_exit(20); }
 
 # --- octal escape: \011 → tab ---
 var l3 = "dev /mnt\\011tab ext4 rw 0 0";
 var f3 = fuse_extract_field(l3, strlen(l3), 1);
-if (streq(f3, "/mnt\ttab") != 1) { syscall(60, 21); }
+if (streq(f3, "/mnt\ttab") != 1) { sys_exit(21); }
 
 # --- octal escape: \012 → LF (zero-truncates as cstring) ---
 # Output cstring would terminate at the embedded \n; test that the unescape
 # happened (extract returns non-zero).
 var l4 = "dev /mnt\\012lf ext4 rw 0 0";
 var f4 = fuse_extract_field(l4, strlen(l4), 1);
-if (f4 == 0) { syscall(60, 22); }
+if (f4 == 0) { sys_exit(22); }
 
 # --- octal escape: \134 → backslash ---
 var l5 = "dev /mnt\\134path ext4 rw 0 0";
 var f5 = fuse_extract_field(l5, strlen(l5), 1);
-if (streq(f5, "/mnt\\path") != 1) { syscall(60, 23); }
+if (streq(f5, "/mnt\\path") != 1) { sys_exit(23); }
 
 # --- non-escape: lone backslash before non-octal ---
 var l6 = "dev /mnt\\xyz ext4 rw 0 0";
 var f6 = fuse_extract_field(l6, strlen(l6), 1);
 # Should preserve the backslash + xyz literally (no octal match).
-if (streq(f6, "/mnt\\xyz") != 1) { syscall(60, 24); }
+if (streq(f6, "/mnt\\xyz") != 1) { sys_exit(24); }
 
 # --- octal at end of field: incomplete escape ---
 var l7 = "dev /mnt/\\04 ext4 rw 0 0";
 var f7 = fuse_extract_field(l7, strlen(l7), 1);
 # Should preserve \04 literally (only 2 chars, not 3).
-if (streq(f7, "/mnt/\\04") != 1) { syscall(60, 25); }
+if (streq(f7, "/mnt/\\04") != 1) { sys_exit(25); }
 
 # --- empty line ---
 var l8 = "";
 var f8 = fuse_extract_field(l8, 0, 0);
-if (f8 != 0) { syscall(60, 30); }
+if (f8 != 0) { sys_exit(30); }
 
 # --- one-field line (request idx 0 OK, idx 1 returns 0) ---
 var l9 = "alone";
 var f9a = fuse_extract_field(l9, strlen(l9), 0);
-if (streq(f9a, "alone") != 1) { syscall(60, 40); }
+if (streq(f9a, "alone") != 1) { sys_exit(40); }
 var f9b = fuse_extract_field(l9, strlen(l9), 1);
-if (f9b != 0) { syscall(60, 41); }
+if (f9b != 0) { sys_exit(41); }
 
 # --- multi-whitespace separators ---
 var l10 = "a    b\t\tc";
 var f10 = fuse_extract_field(l10, strlen(l10), 1);
-if (streq(f10, "b") != 1) { syscall(60, 50); }
+if (streq(f10, "b") != 1) { sys_exit(50); }
 
 # --- request beyond available fields ---
 var l11 = "one two three";
 var f11 = fuse_extract_field(l11, strlen(l11), 10);
-if (f11 != 0) { syscall(60, 60); }
+if (f11 != 0) { sys_exit(60); }
 
 # --- huge synthetic line (must not crash) ---
 var big = alloc(8192);
@@ -111,9 +120,9 @@ var fadv = fuse_extract_field(adv, 512, 0);
 var x = 0;
 while (x < 500) {
     var fs = fuse_extract_field(l2, strlen(l2), 1);
-    if (streq(fs, "/mnt/with space") != 1) { syscall(60, 70); }
+    if (streq(fs, "/mnt/with space") != 1) { sys_exit(70); }
     x = x + 1;
 }
 
-syscall(1, 1, "fuse_parse: ok\n", 15);
-syscall(60, 0);
+sys_write(1, "fuse_parse: ok\n", 15);
+sys_exit(0);

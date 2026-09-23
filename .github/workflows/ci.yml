@@ -178,21 +178,27 @@ jobs:
           echo "all 2 dist bundles match src/"
 
       - name: Build (DCE)
-        # `warning: undefined function 'X'` exits 0 when DCE proves the call
-        # site unreachable, so the log has to be grepped — that is how
-        # 1.5.2's `_agnos_getenv` reached a release (see the agnos
-        # cross-build step below). A *reachable* undefined function is
-        # already a hard build error; this covers the unreachable half.
-        # Logs go to a file, not a `| tee` pipe: the default step shell is
-        # `bash -e` with no pipefail, so a pipeline would mask cyrius's
-        # own exit code behind tee's.
+        # cyrius exits 0 on three warn-only classes, so every build log in
+        # this workflow is read by `scripts/audit.sh --check-build-log` — the
+        # same check_build_log that audit.sh gates 5/7/11/12 run, so CI and the
+        # local audit cannot drift apart. It fails on:
+        #   * `warning: undefined function 'X'` — exits 0 when DCE proves the
+        #     call site unreachable; that is how 1.5.2's `_agnos_getenv`
+        #     reached a release (see the agnos cross-build step below). A
+        #     *reachable* undefined function is already a hard build error.
+        #   * "... — the tag is dropped, so the caller reads this error as its
+        #     TAG" — a value-form Result return that loses its tag.
+        #   * "non-exhaustive match over enum" — a match missing a variant.
+        # Deprecation (`#deprecated`) and duplicate-fn warnings are NOT
+        # failures. Logs go to a file, not a `| tee` pipe: the default step
+        # shell is `bash -e` with no pipefail, so a pipeline would mask
+        # cyrius's own exit code behind tee's.
         run: |
           mkdir -p build
           CYRIUS_DCE=1 cyrius build src/main.cyr build/agnodrm > /tmp/build_x86_64.log 2>&1 || {
             cat /tmp/build_x86_64.log; echo "ERROR: x86_64 build failed"; exit 1; }
           cat /tmp/build_x86_64.log
-          grep -q "warning: undefined function" /tmp/build_x86_64.log && {
-            echo "ERROR: x86_64 build references undefined function(s)"; exit 1; }
+          scripts/audit.sh --check-build-log x86_64 /tmp/build_x86_64.log
           echo "agnodrm: $(wc -c < build/agnodrm) bytes"
 
       - name: Verify ELF
@@ -214,12 +220,15 @@ jobs:
             > /tmp/build_aarch64.log 2>&1 || {
             cat /tmp/build_aarch64.log; echo "ERROR: aarch64 build failed"; exit 1; }
           cat /tmp/build_aarch64.log
-          grep -q "warning: undefined function" /tmp/build_aarch64.log && {
-            echo "ERROR: aarch64 build references undefined function(s)"; exit 1; }
+          scripts/audit.sh --check-build-log aarch64 /tmp/build_aarch64.log
           for f in fuzz/*.fcyr; do
             [ -f "$f" ] || continue
             name=$(basename "$f" .fcyr)
-            CYRIUS_DCE=1 cyrius build --aarch64 "$f" "build/${name}-aarch64"
+            log="/tmp/build_${name}-aarch64.log"
+            CYRIUS_DCE=1 cyrius build --aarch64 "$f" "build/${name}-aarch64" > "$log" 2>&1 || {
+              cat "$log"; echo "ERROR: aarch64 fuzz build failed: $name"; exit 1; }
+            cat "$log"
+            scripts/audit.sh --check-build-log "aarch64 fuzz $name" "$log"
           done
           for bin in build/agnodrm-aarch64 build/*-aarch64; do
             [ -f "$bin" ] || continue
@@ -248,25 +257,42 @@ jobs:
             > /tmp/build_agnos.log 2>&1 || {
             cat /tmp/build_agnos.log; echo "ERROR: agnos build failed"; exit 1; }
           cat /tmp/build_agnos.log
-          grep -q "warning: undefined function" /tmp/build_agnos.log && {
-            echo "ERROR: agnos build references undefined function(s) —"
-            echo "check [deps] stdlib in cyrius.cyml for a missing module"; exit 1; }
+          scripts/audit.sh --check-build-log agnos /tmp/build_agnos.log || {
+            echo "hint: an undefined function on agnos usually means [deps] stdlib"
+            echo "      in cyrius.cyml is missing a module"; exit 1; }
           xxd -l 4 build/agnodrm-agnos | grep -q "7f45 4c46" || {
             echo "ERROR: build/agnodrm-agnos is not an ELF"; exit 1; }
           echo "agnodrm-agnos: $(wc -c < build/agnodrm-agnos) bytes"
+          # src/main.cyr reaches only the core modules, and cyrius reports an
+          # undefined function only inside a reachable fn, so the build above
+          # never compiled the agnos arms of journald / netns / bootloader /
+          # update / fuse. The API probe calls every public fn (1.6.2).
+          scripts/gen-api-probe.sh > /tmp/api_probe.cyr
+          CYRIUS_DCE=1 cyrius build --agnos /tmp/api_probe.cyr /tmp/api_probe_agnos \
+            > /tmp/build_probe_agnos.log 2>&1 || {
+            cat /tmp/build_probe_agnos.log; echo "ERROR: agnos API-probe build failed"; exit 1; }
+          scripts/audit.sh --check-build-log "agnos API probe" /tmp/build_probe_agnos.log
 
       - name: Smoke test
         run: |
           ./build/agnodrm | tee /tmp/smoke_output
           grep -q "agnodrm ready" /tmp/smoke_output
 
+      # The test, fuzz and bench builds get the same build-log check as the
+      # library build above. Until 1.6.2 nothing read them: fuzz/fuse_parse
+      # built with two undefined functions and three dropped-tag warnings
+      # while this workflow stayed green. Log to a file, never `| tee`.
       - name: Integration tests
         run: |
           for t in tests/tcyr/*.tcyr; do
             [ -f "$t" ] || continue
             name=$(basename "$t" .tcyr)
             echo "=== $name ==="
-            CYRIUS_DCE=1 cyrius build "$t" "/tmp/ci_$name"
+            log="/tmp/ci_$name.build.log"
+            CYRIUS_DCE=1 cyrius build "$t" "/tmp/ci_$name" > "$log" 2>&1 || {
+              cat "$log"; echo "ERROR: test build failed: $name"; exit 1; }
+            cat "$log"
+            scripts/audit.sh --check-build-log "test $name" "$log"
             "/tmp/ci_$name"
             rm -f "/tmp/ci_$name"
           done
@@ -276,14 +302,22 @@ jobs:
           for f in fuzz/*.fcyr; do
             [ -f "$f" ] || continue
             name=$(basename "$f" .fcyr)
-            CYRIUS_DCE=1 cyrius build "$f" "build/$name"
+            log="/tmp/fuzz_$name.build.log"
+            CYRIUS_DCE=1 cyrius build "$f" "build/$name" > "$log" 2>&1 || {
+              cat "$log"; echo "ERROR: fuzz build failed: $name"; exit 1; }
+            cat "$log"
+            scripts/audit.sh --check-build-log "fuzz $name" "$log"
             timeout 10 "build/$name" 500 || { echo "FUZZ CRASH: $name"; exit 1; }
             echo "  $name: ok"
           done
 
       - name: Benchmarks
         run: |
-          CYRIUS_DCE=1 cyrius build tests/bcyr/bench_all.bcyr build/bench_all
+          CYRIUS_DCE=1 cyrius build tests/bcyr/bench_all.bcyr build/bench_all \
+            > /tmp/bench_build.log 2>&1 || {
+            cat /tmp/bench_build.log; echo "ERROR: bench build failed"; exit 1; }
+          cat /tmp/bench_build.log
+          scripts/audit.sh --check-build-log bench /tmp/bench_build.log
           ./build/bench_all
 
   security:
@@ -351,5 +385,8 @@ jobs:
         run: |
           VERSION=$(cat VERSION | tr -d '[:space:]')
           echo "VERSION file: $VERSION"
-          grep -q "$VERSION" CHANGELOG.md || { echo "FAIL: version not in CHANGELOG.md"; exit 1; }
+          # Fixed-string match on the section heading: a bare `grep -q "$VERSION"`
+          # read the dots as regex wildcards and matched any substring — it passed
+          # 1.6.2 with no [1.6.2] section by matching "106,230" in an old entry.
+          grep -qF "## [$VERSION]" CHANGELOG.md || { echo "FAIL: no ## [$VERSION] section in CHANGELOG.md"; exit 1; }
           echo "Version consistent (manifest pulls VERSION via \${file:VERSION})"

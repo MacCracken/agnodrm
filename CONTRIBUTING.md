@@ -4,7 +4,7 @@ Thank you for your interest in contributing.
 
 ## Prerequisites
 
-- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.6.6** at 1.6.1; consumers need ≥ 6.6.4; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
+- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.6.6** at 1.6.2; consumers need ≥ 6.6.5; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
 - Linux x86_64 (primary host) or aarch64 (cross-build via `cycc_aarch64`, renamed from `cc5_aarch64` in Cyrius 6.0); macOS / Windows is a cyrius-side roadmap item
 - `./lib/` is gitignored — populated on first build by `cyrius deps` from the `[deps] stdlib` list
 
@@ -16,7 +16,7 @@ Thank you for your interest in contributing.
 4. Make your changes under `src/`, `tests/`, `fuzz/`, or `docs/`
 5. **Run `scripts/audit.sh`** — 12 gates, same as CI (syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks)
 6. If you renamed or removed a public function, update the snapshot intentionally: `scripts/check-api-surface.sh --update` and record the rename in `CHANGELOG.md` under `Breaking`
-7. If any `src/*.cyr` changed, regenerate all bundles: `cyrius distlib && for p in core security storage trust system; do cyrius distlib $p; done`
+7. If any `src/*.cyr` changed, regenerate both bundles: `cyrius distlib && cyrius distlib core`
 8. If `src/*.cyr` comments / public surface changed, regenerate the prose + capability map: `scripts/gen-api-surface-prose.sh && scripts/gen-capability-map.sh`
 9. Open a PR
 
@@ -34,7 +34,7 @@ Thank you for your interest in contributing.
 | `cyrius vet src/main.cyr` | Include-graph audit |
 | `cyrius capacity --check src/main.cyr` | 85% table-utilization gate |
 | `cyrius distlib [<profile>]` | Regenerate `dist/agnodrm.cyr` (or `dist/agnodrm-core.cyr` — only the `core` profile remains post-decomposition) |
-| `scripts/audit.sh` | Full 11-gate local quality run |
+| `scripts/audit.sh` | Full 12-gate local quality run |
 | `scripts/check-api-surface.sh` | Diff public API vs. snapshot |
 | `scripts/gen-api-surface-prose.sh [--check]` | Regen / check `api-surface-1.0.md` prose |
 | `scripts/gen-capability-map.sh [--check]` | Regen / check `capability-map.md` |
@@ -60,12 +60,14 @@ The 1.0 surface is **frozen** — adding new modules is rare and requires a majo
 - Default type is i64. Multi-width primitives available (`i8`/`i16`/`i32`/`i64`); typed struct fields land at sub-i64 widths from V1.1.8 onward (kernel-ABI structs use `: i32` etc.)
 - Structs: heap-allocated via `alloc()`, fields accessed at fixed offsets — but **prefer `#derive(accessors)`** for new structs (V1.1.0+ adopted; 37 derive structs across 16 modules). Stack `#derive(Serialize)` on top for diagnostic JSON dumps where the field set is `i64` / `Str` only (V1.1.12+; cyrius 5.10.14+ honors stacked `#derive`)
 - Strings: null-terminated C strings at boundaries; `lib/str.cyr` fat pointers (`Str`) internally. Parsers built on `str_split` expect `Str`, not cstring — wrap with `str_from(cstr)` when calling from outside
-- Error propagation: `if (is_err_result(res) == 1) { return res; }`
+- Error propagation (a Result is a register pair since cyrius 6.6.0): `var res_t, res_v = f(); if (is_err_result(res_t) == 1) { return Err(res_v); }` — never `return res_v;`, which hands the caller the payload as a tag so an `Err` reads as success
+- No `defer` in a fn that returns a Result — cyrius skips it on a Result return; release fds / temp files explicitly on every exit path (see CLAUDE.md)
+- No raw syscalls: use the stdlib's `sys_*` / `file_*` helpers and per-target `SYS_*` / `O_*` / `STAT_*` names, never `syscall(N, …)`, flag literals or struct offsets
 - Comments: `#` to end of line
 - Reserved keywords (cannot be used as var names): `match`, `default`, `shared`, `in`, `secret`
 - Max 6 function parameters — 7+ trigger a create/set split (CLAUDE.md)
-- `#define LINUX` at the top of every `.cyr` that includes `lib/syscalls.cyr`
-- Arch-gated blocks use `#ifdef CYRIUS_ARCH_X86 / AARCH64` (NOT `#ifplat` — see [`docs/development/issues/2026-05-09-cyrius-ifplat-codegen.md`](docs/development/issues/2026-05-09-cyrius-ifplat-codegen.md))
+- `#define LINUX` at the top of a file is a legacy no-op — no stdlib file reads it at cyrius 6.6.6; the target is the compiler's predefined `CYRIUS_TARGET_*` / `CYRIUS_ARCH_*`. Existing lines are harmless; new files don't need one
+- Arch-gated blocks, if one is ever needed again, use `#ifdef CYRIUS_ARCH_X86 / AARCH64` (NOT `#ifplat` — see [`docs/development/issues/archive/2026-05-09-cyrius-ifplat-codegen.md`](docs/development/issues/archive/2026-05-09-cyrius-ifplat-codegen.md)). Prefer the stdlib's per-target `SYS_*` / `O_*` names and `sys_*` helpers, which make most arch gating unnecessary
 
 ## Code Style
 
