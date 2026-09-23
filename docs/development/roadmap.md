@@ -25,6 +25,32 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
 
+## Moving the cyrius pin to 6.6.5
+
+⛔ Before bumping the pin to 6.6.5: cross-reference the two deferral notes
+that turn the CI *Lint* step (`.github/workflows/ci.yml:117`) and the lint
+stage of `scripts/audit.sh` red. 6.6.5's cyrlint folds case, so a capital
+"For now" now counts.
+
+cyrius 6.6.5 is not tagged yet. Nothing below can land against the pin until
+it is, except items marked **(can land now)**. The pin is 6.6.2 today, and
+this section lists only what 6.6.5 itself changes.
+
+- [ ] ⛔ Put a tracking pointer (CHANGELOG / issue / roadmap / `docs/` path) on
+      a line the phrase itself touches, or mark it `#skip-lint`. **(can land
+      now)** — a same-line pointer or `#skip-lint` does not depend on the
+      toolchain.
+  - `src/bootloader.cyr:262` — "For now, return 0 entries on failure".
+  - `src/update.cyr:458` — "For now, manifest validation checks structural
+    integrity only". The `roadmap.md V1.5.x` pointer is on `:457`, which
+    does not track `:458`.
+
+  See the cyrius CHANGELOG [6.6.5] entry "cyrlint read every rule ONE
+  PHYSICAL LINE at a time".
+- [ ] At the bump, re-run `cyrius deps` — the aarch64 syscall peer moved
+      SYS_UNLINKAT 35 → 263, so an un-re-vendored peer's sys_unlink would run
+      nanosleep.
+
 ## Resolved — P1 (AGNOS ABI) ✅ (1.5.0, 2026-07-11)
 
 - **[P1] Raw Linux-shaped `sys_open` ungated on agnos** — `src/drm.cyr`
@@ -607,3 +633,36 @@ Volatile per-consumer status lives in [`state.md`](state.md). The mapping itself
 | yukti | udev |
 | soorat | drm |
 | hoosh | certpin |
+
+## Moving the cyrius pin to 6.6.6
+
+Current pin: `cyrius = "6.6.2"` (`cyrius.cyml`). Nothing needs to change first.
+
+agnodrm truncates in three places, all with the flag word written as a raw hex literal:
+`src/netns.cyr:603`, `src/update.cyr:72` and `src/update.cyr:136`, each
+`sys_open(path, 0x241, 0x1A4)` — `O_WRONLY|O_CREAT|O_TRUNC`, mode 0644. Before 6.6.6 a PE
+build's `O_TRUNC` did not truncate, leaving the old tail of a rewritten file in place; the
+`update.cyr` pair writes staged update files and `netns.cyr` writes a network-namespace
+config, so a short rewrite would have produced a trailing-garbage config. **agnodrm is not
+exposed**: no PE target (`CYRIUS_TARGET_AGNOS` is the only `CYRIUS_TARGET_*` in `src/`), CI is
+`ubuntu-latest` only, and `release.yml` ships x86_64 + aarch64 with no `windows-*` job. The
+repo is Linux/AGNOS-eccentric by design — bootloader, update, netns, fuse, journald — so this
+stays a note rather than a fix.
+
+Everything else checked and empty:
+
+- No `O_APPEND` anywhere outside the vendored `lib/`.
+- None of item 3's new compile errors have sites: no `async fn`, no `operator` fn, no
+  `ret2`/`rethi`, no SIMD intrinsics, and no struct- or vector-typed parameter or `var`
+  declaration in `src/`. The 15 structs (`fuse_mount`, `drm_verinfo`, `netns_config`,
+  `netns_handle`, `netns_fw_rule`, `netns_fw_policy`, `journald_entry`, `journald_filter`,
+  `udev_devinfo`, `update_state`, `update_config`, `update_manifest`, `update_file`,
+  `bootloader_entry`, `bootloader_config`) are accessor-style over heap offsets, never passed
+  or assigned by value — so item 5's by-value-struct-param deep copy is a no-op here too.
+- No top-level bare `{` blocks (item 4), no duplicated global declarations (item 6), no
+  `regression_*` call sites (item 8), no own `vec_*` function colliding with the 14 names
+  `lib/vec.cyr` exports (item 9), no `file_exists` / `file_read_all` call sites at all.
+- Arity and `: cstring` argument scans over the repo's own sources: clean, no mismatches.
+
+After bumping, verify the full `.tcyr` suite per-file and one `agnodrm update` staging cycle —
+write a manifest, rewrite it shorter, and confirm the file ends where it should.

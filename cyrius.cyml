@@ -29,7 +29,6 @@ modules = [
     "src/util.cyr",
     "src/udev.cyr",
     "src/drm.cyr",
-    # Deferred Linux-eccentric group (post-v1; orphaned, no agnos story).
     "src/journald.cyr",
     "src/netns.cyr",
     "src/bootloader.cyr",
