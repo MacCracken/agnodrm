@@ -1,6 +1,6 @@
 # cyrius `defer` block is skipped when a fn returns a value-form `Result`
 
-**Status:** OPEN — upstream compiler defect, **filed with cyrius** as `docs/development/issues/2026-09-22-agnodrm-defer-skipped-on-value-form-result-return.md` (repro: `docs/development/issues/repros/2026-09-22-defer-skipped-on-result-return.cyr`) in the cyrius repo. Worked around in agnodrm 1.6.2 (no `defer` left in `src/`).
+**Status:** RESOLVED (archived 2026-11-05 at agnodrm 1.6.3) — fixed upstream at cyrius **6.6.7**. The reproducer below prints `3 3 3 3 3 3 3 3` on 6.6.7, 6.6.8, 6.6.9 and 6.6.20, x86_64 and aarch64, and still prints `3 4 5 6 7 7 7 7` on 6.6.6. agnodrm keeps its explicit releases: no `defer` in `src/`, because the consumer floor is still 6.6.6, where a `defer` would silently leak again. Re-adopting one needs the floor at ≥ 6.6.7 and `test_fd_hygiene` still passing. The filing was `docs/development/issues/2026-09-22-agnodrm-defer-skipped-on-value-form-result-return.md` in the cyrius repo, now archived there.
 **Filed:** 2026-09-22
 **Reporter:** agnodrm 1.6.2 (found by the raw-syscall → stdlib-helper sweep: before/after syscall traces showed no `close()` for fds the code `defer`-closes).
 **cyrius versions observed:** 6.6.0, 6.6.2, 6.6.4 and 6.6.6 — every 6.6.x installed. The value-form `Result` arrived at 6.6.0.

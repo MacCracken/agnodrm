@@ -7,6 +7,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] — 2026-11-05
+
+**cyrius pin 6.6.6 → 6.6.20**, with `./lib/`, `dist/` and a new `cyrius.lock` refreshed to it. No
+public API change and no behaviour change in agnodrm's own code: the one `src/` edit is a comment.
+Two cyrius trackers close on the new pin.
+
+⚠ **Consumer floor rises 6.6.5 → 6.6.6**, for anyone taking a bundle through its `.deps` sidecar.
+cyrius 6.6.18 made a sidecar list only what its compile-verify proves, so `fmt`, `vec` and `args`
+left them, and older toolchains still need those leaves: on 6.6.5 `dist/agnodrm-core.cyr` fails to
+build (`fmt_int`, `vec_new_a` undefined). A probe holding only the sidecar leaves and calling every
+public fn builds on x86_64, aarch64 and agnos on 6.6.6, 6.6.8, 6.6.9, 6.6.20, 6.7.5, 6.7.9 and
+6.7.18. A project declaring the full `[deps] stdlib` still passes 202/202 on 6.6.5. stiva, the one
+remaining consumer (tag 1.6.0, pin 6.6.10), is above the floor and declares all eight dropped leaves
+itself.
+
+### Changed — cyrius pin 6.6.6 → **6.6.20**
+
+- **`./lib/` rebuilt clean** (`rm -rf lib && cyrius deps`): **40** files, byte-identical to the 6.6.20
+  snapshot. `chrono.cyr` and `poison.cyr` are new, both pulled in by the stdlib. `[deps] stdlib` is
+  unchanged at 19 leaves.
+- **`cyrius.lock` is new and is meant to be committed.** cyrius ≥ 6.6.9 writes one for a stdlib-only
+  project: 40 `lib/` hashes plus a pin trailer. Committing it turns CI's and release's
+  `cyrius deps --verify` step from a skip-with-warning into a real gate, and gives the release a
+  `cyrius.lock` asset. `cyrius deps --verify`: 40 verified, 0 failed.
+- **`dist/` regenerated for the 6.6.18 sidecar rule.** `distlib --check` read every 1.6.2 bundle as
+  stale.
+  - `dist/agnodrm.deps` 19 → **11** leaves. Out: `fmt`, `ct`, `slice`, `atomic`, `fnptr`, `assert`,
+    `bench`, `args`.
+  - `dist/agnodrm-core.deps` 9 → **7** leaves. Out: `fmt`, `vec`, `args`. In: `tagged`.
+  - Each bundle gains a compile-verified `# Requires` include block, so `include "dist/<pkg>.cyr"`
+    alone compiles.
+  - `args` was added at 1.5.2 for `_agnos_getenv`. Dropping it is safe at this pin because
+    `lib/io.cyr` now includes the agnos peer itself; on toolchains below the new floor it is not,
+    which is part of why the floor rose.
+  - `distlib` now prints `warn:` for names undefined on `x86_64-windows`: `O_CLOEXEC`,
+    `sys_getdents64`, `sys_stat`. agnodrm does not target Windows; the exit status is unchanged.
+- **Rule text updated.** The `defer` rule stays but its reason changed: `defer` is fixed at 6.6.7 and
+  the floor is 6.6.6, so a `defer` in a Result-returning fn would still leak on a floor toolchain.
+  The aarch64 caveat is gone from CLAUDE.md's CI section. `src/error.cyr` carries the comment change.
+- Capability map re-stamped. No other generated doc changed.
+
+### Fixed upstream, verified on the new pin
+
+Each reproducer was re-run on 6.6.6, 6.6.7, 6.6.8, 6.6.9 and 6.6.20, x86_64 and aarch64 (under
+`qemu-aarch64`).
+
+- **`defer` skipped on a value-form Result return: fixed at 6.6.7.** The reproducer prints
+  `3 3 3 3 3 3 3 3` from 6.6.7 on; 6.6.6 still prints `3 4 5 6 7 7 7 7`. Tracker moved to
+  `docs/development/issues/archive/`. agnodrm keeps its explicit releases until the floor reaches
+  6.6.7.
+- **aarch64 undefined tail calls and `#deprecated` warnings: fixed at 6.6.9.** The build is refused
+  with rc 1 and both call sites warn; through 6.6.8 it exits 0 and warns on neither. Tracker moved
+  to `docs/development/issues/archive/`.
+- **Still open:** `#derive(Serialize)` on a cstring field. On 6.6.20 it still prints the heap address
+  (`{"name":6295249,"n":7}`), so the hand-rolled serializers stay.
+
+### Security
+
+- ⚠ **Open, not fixed in this release. MEDIUM, audit F-1.** `update_atomic_write`,
+  `update_atomic_copy` and `netns_apply_nftables_ruleset` open a predictable temp path with
+  `O_CREAT|O_TRUNC` and no `O_EXCL` or `O_NOFOLLOW`. A symlink planted at that path redirects the
+  write, and the rename then installs the symlink over the destination; both `update_*` calls return
+  `Ok`. It needs write access to the destination's directory. This is the class of cyrius's
+  CYRIUS-2026-0034, but that fix is in `file_write_atomic`, which agnodrm does not call, so the pin
+  bump does not cover it. stiva calls none of the three. See `docs/audit/2026-11-05-audit.md`.
+- **Open, LOW, audit F-2, inherited.** With fds 0 and 1 closed at process start,
+  `agnodrm_run_capture` returns `Ok` with 0 bytes: `lib/process.cyr`'s child redirect has no same-fd
+  guard at this pin. Fixed upstream at 6.7.15, so it clears with a later pin and needs no change here.
+
+### Performance
+
+No unexplained regression. Against the 1.6.2 row the machine had drifted, so the comparison below is
+same-day: **40 alternating runs per toolchain**, median [min..max] ns, over the same 1.6.3 sources.
+The `bench-history.csv` row is one run of those conditions, kept as measured.
+
+| Bench | 6.6.6 | 6.6.20 | Reading |
+|---|---|---|---|
+| `validate_ver_good` | 58 [58..61] | 52 [51..55] | −10.3%, reproducible |
+| `compare_versions` | 108 [106..112] | 99 [98..103] | −8.3%, reproducible |
+| `is_dangerous_token_hit` | 112 [111..115] | 104 [103..116] | −7.1% |
+| `validate_cmdline_safe` | 847 [494..2813] | 897 [518..1931] | Noise: the range spans 5.7× on one toolchain |
+| `slot_other` | 2 [2..3] | 3 [3..3] | 2.4 → 2.8 ns; a sub-ns shift the ns column rounds up |
+| `ok_create` | 2 [2..2] | 1 [1..2] | 1.6 → 1.5 ns; rounding again |
+| `map_get_miss` | 41 [40..42] | 41 [40..75] | No change; see below |
+
+The other 11 rows moved by at most 1 ns. The three wins are in fns whose source did not change, and
+1.6.1 saw the two version rows move with code placement alone, so they are not claimed as a codegen
+gain.
+
+**`map_get_miss` reads 75 ns in the tracked row (+74% against 1.6.2), and that is not a regression.**
+The hash seed is per process and the bench map holds one key in 16 slots, so about 1 process in 16
+has its miss key probe the occupied slot and pay a key compare. Measured over 600 processes per
+toolchain:
+
+| Toolchain | No collision | Collision | Collision rate |
+|---|---|---|---|
+| 6.6.6 | 44.0 ns (41.4..60.7) | 79.9 ns (78.0..82.3) | 5.5% |
+| 6.6.20 | 45.1 ns (42.8..57.2) | 81.9 ns (77.7..85.3) | 7.2% |
+
+The groups do not overlap, and the rate matches 1/16 on both toolchains. The row was left as
+measured rather than re-run until it looked better. Making the bench seed-independent is on the
+roadmap.
+
+### Build Metrics
+
+| Target | 1.6.2 | 1.6.3 | Delta |
+|---|---|---|---|
+| x86_64 (DCE) | 22,656 B | **28,400 B** | +5,744 B |
+| agnos (DCE) | 22,312 B | **24,352 B** | +2,040 B |
+| aarch64 (DCE) | 399,408 B | **269,976 B** | −129,432 B |
+
+- **x86_64:** +1,120 B text, +1,648 B data and +2,976 B page-alignment padding. Text crossed
+  `0x4000`, which moved the data segment one 4 KiB page. Reachable fns rose 43 → 46.
+- **aarch64:** the step is 6.6.18's ESYSXLAT compile-time fold, 531,208 B at 6.6.17 → 269,104 B at
+  6.6.18. The backend still only NOPs dead code.
+- Dead-code floor on x86_64: 789 unreachable fns, 192,138 B eliminated (615 / 128,969 B at 1.6.2).
+- `dist/agnodrm.cyr` 4,851 → 4,865 lines; `dist/agnodrm-core.cyr` 1,213 → 1,223.
+
+### Verification
+
+- `scripts/audit.sh`: 12/12 clean, all three targets warning-free, 202 assertions passing.
+- `qemu-aarch64`: 202/202, and all 4 fuzz harnesses exit 0.
+- 202/202 on cyrius 6.6.5, 6.6.6 and 6.6.20.
+- CI's steps replayed in an isolated `$HOME` built only from the 6.6.20 release tarball: every
+  `dist/` file and `cyrius.lock` came out byte-identical to the working tree. The tarball's `bin/`
+  and `lib/` match the local install byte for byte.
+- `#deprecated` on `bootloader_is_dangerous_token` is the only warning in a full-bundle consumer
+  build, as intended.
+- Downstream: stiva was checked by manifest only. Its build was not run against 1.6.3.
+
 ## [1.6.2] — 2026-09-22
 
 The roadmap **V1.6.x** items, a review of every open issue, and every raw syscall in agnodrm's own

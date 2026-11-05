@@ -92,6 +92,7 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 ## update
 
 - `update_atomic_write` / `update_atomic_copy`: write `<path>.tmp` (`O_WRONLY|O_CREAT|O_TRUNC`, 0644), fsync, then rename over `<path>`. There is no directory fsync, so the rename itself is not guaranteed durable across a crash. The temp name is `<path>.tmp`, not per-PID: two concurrent writers to the same path race.
+- ⚠ **Open (audit F-1, MEDIUM).** The temp is opened without `O_EXCL` or `O_NOFOLLOW`, so a symlink planted at `<path>.tmp` redirects the write and the rename installs it over `<path>`. The same applies to `netns_apply_nftables_ruleset`'s `/run/agnos/nft-tmp-<pid>.conf`. Do not point these fns at a directory an untrusted user can write. See [`audit/2026-11-05-audit.md`](audit/2026-11-05-audit.md).
 - Since 1.6.2, `update_atomic_copy` fails when the fsync fails, as `update_atomic_write` always did. Before, it renamed an unflushed file over the target.
 - `update_state_to_json` emitted the `pending` cstring as an integer through 1.6.1, so a pending update exposed a heap address in the JSON. Since 1.6.2 it is a quoted string, or `null`.
 
@@ -144,11 +145,12 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 ## All modules
 
 - **No `defer` for cleanup in a Result-returning fn.** cyrius 6.6.0–6.6.6 skips a `defer` block
-  when the fn returns a value-form Result. Through 1.6.1, agnodrm leaked one fd or socket per call
+  when the fn returns a value-form Result. It is fixed at 6.6.7, but the consumer floor is still
+  6.6.6, so the rule stands until the floor rises. Through 1.6.1, agnodrm leaked one fd or socket per call
   in eight fns (`journald_send` leaked a socket per log line, a slow path to `EMFILE`), and left the
   nft temp file behind in a ninth. Since 1.6.2 every release is explicit, and
   `tests/tcyr/test_integration.tcyr` `test_fd_hygiene` counts `/proc/self/fd` around repeated calls.
-  Tracker: `docs/development/issues/2026-09-22-cyrius-defer-skipped-on-result-return.md`.
+  Tracker (closed): `docs/development/issues/archive/2026-09-22-cyrius-defer-skipped-on-result-return.md`.
 - **No raw syscalls or flag literals** (1.6.2). Every syscall goes through a stdlib per-target
   helper and every open flag / stat offset is a per-target name. Raw values caused 1.6.1's aarch64
   `O_DIRECT`-for-`O_DIRECTORY` bug and 1.6.2's aarch64 `st_uid`-for-`st_mode` bug in

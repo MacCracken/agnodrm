@@ -25,6 +25,26 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
 
+## Moving the cyrius pin to 6.6.20 ✅ (done at 1.6.3, 2026-11-05)
+
+- [x] `./lib/` rebuilt clean (40 files, byte-identical to the 6.6.20 snapshot) and `cyrius.lock` added.
+- [x] `dist/` regenerated for the 6.6.18 sidecar rule, and the floor re-measured with a sidecar-only
+      probe across 6.6.5 – 6.7.18. It rose to 6.6.6; see CHANGELOG `[1.6.3]`.
+- [x] Trackers re-run on the new pin: `defer` (fixed 6.6.7) and aarch64 (fixed 6.6.9) closed;
+      `#derive(Serialize)` on cstrings stays open.
+
+Left open by the bump:
+
+- [ ] **Audit F-1 (MEDIUM): temp files follow a planted symlink.** `update_atomic_write`,
+      `update_atomic_copy` and `netns_apply_nftables_ruleset` need `O_EXCL | O_NOFOLLOW`, a stale-temp
+      answer, and a regression test. See [`docs/audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md).
+- [ ] **Remove the four committed qemu core dumps.** Every `cyrius deps` checkout carries ~38 MB. See
+      [`issues/2026-10-07-committed-qemu-core-dumps.md`](issues/2026-10-07-committed-qemu-core-dumps.md).
+- [ ] **Make `map_get_miss` seed-independent.** With one key in 16 slots, about 1 process in 16 reads
+      twice the time, and a single-run `bench-history.csv` row can land on it (1.6.3's did).
+- [ ] **`defer` can return once the consumer floor reaches 6.6.7**, with `test_fd_hygiene` still
+      passing. Nothing needs it today.
+
 ## Moving the cyrius pin to 6.6.5 ✅ (done at 1.6.1, 2026-09-22 — pin went straight to 6.6.6)
 
 ⛔ Before bumping the pin to 6.6.5: cross-reference the two deferral notes

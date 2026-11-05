@@ -9,13 +9,5 @@ vec
 str
 io
 fs
-fmt
-hashmap
 process
-ct
-slice
-atomic
-fnptr
-assert
-bench
-args
+hashmap

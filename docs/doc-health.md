@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — agnodrm
 
-> **Last refresh**: 2026-06-19 (agnosys → agnodrm rename audit, paired with the 1.4.4 decomposition cut) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-11-05 (issue ledger, at the 1.6.3 pin bump; the rest last audited 2026-06-19 for the 1.4.4 decomposition) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`agnodrm`, formerly `agnosys`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo cyrius pin/version drift lives in [`development/state.md`](development/state.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as docs change. Agnodrm is the AGNOS device / DRM model (renamed from agnosys at 1.4.4); device-access docs propagate to ai-hwaccel / mabda, so doc currency carries weight. The doc surface is moderate (~34 files) and most are load-bearing.
@@ -139,15 +139,14 @@ Next review slot: at v1.3.0 cut (paired with the next audit pass), or earlier if
 
 Active issues sit at the top level; resolved issues move to `archive/` when the upstream fix lands and a workaround is no longer needed. Per the agnosys agent's "don't pile on cyrius bug reports" rule, **active issues here are passive trackers** for upstream-blocked slots, not fresh tickets pushed to the cyrius bug tracker.
 
-### Active (3)
+### Active (2)
 
 | File | Filed | Status | Notes |
 |---|---|---|---|
-| `2026-09-22-cyrius-defer-skipped-on-result-return.md` | 2026-09-22 | 🔴 Open — upstream defect, worked around | cyrius 6.6.0–6.6.6 skips `defer` on a value-form Result return; agnodrm leaked an fd per call in 9 fns through 1.6.1. No `defer` in `src/` since 1.6.2; `test_fd_hygiene` guards it. Filed with cyrius (`2026-09-22-agnodrm-defer-skipped-on-value-form-result-return.md`). |
-| `2026-09-22-cyrius-aarch64-undefined-fn-silent.md` | 2026-09-22 | 🟠 Open — upstream gap, not exposed | `cycc_aarch64` 6.6.x misses undefined *tail* calls (SIGILL binary, no diagnostic) and never prints `#deprecated` warnings. Filed with cyrius (2 issues). agnodrm has no aarch64-only code, so the x86_64 / agnos lanes cover it. |
-| `2026-05-09-cyrius-derive-serialize-cstring.md` | 2026-05-09 | 🟠 Open — passive | `#derive(Serialize)` still has no cstring field type at 6.6.6 (re-verified at 1.6.2), and any Serialize derive now also needs bayan. The 2 remaining hand-rolled `_to_json` fns stay. |
+| `2026-10-07-committed-qemu-core-dumps.md` | 2026-10-07 | 🟠 Open | Four tracked `qemu_repro_*.core` files (~38 MB) ship in every tag since 1.1.12. `.gitignore` already covers them; they need a `git rm` and a release. |
+| `2026-05-09-cyrius-derive-serialize-cstring.md` | 2026-05-09 | 🟠 Open — passive | `#derive(Serialize)` still has no cstring field type at 6.6.20 (re-verified at 1.6.3), and any Serialize derive now also needs bayan. The 2 remaining hand-rolled `_to_json` fns stay. |
 
-### Archived (14)
+### Archived (16)
 
 | File | Resolved | Notes |
 |---|---|---|
@@ -165,6 +164,8 @@ Active issues sit at the top level; resolved issues move to `archive/` when the 
 | `archive/2026-06-12-cyrius-621-pin-json-carved-to-bayan.md` | 1.4.2 (archived 1.6.2) | Stale `json` dep dropped at 1.4.2; never moved to archive until now. |
 | `archive/2026-06-22-cyrius-agnosys-retired-consumer-rewire.md` | 1.6.2 (verified) | mihi / chakshu / iam all rewired off agnosys. |
 | `archive/2026-06-18-agnos-cross-target-abi-slant.md` | 1.6.2 | 31 sites: 18 moved out (1.4.4), 12 gated (1.4.6 / 1.5.0), 1 no-op; agnos API-probe build gate added. |
+| `archive/2026-09-22-cyrius-defer-skipped-on-result-return.md` | 1.6.3 (cyrius 6.6.7) | Fixed upstream; agnodrm keeps explicit releases until the consumer floor reaches 6.6.7. |
+| `archive/2026-09-22-cyrius-aarch64-undefined-fn-silent.md` | 1.6.3 (cyrius 6.6.9) | Undefined tail calls refused and `#deprecated` printed on aarch64. |
 
 ---|---|---|
 | `archive/2026-05-01-sys-stat-x86-portability.md` | 1.1.4 (cyrius 5.9.20) | sys_stat now in both arch peer files. |

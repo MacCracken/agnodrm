@@ -1,10 +1,11 @@
 # cycc_aarch64 misses undefined *tail* calls and never prints `#deprecated` warnings
 
-**Status:** OPEN — upstream toolchain gaps, **filed with cyrius** as
-`docs/development/issues/2026-09-22-agnodrm-aarch64-undefined-tail-call-not-refused.md` (repro in
-`repros/2026-09-22-aarch64-undefined-tail-call.cyr`) and
-`docs/development/issues/2026-09-22-agnodrm-aarch64-deprecated-warning-never-fires.md` in the cyrius
-repo. agnodrm is not exposed today (see below).
+**Status:** RESOLVED (archived 2026-11-05 at agnodrm 1.6.3) — both gaps fixed upstream at cyrius
+**6.6.9**. Re-run on 6.6.6, 6.6.7, 6.6.8, 6.6.9 and 6.6.20: through 6.6.8 the undefined tail call
+builds with rc 0 and no `#deprecated` line prints; from 6.6.9 the build is refused with rc 1, and
+both `#deprecated` call sites warn. The filings
+(`2026-09-22-agnodrm-aarch64-undefined-tail-call-not-refused.md`,
+`2026-09-22-agnodrm-aarch64-deprecated-warning-never-fires.md`) are archived in the cyrius repo.
 **Filed:** 2026-09-22
 **Reporter:** agnodrm 1.6.2 (noticed by the fuzz-harness include fix and the `#deprecated` adoption,
 then isolated by probe).

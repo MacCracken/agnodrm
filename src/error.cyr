@@ -267,11 +267,12 @@ fn result_print_err(res_tag, res): i64 {
 # ⛔ NOT `return res_t;` and NOT `return res_v;`. Returning the payload alone
 #    delivers Err(77) to the caller as tag=77 / is_err_result==0 — an error that
 #    reads as SUCCESS. That shape cost yukti 19 silent defects at the flip.
-# ⛔ `defer` does NOT run when a fn returns a value-form Result (cyrius 6.6.0 –
-#    6.6.6; a plain single-value return still runs it). Every fd / temp file a
-#    Result-returning fn acquires is therefore released explicitly on each exit
-#    path — agnodrm had leaked one fd per call in nine fns through 1.6.1. See
-#    docs/development/issues/2026-09-22-cyrius-defer-skipped-on-result-return.md.
+# ⛔ `defer` does NOT run when a fn returns a value-form Result on cyrius 6.6.0 –
+#    6.6.6 (fixed at 6.6.7; a plain single-value return always ran it). The
+#    consumer floor is still 6.6.6, so every fd / temp file a Result-returning fn
+#    acquires stays released explicitly on each exit path — agnodrm had leaked
+#    one fd per call in nine fns through 1.6.1. See
+#    docs/development/issues/archive/2026-09-22-cyrius-defer-skipped-on-result-return.md.
 
 # Check if a syscall return value indicates error (negative = errno)
 fn is_syscall_err(ret): i64 {
