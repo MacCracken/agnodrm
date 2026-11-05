@@ -9,6 +9,8 @@
 # the agnosys → agnodrm decomposition; udev/drm + the deferred group (roadmap.md Scope) still
 # use them.)
 
+include "src/error.cyr"
+
 # Emit a JSON value for a possibly-null C string into a str_builder:
 # `null` when the pointer is 0, otherwise a JSON-quoted/escaped string.
 # Replaces the per-module `_<mod>_emit_cstr_or_null` shims (mac, dmverity,
@@ -126,4 +128,78 @@ fn agnodrm_fsync(fd): i64 {
 # 4-arg sys_rename, with file_rename computing both lengths.
 fn agnodrm_rename(oldpath, newpath): i64 {
     return file_rename(oldpath, newpath);
+}
+
+enum AgnodrmTmp {
+    AGNODRM_TMP_MAX_TRIES = 64;
+}
+
+# Next candidate suffix; 0 until the first call seeds it. It need not be atomic
+# or secret: the exclusive create below is what arbitrates, so a lost update or
+# a guessed name only costs a retry.
+var _agnodrm_tmp_ctr = 0;
+
+# Start the counter somewhere random, so a process that always has the same pid
+# (PID 1, a container) does not walk the same names after each restart: at a
+# fixed start, AGNODRM_TMP_MAX_TRIES crashed runs would leave every candidate
+# taken and refuse all later writes. Linux flags, unnamed in the stdlib: this can
+# run at early boot, so GRND_INSECURE (4) never blocks on the entropy pool, with
+# GRND_NONBLOCK (1) for kernels before 5.6. The value only has to differ between
+# runs. On failure the counter stays 0, which only gives up that protection.
+fn _agnodrm_tmp_seed(): i64 {
+    var seed = 0;
+    #ifdef CYRIUS_TARGET_LINUX
+    if (sys_getrandom(&seed, 4, 4) == 0 - EINVAL) { sys_getrandom(&seed, 4, 1); }
+    #endif
+    #ifndef CYRIUS_TARGET_LINUX
+    sys_getrandom(&seed, 4, 0);
+    #endif
+    _agnodrm_tmp_ctr = seed;
+    return 0;
+}
+
+# Create a new file named `<base>.tmp.<pid>.<ctr>`, mode 0644 before umask.
+# Returns the write fd and stores the path through `path_out`, or returns a
+# negative errno and leaves `path_out` alone.
+#
+# The name must be treated as predictable, so it is never opened with O_TRUNC:
+# file_create_exclusive refuses a name that exists as anything, including a
+# dangling symlink, so a link planted at the name is never written through
+# (audit F-1). A taken name moves on to the next counter, and after
+# AGNODRM_TMP_MAX_TRIES the call fails with -EEXIST rather than touch one.
+# On agnos before cyrius 6.6.9 that create is a non-atomic pre-check that follows
+# links; agnodrm's own callers return not_supported on agnos before reaching it.
+#
+# A crash between this and the caller's rename or unlink leaves the temp behind.
+# It is not reused or cleaned up. The suffix takes up to about 23 bytes of the
+# file name, so a `base` file name over about 232 bytes fails with -ENAMETOOLONG.
+fn agnodrm_tmp_create(base, path_out): i64 {
+    if (base == 0 || path_out == 0) { return 0 - EINVAL; }
+    if (_agnodrm_tmp_ctr == 0) { _agnodrm_tmp_seed(); }
+    var baselen = strlen(base);
+    # 24 bytes at each fmt_int_buf position, not a digit count: before cyrius
+    # 6.6.18 it wrote 24 bytes whatever the number's length.
+    var path = alloc(baselen + 64);
+    if (path == 0) { return 0 - ENOMEM; }
+    memcpy(path, base, baselen);
+    memcpy(path + baselen, ".tmp.", 5);
+    var pos = baselen + 5;
+    pos = pos + fmt_int_buf(sys_getpid(), path + pos);
+    store8(path + pos, 46);  # '.'
+    pos = pos + 1;
+
+    var tries = 0;
+    while (tries < AGNODRM_TMP_MAX_TRIES) {
+        var end = pos + fmt_int_buf(_agnodrm_tmp_ctr, path + pos);
+        store8(path + end, 0);
+        _agnodrm_tmp_ctr = _agnodrm_tmp_ctr + 1;
+        var fd = file_create_exclusive(path, 0x1A4);  # mode 0644
+        if (fd >= 0) {
+            store64(path_out, path);
+            return fd;
+        }
+        if (fd != 0 - EEXIST) { return fd; }
+        tries = tries + 1;
+    }
+    return 0 - EEXIST;
 }

@@ -64,15 +64,9 @@ fn update_atomic_write(path, data, data_len): i64 {
         return drm_err_invalid_argument("atomic_write data_len is negative");
     }
 
-    # Create temp path: path + ".tmp"
-    var pathlen = strlen(path);
-    var tmppath = alloc(pathlen + 5);
-    memcpy(tmppath, path, pathlen);
-    memcpy(tmppath + pathlen, ".tmp", 4);
-    store8(tmppath + pathlen + 4, 0);
-
-    # Write to temp file (mode 0x1A4 = 0644; the stdlib names no mode bits)
-    var fd = sys_open(tmppath, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);
+    # Write to an exclusive temp beside the target; see agnodrm_tmp_create.
+    var tmppath = 0;
+    var fd = agnodrm_tmp_create(path, &tmppath);
     if (fd < 0) {
         return drm_err_io(0 - fd, "atomic_write: failed to create temp file");
     }
@@ -133,14 +127,9 @@ fn update_atomic_copy(src, dst): i64 {
     # Both fds are closed explicitly on every return, not with `defer`: cyrius
     # skips a defer block when the fn returns a value-form Result (src/error.cyr).
 
-    # Create temp dest
-    var dstlen = strlen(dst);
-    var tmppath = alloc(dstlen + 5);
-    memcpy(tmppath, dst, dstlen);
-    memcpy(tmppath + dstlen, ".tmp", 4);
-    store8(tmppath + dstlen + 4, 0);
-
-    var dst_fd = sys_open(tmppath, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);  # mode 0644
+    # Exclusive temp beside the destination; see agnodrm_tmp_create.
+    var tmppath = 0;
+    var dst_fd = agnodrm_tmp_create(dst, &tmppath);
     if (dst_fd < 0) {
         sys_close(src_fd);
         return drm_err_io(0 - dst_fd, "atomic_copy: failed to create temp dest");

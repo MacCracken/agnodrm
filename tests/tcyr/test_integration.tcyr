@@ -664,6 +664,138 @@ fn test_fd_hygiene() {
 # Main
 # ================================================================
 
+# ================================================================
+# temp files refuse a planted name (audit F-1)
+# ================================================================
+
+# The name agnodrm_tmp_create will try `ahead` attempts from now.
+fn _tmpx_name(base, ahead) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, base);
+    str_builder_add_cstr(sb, ".tmp.");
+    str_builder_add_int(sb, sys_getpid());
+    str_builder_add_cstr(sb, ".");
+    str_builder_add_int(sb, _agnodrm_tmp_ctr + ahead);
+    return str_data(str_builder_build(sb));
+}
+
+fn _tmpx_holds(path, text) {
+    var buf = alloc(64);
+    var n = file_read_all(path, buf, 63);
+    if (n != strlen(text)) { return 0; }
+    store8(buf + n, 0);
+    return streq(buf, text);
+}
+
+fn test_tmp_exclusive() {
+    println("-- temp files refuse a planted name (audit F-1) --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-tmpx-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "tmpx_fx_mkdir");
+    var target = _blfx_path(root, "state.json");
+    var copied = _blfx_path(root, "copied.bin");
+    var victim = _blfx_path(root, "victim");
+    var source = _blfx_path(root, "source.bin");
+    var dangling = _blfx_path(root, "no-such-target");
+    var missing = _blfx_path(root, "no/such/file");
+    assert_eq(file_write_all(victim, "PRECIOUS", 8), 8, "tmpx_fx_victim");
+    assert_eq(file_write_all(source, "COPYDATA", 8), 8, "tmpx_fx_source");
+
+    # Two creates get two files, and each path comes back through path_out.
+    var a_path = 0;
+    var b_path = 0;
+    var a_fd = agnodrm_tmp_create(target, &a_path);
+    var b_fd = agnodrm_tmp_create(target, &b_path);
+    assert(a_fd >= 0, "tmpx_create_a");
+    assert(b_fd >= 0, "tmpx_create_b");
+    assert(streq(a_path, b_path) == 0, "tmpx_names_differ");
+    assert_eq(file_exists(a_path), 1, "tmpx_a_exists");
+    assert_eq(file_exists(b_path), 1, "tmpx_b_exists");
+    sys_close(a_fd);
+    sys_close(b_fd);
+    xunlink(a_path);
+    xunlink(b_path);
+
+    # update_atomic_write: a link planted at the very next name is left alone.
+    var w_link = _tmpx_name(target, 0);
+    assert_eq(xsymlink(victim, w_link), 0, "tmpx_w_plant");
+    var w_t, w_v = update_atomic_write(target, "NEW-STATE", 9);
+    assert(is_ok(w_t) == 1, "tmpx_w_ok");
+    assert(_tmpx_holds(victim, "PRECIOUS") == 1, "tmpx_w_victim_intact");
+    assert(_tmpx_holds(target, "NEW-STATE") == 1, "tmpx_w_target_written");
+    assert_eq(is_symlink(str_from(target)), 0, "tmpx_w_target_regular");
+    assert_eq(is_symlink(str_from(w_link)), 1, "tmpx_w_link_untouched");
+    xunlink(w_link);
+
+    # update_atomic_copy: the same, with a dangling link, which O_TRUNC would create.
+    var c_link = _tmpx_name(copied, 0);
+    assert_eq(xsymlink(dangling, c_link), 0, "tmpx_c_plant");
+    var c_t, c_v = update_atomic_copy(source, copied);
+    assert(is_ok(c_t) == 1, "tmpx_c_ok");
+    assert_eq(c_v, 8, "tmpx_c_bytes");
+    assert_eq(file_exists(dangling), 0, "tmpx_c_dangling_not_created");
+    assert(_tmpx_holds(copied, "COPYDATA") == 1, "tmpx_c_target_written");
+    assert_eq(is_symlink(str_from(copied)), 0, "tmpx_c_target_regular");
+    xunlink(c_link);
+
+    # Every candidate taken: refused, with nothing written anywhere.
+    var links = vec_new();
+    var i = 0;
+    while (i < AGNODRM_TMP_MAX_TRIES) {
+        var l = _tmpx_name(target, i);
+        assert_eq(xsymlink(victim, l), 0, "tmpx_x_plant");
+        vec_push(links, l);
+        i = i + 1;
+    }
+    var x_t, x_v = update_atomic_write(target, "OVERWRITTEN", 11);
+    assert(is_err_result(x_t) == 1, "tmpx_x_refused");
+    assert(_tmpx_holds(target, "NEW-STATE") == 1, "tmpx_x_target_intact");
+    assert(_tmpx_holds(victim, "PRECIOUS") == 1, "tmpx_x_victim_intact");
+    i = 0;
+    while (i < vec_len(links)) {
+        xunlink(vec_get(links, i));
+        i = i + 1;
+    }
+
+    # Null arguments are refused before anything is created.
+    var null_path = 0;
+    assert_eq(agnodrm_tmp_create(0, &null_path), 0 - EINVAL, "tmpx_null_base");
+    assert_eq(agnodrm_tmp_create(target, 0), 0 - EINVAL, "tmpx_null_out");
+
+    # A restarted process starts somewhere new, not at the same names (a fixed
+    # pid would otherwise walk them again after every crash). 1 in 2^32 flake.
+    var s_path = 0;
+    _agnodrm_tmp_ctr = 0;
+    var s_fd = agnodrm_tmp_create(target, &s_path);
+    assert(s_fd >= 0, "tmpx_seed_create_a");
+    var seed_a = _agnodrm_tmp_ctr;
+    sys_close(s_fd);
+    xunlink(s_path);
+    _agnodrm_tmp_ctr = 0;
+    s_fd = agnodrm_tmp_create(target, &s_path);
+    assert(s_fd >= 0, "tmpx_seed_create_b");
+    assert(seed_a != _agnodrm_tmp_ctr, "tmpx_seed_differs");
+    sys_close(s_fd);
+    xunlink(s_path);
+
+    # A failure other than a taken name is returned at once, not retried.
+    var before = _agnodrm_tmp_ctr;
+    var m_path = 0;
+    assert_eq(agnodrm_tmp_create(missing, &m_path), 0 - ENOENT, "tmpx_m_enoent");
+    assert_eq(_agnodrm_tmp_ctr, before + 1, "tmpx_m_no_retry");
+    assert_eq(m_path, 0, "tmpx_m_path_out_untouched");
+
+    xunlink(target);
+    xunlink(copied);
+    xunlink(victim);
+    xunlink(source);
+    # rmdir fails if any path above left a temp file behind.
+    assert_eq(xrmdir(root), 0, "tmpx_fx_cleanup");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     println("================================================================");
@@ -676,6 +808,7 @@ fn main() {
     test_bootloader_entries();
     test_bootctl_parse();
     test_fd_hygiene();
+    test_tmp_exclusive();
     test_fuse();
     test_udev();
     test_drm();

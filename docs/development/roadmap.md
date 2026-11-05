@@ -25,6 +25,26 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
 
+## Open findings from the 1.7.0 closeout (opened 2026-11-05)
+
+From the independent code review; details in [`docs/audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md).
+None is fixed. In priority order:
+
+- [ ] **F-3 (HIGH): `update_rollback` undoes its own switch.** It can make the next `update_apply` target the
+      running slot.
+- [ ] **F-4 (MEDIUM): `update_apply` guesses the live slot** when detection fails. It should fail closed.
+- [ ] **F-5 (MEDIUM): `update_save_state`'s Result is dropped** at three sites.
+- [ ] **F-6 (MEDIUM): the bootctl parser can hide an `options` continuation** from the cmdline validator.
+- [ ] **F-7 (MEDIUM): `/proc/mounts` is cut at 8 KiB.**
+- [ ] **F-8 – F-14 (LOW).** F-11 needs the floor at ≥ 6.6.7; F-14 changes a runtime identifier. F-2 clears with a
+      pin at ≥ 6.7.15.
+
+## Moving the cyrius pin to 6.7.9 ✅ (done at 1.7.0, 2026-11-05)
+
+- [x] `./lib/` rebuilt clean (40 files, byte-identical to the 6.7.9 snapshot) and `cyrius.lock` regenerated.
+- [x] `dist/` regenerated; sidecars unchanged. Floor re-measured across 6.6.5 – 6.7.18: it stays 6.6.6.
+- [x] The 6.7.x language rules needed no source change.
+
 ## Moving the cyrius pin to 6.6.20 ✅ (done at 1.6.3, 2026-11-05)
 
 - [x] `./lib/` rebuilt clean (40 files, byte-identical to the 6.6.20 snapshot) and `cyrius.lock` added.
@@ -35,9 +55,7 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 
 Left open by the bump:
 
-- [ ] **Audit F-1 (MEDIUM): temp files follow a planted symlink.** `update_atomic_write`,
-      `update_atomic_copy` and `netns_apply_nftables_ruleset` need `O_EXCL | O_NOFOLLOW`, a stale-temp
-      answer, and a regression test. See [`docs/audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md).
+- [x] **Audit F-1 (MEDIUM): temp files follow a planted symlink.** Fixed at 1.7.0 with `agnodrm_tmp_create`.
 - [ ] **Remove the four committed qemu core dumps.** Every `cyrius deps` checkout carries ~38 MB. See
       [`issues/2026-10-07-committed-qemu-core-dumps.md`](issues/2026-10-07-committed-qemu-core-dumps.md).
 - [ ] **Make `map_get_miss` seed-independent.** With one key in 16 slots, about 1 process in 16 reads

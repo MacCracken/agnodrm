@@ -95,7 +95,7 @@ cat <<EOF
 
 **Generated:** $(date -u +%Y-%m-%dT%H:%M:%SZ) (regenerate via \`scripts/gen-capability-map.sh\`)
 **Source commit:** $(git rev-parse --short HEAD 2>/dev/null || echo "(uncommitted)")
-**agnosys version:** $(cat VERSION)
+**agnodrm version:** $(cat VERSION)
 
 ## How to read this
 
@@ -110,7 +110,7 @@ This is a coarse static scan, not a call-graph. Per-fn capability resolution req
 
 ## Per-profile capability rollup
 
-Consumer-side: pulling \`dist/agnosys-<profile>.cyr\` admits the union of the included modules' capabilities below.
+Consumer-side: pulling \`dist/agnodrm-<profile>.cyr\` admits the union of the included modules' capabilities below.
 
 | Profile | Modules |
 |---|---|
@@ -177,7 +177,6 @@ cat <<'EOF'
 - **Subprocess binaries** are absolute-path argv-exec only (per ADR-001). No shell, no `$PATH` lookup. Sandbox authors can `execve`-allowlist these specific paths.
 - **Filesystem paths** include both prefixes (e.g. `/sys/firmware/efi`) and full paths (e.g. `/sys/firmware/efi/efivars/SecureBoot-...-93ca-...`); when authoring read-only Landlock rules, prefix-match works for the directory cases.
 - **Syscalls** listed are direct — `sys_*` wrappers transitively invoke their named syscalls (`sys_open` → `openat`, `sys_read` → `read`, etc.) per cyrius stdlib `lib/syscalls*.cyr`.
-- The single AGNOS-defined custom syscall is `SYS_AGNOS_AUDIT_LOG = 520` (audit module). Sandbox policies that don't need agnosys's own audit-log surface can deny 520.
 - This map captures **direct** capability only. Transitive capability through the cyrius stdlib (e.g. `lib/process.cyr` exec helpers) and through other modules is not enumerated here. For exhaustive coverage, take the union across all modules in the consumer's profile bundle.
 
 EOF

@@ -118,6 +118,8 @@ Date-stamped, frozen by design. Each P(-1) hardening pass per CLAUDE.md cadence 
 | `2026-04-26-audit.md` | 2026-04-26 | 📦 Frozen | Pre-1.0.0 P(-1) hardening — F-1..F-6 closed in 1.0.1. Historical record. |
 | `2026-05-09-audit.md` | 2026-05-09 | ✅ Fresh | 1.1.14 P(-1) step 5 — F-7 INFO + F-8/F-9 LOW closed in 1.1.14, F-10 verified clean. |
 | `2026-05-09-cve-landscape.md` | 2026-05-09 | ✅ Fresh | 1.1.14 P(-1) step 4 — CVE class survey across the 17 module-bound kernel interfaces. Pairs with 2026-05-09-audit.md. |
+| `2026-08-24-audit.md` | 2026-08-24 | ✅ Fresh | 1.5.3 P(-1) sweep: 1 HIGH, 2 MEDIUM, 4 LOW, all closed in 1.5.3. |
+| `2026-11-05-audit.md` | 2026-11-05 | 🟠 Open findings | 1.6.3 review and 1.7.0 closeout review. F-1 fixed in 1.7.0; 1 HIGH, 4 MEDIUM, 8 LOW open. |
 
 Next audit slot: at v1.3.0 cut (or sooner if a CVE pattern surfaces in agnosys's parser surfaces — audit netlink, IMA records, EFI signature lists, /proc/mounts, CalVer parser, /etc/passwd — or in cyrius itself).
 

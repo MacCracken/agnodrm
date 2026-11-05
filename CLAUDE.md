@@ -97,6 +97,7 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 - Do not use `sys_system()` with unsanitized input — command injection risk
 - **Do not issue raw syscalls** — call the stdlib's per-target helpers (`sys_*`, `file_*`, `x*` in `lib/syscalls*.cyr` / `lib/io.cyr` / `lib/fs.cyr`) and spell the per-target names (`SYS_*`, `O_*`, `STAT_*`, `SOCK_*`); never `syscall(N, …)` with a number, a raw open-flag literal, or a hard-coded struct offset. Numbers and flags differ per arch and per OS, and the toolchain only translates the rows it routes: raw literals are how 1.6.1's `O_DIRECT`-for-`O_DIRECTORY` and 1.6.2's `st_uid`-for-`st_mode` aarch64 bugs shipped. The one exception is a value the stdlib does not name (e.g. mode `0x1A4`), with a comment
 - Do not trust external data (file content, network input, user args) without validation
+- Do not create a temp file with a predictable name and `O_TRUNC` — a planted symlink redirects the write (audit F-1, fixed 1.7.0). Use `agnodrm_tmp_create`, which creates exclusively
 
 ## Process
 

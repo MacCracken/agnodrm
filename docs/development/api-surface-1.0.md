@@ -7,10 +7,10 @@
 
 ## Summary
 
-- Total public functions: **316**
+- Total public functions: **317**
 - Modules: **10**
 - 1.0 baseline (frozen): 556 fns
-- Post-1.0 additions (V1.1 + V1.2 cycles): -240 fns
+- Post-1.0 additions (V1.1 + V1.2 cycles): -239 fns
 - Outliers (fns lacking module prefix): 0
 
 
@@ -362,6 +362,7 @@
 - `agnodrm_rename(arg1, arg2)` → Rename `oldpath` to `newpath` (C strings). Linux: sys_rename (rename(2) on x86_64, renameat(AT_FD...
 - `agnodrm_run_capture(arg1, arg2, arg3, arg4)` → Run a subprocess (cstr argv vec) and capture stdout into a caller buffer. Returns Ok(bytes_read) ...
 - `agnodrm_run_checked(arg1, arg2)` → Run a subprocess (cstr argv vec) and check for a zero exit code. Returns Ok(0) or Err(errmsg) on ...
+- `agnodrm_tmp_create(arg1, arg2)` → Create a new file named `<base>.tmp.<pid>.<ctr>`, mode 0644 before umask. Returns the write fd an...
 
 
 ## Notes

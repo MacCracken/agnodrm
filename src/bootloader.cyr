@@ -507,8 +507,8 @@ fn _bootloader_parse_entry_text(e, text, textlen): i64 {
 # can reorder. is_default is left 0: the effective default is the
 # LoaderEntryDefault / LoaderEntryOneShot EFI variables before loader.conf's
 # `default`, which may itself be a glob, so no exact answer exists from the
-# entries directory alone. (The bootctl path does know it — bootctl marks the
-# default entry's title — and sets it there.)
+# entries directory alone. (The bootctl path leaves it 0 as well: see
+# bootloader_parse_bootctl_list.)
 fn _bootloader_scan_entries_dir(dir, result_arr, max_entries): i64 {
     # One directory open to learn whether `dir` is a readable directory, with
     # the real errno. file_open maps O_DIRECTORY onto agnos's AO_DIRECTORY.

@@ -314,3 +314,4 @@ util::agnodrm_read_fd_to_str/2
 util::agnodrm_rename/2
 util::agnodrm_run_capture/4
 util::agnodrm_run_checked/2
+util::agnodrm_tmp_create/2

@@ -8,7 +8,7 @@
 # where Err payload is a pointer to an error struct:
 #   { kind: i64, errno: i64, message: *str }
 #
-# Convention: all agnosys functions return Result values.
+# Convention: all agnodrm functions return Result values.
 # Ok(value) on success, Err(err_ptr) on failure.
 
 # ================================================================
@@ -254,7 +254,7 @@ fn result_print_err(res_tag, res): i64 {
 }
 
 # ================================================================
-# Result helpers for agnosys convention
+# Result helpers for agnodrm convention
 # ================================================================
 
 # Propagate error: if res is Err, return it immediately.

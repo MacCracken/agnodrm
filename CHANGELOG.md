@@ -7,6 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-11-05
+
+**Audit F-1 fixed, and the cyrius pin moves 6.6.20 → 6.7.9.** The three predictable temp-file sites now create
+exclusively, through one new public helper. `./lib/`, `dist/` and `cyrius.lock` are refreshed to the pin. The
+closeout pass ran here rather than as a final 1.6.x patch, and its independent review found 12 open issues in
+older code, including one HIGH. **None of those is fixed in this release**; see `Known issues`.
+
+The consumer floor does not move: it stays **6.6.6**.
+
+### Security
+
+- **Fixed — audit F-1 (MEDIUM): temp files followed a planted symlink.** `update_atomic_write`,
+  `update_atomic_copy` and `netns_apply_nftables_ruleset` opened a predictable path with `O_CREAT|O_TRUNC`, so
+  a symlink planted there redirected the write, and the rename then installed the link over the destination.
+  All three now go through `agnodrm_tmp_create`. Attacked live: on 1.6.3 the victim file is overwritten, for
+  all three; on 1.7.0 it is untouched, the planted link is left alone, and the real temp is removed. See
+  `docs/audit/2026-11-05-audit.md`.
+
+### Added
+
+- **`agnodrm_tmp_create(base, path_out)`** (API 316 → 317, additive). Creates `<base>.tmp.<pid>.<ctr>`
+  exclusively with `file_create_exclusive`, which is in the stdlib at the floor, and returns the fd, or a
+  negative errno. A taken name moves to the next counter; after 64 it returns `-EEXIST` having written nothing.
+  The counter starts from `getrandom` (`GRND_INSECURE`, so early boot never blocks), so a process with a fixed
+  pid does not walk the same names after each restart. `file_write_atomic` was not used because it ignores
+  `xfsync`'s result, and agnodrm fails on a failed fsync.
+- `test_tmp_exclusive`: 96 assertions (202 → 298).
+
+### Changed
+
+- ⚠ **Temp names changed.** `<path>.tmp` is now `<path>.tmp.<pid>.<ctr>`, and
+  `/run/agnos/nft-tmp-<pid>.conf` is now `/run/agnos/nft.tmp.<pid>.<ctr>`. Nothing in the workspace depends on
+  either.
+- ⚠ **A crash can leave more temp files behind.** The fixed name was overwritten by the next call. A unique
+  name is not reused, and nothing cleans it up. A leftover no longer gets in the way of later writes.
+- ⚠ **A target file name over about 232 bytes now fails with `ENAMETOOLONG`** (251 before), because the suffix
+  is longer.
+- Concurrent writers to one path no longer share a temp file; the last rename wins.
+- **cyrius pin 6.6.20 → 6.7.9.** No source change was needed for the new language rules. `./lib/` was rebuilt
+  clean: 40 files, byte-identical to the 6.7.9 snapshot. `cyrius.lock` was regenerated and checks with the new
+  `cyrius deps --locked`. Sidecars are unchanged: 11 leaves, core 7.
+- `scripts/gen-capability-map.sh`: stale `agnosys` labels fixed, and the bullet about a syscall that left with
+  the audit module is gone. Stale comments fixed in `src/error.cyr` and `src/bootloader.cyr`.
+- CLAUDE.md gains the temp-file rule.
+
+### Known issues
+
+Recorded in `docs/audit/2026-11-05-audit.md`, and **not fixed here**. They are outside the F-1 change, and most
+change behaviour. No workspace consumer calls `update_*`.
+
+- **F-3 (HIGH):** `update_rollback` saves a stale state over `update_switch_slot`'s. On a host with no
+  `agnos.slot=` on the kernel cmdline, the next `update_apply` then targets the slot the host is running from.
+- **F-4 (MEDIUM):** `update_apply` swallows a slot-detection `Err` and assumes slot A.
+- **F-5 (MEDIUM):** `update_save_state`'s Result is dropped at three sites.
+- **F-6 (MEDIUM, since 1.6.2):** the bootctl parser can drop an `options` continuation, hiding it from
+  `bootloader_validate_kernel_cmdline`.
+- **F-7 (MEDIUM):** `/proc/mounts` is silently cut at 8 KiB.
+- **F-8 – F-14 (LOW):** see the audit report.
+- **F-2 (LOW):** still open: its upstream fix is at 6.7.15, and it reproduces at this pin.
+
+### Performance
+
+No unexplained regression. 40 alternating runs of 1.6.3 (6.6.20) against 1.7.0 (6.7.9), median [min..max] ns:
+
+| Bench | 1.6.3 | 1.7.0 | Reading |
+|---|---|---|---|
+| `parse_subsystem` | 41 [41..43] | 45 [44..47] | Literal placement, not codegen; see below |
+| `memeq_16` | 30 [30..31] | 28 [28..29] | −6.7%, reproducible, from the pin |
+| `compare_versions` | 100 [99..104] | 98 [96..102] | −2.5% |
+| `validate_cmdline_safe` | 850 [434..2103] | 842 [445..1763] | Noise |
+| `ok_create` | 1 [1..2] | 2 [2..2] | 1.45 → 1.65 ns; rounding |
+| `starts_with_miss` | 6 [6..7] | 7 [6..7] | 6.39 → 6.37 ns; rounding |
+
+The other 12 rows moved by at most 2 ns.
+
+**`parse_subsystem` is literal placement.** The bench runs nine `streq` calls against string literals, and
+their alignment is what moves. The same 1.7.0 source reads **41.6 to 45.5 ns** with only 1 to 8 padding bytes of
+string data added ahead of those literals, which spans the whole change. Measured by step: the pin alone moved
+it 40.97 → 41.40 ns, and the fix's new literals moved it 41.40 → 43.94 ns.
+
+Two rows in the tracked `bench-history.csv` line need reading with care. `map_get_miss` falls 75 → 42 ns only
+because 1.6.3's row landed on the 1-in-16 hash-seed collision; both toolchains hit it in 1 of 40 runs here.
+`validate_cmdline_safe` reads 707 → 1,213 ns, which is that bench's noise: see the range above.
+
+### Build Metrics
+
+| Target | 1.6.3 | 1.7.0 | Delta |
+|---|---|---|---|
+| x86_64 (DCE) | 28,400 B | **28,424 B** | +24 B |
+| agnos (DCE) | 24,352 B | **24,384 B** | +32 B |
+| aarch64 (DCE) | 269,976 B | **270,000 B** | +24 B |
+
+`dist/agnodrm.cyr` 4,865 → 4,915 lines; `dist/agnodrm-core.cyr` 1,223 → 1,297.
+
+### Closeout
+
+Run in this release, not as a final 1.6.x patch: 1.6.3 was already tagged.
+
+1. **Tests:** 298/298, on x86_64 and under `qemu-aarch64`, with all 4 fuzz harnesses clean.
+2. **Bench:** above.
+3. **Dead code:** 795 unreachable fns, 193,795 B eliminated on x86_64 (1.6.3: 789 / 192,138 B).
+4. **Refactor:** the three temp-file sites are one helper. Nothing else qualified.
+5. **Code review:** independent, over every `src/` change since 1.5.3. It found defects in the first cut of
+   the F-1 helper, fixed here, and the `Known issues` above.
+6. **Cleanup:** stale comments and generator labels fixed. Still open: the four committed qemu core dumps, and
+   the runtime `"agnosys"` journal identifier (F-14).
+7. **Security re-scan:** no `sys_system`, no unchecked data writes, no `var buf[N]` ≥ 64 KB in `src/`.
+8. **Downstream:** stiva built and tested against this exact bundle on its 6.6.10 pin: 326/326, the same as
+   its baseline on agnodrm 1.6.0.
+9. **Doc sync:** done, including this entry.
+10. **Version:** `VERSION`, `cyrius.cyml` and this header agree on 1.7.0.
+11. **Clean build:** passes from a fresh tree.
+12. **API surface:** 317 fns, matching the snapshot.
+
+### Verification
+
+- `scripts/audit.sh`: 12/12 clean on the final tree, all three targets warning-free.
+- Floor: a probe holding only the sidecar leaves and calling every public fn builds on x86_64, aarch64 and agnos
+  on 6.6.6, 6.6.10, 6.6.20, 6.7.9 and 6.7.18. 298/298 on cyrius 6.6.5, 6.6.6 and 6.6.20.
+- CI's steps replayed in an isolated `$HOME` built only from the 6.7.9 release tarball: every `dist/` file and
+  `cyrius.lock` came out byte-identical.
+- Mutation: restoring `O_TRUNC`, removing the retry, retrying on every error, not advancing the counter, not
+  seeding it and removing the null guards each fail the suite.
+- As real PID 1 in a pid namespace, each run leaving its temp behind: 100 of 100 created; an unseeded build
+  refuses from run 65.
+- A tampered `cyrius.lock` fails `cyrius deps` with rc 1 on 6.6.20 and 6.7.9, so CI's `deps` step catches it
+  before `--verify`.
+
 ## [1.6.3] — 2026-11-05
 
 **cyrius pin 6.6.6 → 6.6.20**, with `./lib/`, `dist/` and a new `cyrius.lock` refreshed to it. No

@@ -13,6 +13,15 @@
 
 Numbers come from `CYRIUS_STATS=1 cyrius build <src> <out>`.
 
+> **Refresh note (1.7.0, 2026-11-05, Cyrius 6.7.9).** The gate build now measures as below. No ceiling moved.
+> `fn_name_hash` is still the highest-utilization table, at 21%.
+>
+> | Build | fn_table | identifiers | var_table | fixup_table | string_data | code_size | fn_name_hash |
+> |-------|---------:|------------:|----------:|------------:|------------:|----------:|-------------:|
+> | `src/main.cyr` (device-model smoke: error+util+udev+drm) | 841 / 131 072 · <1% | 21 849 / 8 388 608 · <1% | 485 / 1 048 576 · <1% | 1 282 / 1 048 576 · <1% | 3 683 / 2 097 152 · <1% | 210 912 / 67 108 864 · <1% | 841 / 4 096 · 21% (max probe 3) |
+>
+> The 1.6.3 note below is kept as history.
+
 > **Refresh note (1.6.3, 2026-11-05, Cyrius 6.6.20).** The gate build now measures as below. No
 > ceiling moved; counts rose with the 6.6.20 stdlib snapshot (+177 fns, +57 vars against 1.6.2), and
 > agnodrm's own sources did not change. `fn_name_hash` is still the highest-utilization table, at 20%.

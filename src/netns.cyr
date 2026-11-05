@@ -583,28 +583,15 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     #ifndef CYRIUS_TARGET_AGNOS
     var ns_name = netns_handle_name(handle);
 
-    # Write ruleset to per-PID temp file
-    var nft_pid = sys_getpid();
-    var nft_pid_buf[24];
-    var nft_pid_len = fmt_int_buf(nft_pid, &nft_pid_buf);
-    var nft_prefix = "/run/agnos/nft-tmp-";
-    var nft_prefix_len = strlen(nft_prefix);
-    var nft_suffix = ".conf";
-    var nft_suffix_len = strlen(nft_suffix);
-    var tmp_path = alloc(nft_prefix_len + nft_pid_len + nft_suffix_len + 1);
-    memcpy(tmp_path, nft_prefix, nft_prefix_len);
-    memcpy(tmp_path + nft_prefix_len, &nft_pid_buf, nft_pid_len);
-    memcpy(tmp_path + nft_prefix_len + nft_pid_len, nft_suffix, nft_suffix_len);
-    store8(tmp_path + nft_prefix_len + nft_pid_len + nft_suffix_len, 0);
-
     # Ensure directory exists (ignore errors)
     var mkdir_args = vec_new();
     vec_push(mkdir_args, "/usr/bin/mkdir"); vec_push(mkdir_args, "-p");
     vec_push(mkdir_args, "/run/agnos");
     exec_vec(mkdir_args);
 
-    # Write ruleset to file
-    var fd = sys_open(tmp_path, O_WRONLY | O_CREAT | O_TRUNC, 0x1A4);  # mode 0644
+    # Write ruleset to an exclusive temp; see agnodrm_tmp_create.
+    var tmp_path = 0;
+    var fd = agnodrm_tmp_create("/run/agnos/nft", &tmp_path);
     if (fd < 0) {
         return drm_err_io(0 - fd, "failed to create nft temp file");
     }

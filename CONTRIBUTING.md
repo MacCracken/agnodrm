@@ -4,7 +4,7 @@ Thank you for your interest in contributing.
 
 ## Prerequisites
 
-- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.6.20** at 1.6.3; consumers need ≥ 6.6.6; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
+- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.7.9** at 1.7.0; consumers need ≥ 6.6.6; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
 - Linux x86_64 (primary host) or aarch64 (cross-build via `cycc_aarch64`, renamed from `cc5_aarch64` in Cyrius 6.0); macOS / Windows is a cyrius-side roadmap item
 - `./lib/` is gitignored — populated on first build by `cyrius deps` from the `[deps] stdlib` list
 
