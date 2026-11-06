@@ -249,6 +249,9 @@ fn bootloader_parse_loader_conf(text): i64 {
 # List boot entries (high-level)
 # ================================================================
 
+# Test seam, 0 outside tests/tcyr: a stub to run in place of /usr/bin/bootctl.
+var _bootloader_bootctl = 0;
+
 # List boot entries: `bootctl list` first, then the BLS Type #1 drop-ins.
 # result_arr: caller-allocated array of max_entries BootEntry pointers.
 # When bootctl is missing, fails, or prints nothing, the first readable of
@@ -276,6 +279,8 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     var args = vec_new();
     vec_push(args, "/usr/bin/bootctl");
     vec_push(args, "list");
+
+    if (_bootloader_bootctl != 0) { vec_set(args, 0, _bootloader_bootctl); }
 
     var cap = 65536;
     var buf = alloc(cap + 1);
@@ -587,37 +592,42 @@ fn bootloader_list_loader_entries(dir, result_arr, max_entries): i64 {
     return Ok(n);
 }
 
-# 1 when the line is empty or only spaces / tabs.
-fn _bootloader_is_blank(line, linelen): i64 {
-    var i = 0;
-    while (i < linelen) {
-        var ch = load8(line + i);
-        if (ch != 32) { if (ch != 9) { return 0; } }
-        i = i + 1;
-    }
-    return 1;
-}
-
-# 1 for a bootctl continuation line: indented, and its first word is not a
-# "key:" label. bootctl prints a second and later initrd that way, aligned
-# under the first value.
-fn _bootloader_is_continuation(line, linelen): i64 {
+# Count of leading blanks; `linelen` for an empty or whitespace-only line.
+fn _bootloader_indent(line, linelen): i64 {
     var i = 0;
     while (i < linelen) {
         var ch = load8(line + i);
         if (ch != 32) { if (ch != 9) { break; } }
         i = i + 1;
     }
-    if (i == 0) { return 0; }
-    if (i >= linelen) { return 0; }
-    var j = i;
+    return i;
+}
+
+# Index of the ':' ending the line's first word, or -1 if it does not end in one.
+fn _bootloader_label_colon(line, linelen, indent): i64 {
+    var j = indent;
     while (j < linelen) {
         var cj = load8(line + j);
         if (cj == 32) { break; }
         if (cj == 9) { break; }
         j = j + 1;
     }
-    if (load8(line + j - 1) == 58) { return 0; }   # "key:" — a labelled line
+    if (j == indent) { return 0 - 1; }
+    if (load8(line + j - 1) == 58) { return j - 1; }
+    return 0 - 1;
+}
+
+# 1 for a bootctl continuation line. bootctl right-aligns its labels, so a real
+# label starts left of the block's colon column (`colon`, 0 until one is seen),
+# and its continuations are indented past it: a line at or past the column is a
+# continuation whatever its first word looks like. Before any label, an indented
+# line whose first word is not "key:" is one.
+fn _bootloader_is_continuation(line, linelen, indent, colon): i64 {
+    if (colon > 0) {
+        if (indent >= colon) { return 1; }
+    }
+    if (indent == 0) { return 0; }
+    if (_bootloader_label_colon(line, linelen, indent) >= 0) { return 0; }
     return 1;
 }
 
@@ -655,7 +665,11 @@ fn _bootloader_bootctl_flush(e, sb_initrd, sb_options, result_arr, max_entries, 
 # Both are joined into the field with one space: dropping an options line
 # would drop a kernel parameter (say init=/bin/sh) from what a caller checks
 # with bootloader_validate_kernel_cmdline. Continuation lines under any other
-# key (devicetree-overlay, ...) are ignored.
+# key (devicetree-overlay, ...) are ignored. What makes a line a continuation is
+# its indent, never its text: an options line is free to read "x: init=/bin/sh"
+# or "id: other.conf", and it stays options. A line of blanks past the colon
+# column is an empty continuation, not the end of the block; only a line short of
+# that column ends it.
 #
 # The values are bootctl's DISPLAY text, kept as printed: a title can carry
 # bootctl's marks — " (default)", " (selected)", " (not reported/new)",
@@ -674,6 +688,7 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
     var sb_initrd = 0;
     var sb_options = 0;
     var cont = 0;            # field continuation lines extend: 0 none, 1 initrd, 2 options
+    var colon = 0;           # this block's label colon column, 0 until one is seen
     var textlen = strlen(text);
     var pos = 0;
 
@@ -687,23 +702,32 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
         if (pos < textlen) { pos = pos + 1; }
         var line = text + linestart;
 
-        if (_bootloader_is_blank(line, linelen) == 1) {
+        var indent = _bootloader_indent(line, linelen);
+        if (indent == linelen) {
+            if (colon > 0) {
+                if (indent >= colon) { continue; }
+            }
             count = _bootloader_bootctl_flush(current, sb_initrd, sb_options, result_arr, max_entries, count);
             current = 0;
             sb_initrd = 0;
             sb_options = 0;
             cont = 0;
+            colon = 0;
             continue;
         }
         if (current == 0) { current = bootloader_entry_new(); }
 
-        if (_bootloader_is_continuation(line, linelen) == 1) {
+        if (_bootloader_is_continuation(line, linelen, indent, colon) == 1) {
             var more = bootloader_extract_value(line, linelen, 0);
             if (cont == 1) { sb_initrd = _bootloader_sb_append(sb_initrd, more); }
             if (cont == 2) { sb_options = _bootloader_sb_append(sb_options, more); }
             continue;
         }
         cont = 0;
+        if (colon == 0) {
+            var labelled = _bootloader_label_colon(line, linelen, indent);
+            if (labelled > 0) { colon = labelled; }
+        }
 
         var kp = bootloader_line_starts_with(line, linelen, "id:");
         if (kp > 0) {

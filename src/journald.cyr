@@ -110,6 +110,9 @@ fn journald_filter_new(): i64 {
 }
 
 # ================================================================
+# Test seam, 0 outside tests/tcyr: a stub to run in place of /usr/bin/journalctl.
+var _journald_tool = 0;
+
 # Build journalctl argv vec
 # ================================================================
 
@@ -191,10 +194,86 @@ fn journald_make_sockaddr(): i64 {
     return sa;
 }
 
+# Append one field to a journal datagram. The native protocol is KEY=VALUE\n, so a
+# value holding a newline would end its field there and the rest would parse as new
+# fields: a message of "x\nPRIORITY=0\nSYSLOG_IDENTIFIER=sshd" could forge both
+# (audit F-9). Such a value goes in the protocol's other form, which keeps it whole:
+# KEY\n, its length as a little-endian u64, the bytes, \n.
+fn _journald_add_field(sb, key, value): i64 {
+    var vlen = strlen(value);
+    var newline = 0;
+    var i = 0;
+    while (i < vlen) {
+        if (load8(value + i) == 10) {
+            newline = 1;
+            break;
+        }
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, key);
+    if (newline == 0) {
+        str_builder_add_cstr(sb, "=");
+        str_builder_add_cstr(sb, value);
+        str_builder_add_cstr(sb, "\n");
+        return 0;
+    }
+    str_builder_add_cstr(sb, "\n");
+    var b = 0;
+    while (b < 8) {
+        str_builder_add_byte(sb, (vlen >> (b * 8)) & 255);
+        b = b + 1;
+    }
+    str_builder_add_cstr(sb, value);
+    str_builder_add_cstr(sb, "\n");
+    return 0;
+}
+
+# The fields every journal datagram starts with.
+fn _journald_add_base_fields(sb, message, priority, identifier): i64 {
+    str_builder_add_cstr(sb, "PRIORITY=");
+    str_builder_add_int(sb, priority);
+    str_builder_add_cstr(sb, "\n");
+    _journald_add_field(sb, "MESSAGE", message);
+    if (identifier != 0) {
+        _journald_add_field(sb, "SYSLOG_IDENTIFIER", identifier);
+    }
+    return 0;
+}
+
+# 1 for a field name the journal accepts: 1-64 bytes of A-Z, 0-9 and _, not starting
+# with a digit or with _ (those are trusted fields). journald drops anything else, and
+# a name holding = or a newline would end up parsed as other fields (audit F-9).
+fn _journald_key_valid(key): i64 {
+    if (key == 0) { return 0; }
+    var n = strlen(key);
+    if (n == 0) { return 0; }
+    if (n > 64) { return 0; }
+    var first = load8(key);
+    if (first == 95) { return 0; }
+    if (first >= 48) {
+        if (first <= 57) { return 0; }
+    }
+    var i = 0;
+    while (i < n) {
+        var c = load8(key + i);
+        var ok = 0;
+        if (c >= 65) {
+            if (c <= 90) { ok = 1; }
+        }
+        if (c >= 48) {
+            if (c <= 57) { ok = 1; }
+        }
+        if (c == 95) { ok = 1; }
+        if (ok == 0) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
 # Send a structured log message to the journald socket.
 # message: C string — the log message text.
 # priority: integer 0-7 (JOURNAL_EMERG through JOURNAL_DEBUG).
-# identifier: C string — syslog identifier (e.g. "agnosys").
+# identifier: C string — syslog identifier (e.g. "agnodrm").
 #
 # The journal native protocol uses newline-separated KEY=VALUE pairs
 # sent as a single datagram to /run/systemd/journal/socket.
@@ -218,26 +297,8 @@ fn journald_send(message, priority, identifier): i64 {
         return drm_err_invalid_argument("journal priority must be 0-7");
     }
 
-    # Build the datagram payload: KEY=VALUE\n pairs
     var sb = str_builder_new();
-
-    # PRIORITY=<n>
-    str_builder_add_cstr(sb, "PRIORITY=");
-    str_builder_add_int(sb, priority);
-    str_builder_add_cstr(sb, "\n");
-
-    # MESSAGE=<text>
-    str_builder_add_cstr(sb, "MESSAGE=");
-    str_builder_add_cstr(sb, message);
-    str_builder_add_cstr(sb, "\n");
-
-    # SYSLOG_IDENTIFIER=<id>
-    if (identifier != 0) {
-        str_builder_add_cstr(sb, "SYSLOG_IDENTIFIER=");
-        str_builder_add_cstr(sb, identifier);
-        str_builder_add_cstr(sb, "\n");
-    }
-
+    _journald_add_base_fields(sb, message, priority, identifier);
     var payload = str_builder_build(sb);
 
     # Create AF_UNIX SOCK_DGRAM socket
@@ -245,8 +306,6 @@ fn journald_send(message, priority, identifier): i64 {
     if (fd < 0) {
         return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
     }
-    # Closed explicitly on every return, not with `defer`: cyrius skips a defer
-    # block when the fn returns a value-form Result (see src/error.cyr).
 
     # Build sockaddr_un
     var sa = journald_make_sockaddr();
@@ -260,6 +319,22 @@ fn journald_send(message, priority, identifier): i64 {
 
     return Ok(0);
     #endif
+}
+
+# Append journald_send_fields' extra fields, skipping any whose name the journal would
+# not accept.
+fn _journald_add_extra_fields(sb, fields_keys, fields_vals): i64 {
+    var nfields = vec_len(fields_keys);
+    var fi = 0;
+    while (fi < nfields) {
+        var fkey = vec_get(fields_keys, fi);
+        var fval = vec_get(fields_vals, fi);
+        if (_journald_key_valid(fkey) == 1) {
+            if (fval != 0) { _journald_add_field(sb, fkey, fval); }
+        }
+        fi = fi + 1;
+    }
+    return 0;
 }
 
 # Send a structured log with extra key-value fields.
@@ -285,53 +360,14 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
     }
 
     var sb = str_builder_new();
-
-    str_builder_add_cstr(sb, "PRIORITY=");
-    str_builder_add_int(sb, priority);
-    str_builder_add_cstr(sb, "\n");
-
-    str_builder_add_cstr(sb, "MESSAGE=");
-    str_builder_add_cstr(sb, message);
-    str_builder_add_cstr(sb, "\n");
-
-    if (identifier != 0) {
-        str_builder_add_cstr(sb, "SYSLOG_IDENTIFIER=");
-        str_builder_add_cstr(sb, identifier);
-        str_builder_add_cstr(sb, "\n");
-    }
-
-    # Append extra fields (skip keys containing newline to prevent injection)
-    var nfields = vec_len(fields_keys);
-    var fi = 0;
-    while (fi < nfields) {
-        var fkey = vec_get(fields_keys, fi);
-        var fkey_len = strlen(fkey);
-        var fkey_valid = 1;
-        var fki = 0;
-        while (fki < fkey_len) {
-            if (load8(fkey + fki) == 10) {
-                fkey_valid = 0;
-                fki = fkey_len;  # break
-            }
-            fki = fki + 1;
-        }
-        if (fkey_valid == 1) {
-            str_builder_add_cstr(sb, fkey);
-            str_builder_add_cstr(sb, "=");
-            str_builder_add_cstr(sb, vec_get(fields_vals, fi));
-            str_builder_add_cstr(sb, "\n");
-        }
-        fi = fi + 1;
-    }
-
+    _journald_add_base_fields(sb, message, priority, identifier);
+    _journald_add_extra_fields(sb, fields_keys, fields_vals);
     var payload = str_builder_build(sb);
 
     var fd = sys_socket(AF_UNIX, SOCK_DGRAM, 0);
     if (fd < 0) {
         return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
     }
-    # Closed explicitly on every return, not with `defer`: cyrius skips a defer
-    # block when the fn returns a value-form Result (see src/error.cyr).
 
     var sa = journald_make_sockaddr();
     var ret = sys_sendto(fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
@@ -469,10 +505,29 @@ fn journald_query(filter): i64 {
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     var args = _journald_build_argv(filter);
-    var buf = alloc(131072);  # 128KB capture buffer
-    var nbytes = exec_capture(args, buf, 131072);
+    var cap = 131072;         # 128KB capture buffer
+    var buf = alloc(cap + 1);  # +1: the NUL below lands at index `cap` on a full read
+    # Not agnodrm_run_capture: journalctl exits 1 when --grep matches nothing, which is
+    # an empty result. Without --grep, 1 is bad input or a missing boot, so it fails, as
+    # do a missing journalctl (127), a signal and an end never seen (negative). With
+    # --grep, 1 cannot tell no match from a bad regex; those read as empty.
+    # A full buffer proves nothing: the reader closed the pipe, so journalctl with more
+    # to say dies of SIGPIPE. The query keeps the entries it got, as it always has.
+    var status = alloc(16);
+    if (_journald_tool != 0) { vec_set(args, 0, _journald_tool); }
+    var nbytes = exec_capture_status(args, buf, cap, status);
     if (nbytes < 0) {
         return drm_err_unknown("failed to execute journalctl");
+    }
+    if (nbytes < cap) {
+        var code = load64(status);
+        if (code != 0) {
+            var no_match = 0;
+            if (code == 1) {
+                if (journald_filter_grep(filter) != 0) { no_match = 1; }
+            }
+            if (no_match == 0) { return drm_err_unknown("journalctl failed"); }
+        }
     }
 
     store8(buf + nbytes, 0);
@@ -534,20 +589,20 @@ fn journald_get_unit_logs(unit_name, lines): i64 {
 # message: C string.
 # Returns Result: Ok(0) or Err.
 fn journald_info(message): i64 {
-    return journald_send(message, JOURNAL_INFO, "agnosys");
+    return journald_send(message, JOURNAL_INFO, "agnodrm");
 }
 
 # Send a warning-level message to the journal.
 fn journald_warning(message): i64 {
-    return journald_send(message, JOURNAL_WARNING, "agnosys");
+    return journald_send(message, JOURNAL_WARNING, "agnodrm");
 }
 
 # Send an error-level message to the journal.
 fn journald_error(message): i64 {
-    return journald_send(message, JOURNAL_ERR, "agnosys");
+    return journald_send(message, JOURNAL_ERR, "agnodrm");
 }
 
 # Send a debug-level message to the journal.
 fn journald_debug(message): i64 {
-    return journald_send(message, JOURNAL_DEBUG, "agnosys");
+    return journald_send(message, JOURNAL_DEBUG, "agnodrm");
 }

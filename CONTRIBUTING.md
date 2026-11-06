@@ -4,7 +4,7 @@ Thank you for your interest in contributing.
 
 ## Prerequisites
 
-- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.7.9** at 1.7.0; consumers need ≥ 6.6.6; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
+- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.7.18** at 1.7.1; consumers need ≥ 6.6.7; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
 - Linux x86_64 (primary host) or aarch64 (cross-build via `cycc_aarch64`, renamed from `cc5_aarch64` in Cyrius 6.0); macOS / Windows is a cyrius-side roadmap item
 - `./lib/` is gitignored — populated on first build by `cyrius deps` from the `[deps] stdlib` list
 
@@ -61,7 +61,7 @@ The 1.0 surface is **frozen** — adding new modules is rare and requires a majo
 - Structs: heap-allocated via `alloc()`, fields accessed at fixed offsets — but **prefer `#derive(accessors)`** for new structs (V1.1.0+ adopted; 37 derive structs across 16 modules). Stack `#derive(Serialize)` on top for diagnostic JSON dumps where the field set is `i64` / `Str` only (V1.1.12+; cyrius 5.10.14+ honors stacked `#derive`)
 - Strings: null-terminated C strings at boundaries; `lib/str.cyr` fat pointers (`Str`) internally. Parsers built on `str_split` expect `Str`, not cstring — wrap with `str_from(cstr)` when calling from outside
 - Error propagation (a Result is a register pair since cyrius 6.6.0): `var res_t, res_v = f(); if (is_err_result(res_t) == 1) { return Err(res_v); }` — never `return res_v;`, which hands the caller the payload as a tag so an `Err` reads as success
-- No `defer` in a fn that returns a Result — cyrius 6.6.0–6.6.6 skips it on a Result return and the consumer floor is still 6.6.6; release fds / temp files explicitly on every exit path (see CLAUDE.md)
+- Release fds / temp files on every exit path of a fn that returns a Result. `defer` is safe for that since cyrius 6.6.7, the consumer floor; existing code releases explicitly (see CLAUDE.md)
 - No raw syscalls: use the stdlib's `sys_*` / `file_*` helpers and per-target `SYS_*` / `O_*` / `STAT_*` names, never `syscall(N, …)`, flag literals or struct offsets
 - Comments: `#` to end of line
 - Reserved keywords (cannot be used as var names): `match`, `default`, `shared`, `in`, `secret`

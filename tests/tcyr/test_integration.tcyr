@@ -367,10 +367,8 @@ fn test_fuse() {
     var line3 = "src /no/escape ext4 rw 0 0";
     var f3 = fuse_extract_field(line3, strlen(line3), 1);
     assert(streq(f3, "/no/escape") == 1, "esc_none");
-    # F-5 (1.5.3): fuse_parse_proc_mounts alloc'd exactly 8192 bytes but
-    # NUL-terminated at buf[total_read], writing one byte past the end when
-    # /proc/mounts filled the buffer (~90 mounts). Buffer is 8192 + 1 now.
-    # This exercises the real read+parse path against the live /proc/mounts.
+    # The real read+parse path against the live /proc/mounts. See also
+    # test_fuse_mount_table for tables past the first buffer.
     var marr = alloc(8 * 128);
     var mres_t, mres_v = fuse_parse_proc_mounts(marr, 128, 0);
     assert(is_ok(mres_t) == 1, "fpm_ok");
@@ -563,6 +561,36 @@ fn test_bootctl_parse() {
     assert_eq(bootloader_entry_linux(e2), 0, "bctl_e2_no_kernel");
 
     # id before title still works, and a block with no id (a header) is dropped.
+    # F-6: what makes a continuation is its indent, not its text. A line that reads
+    # like a label stays options, so the cmdline validator sees what it hides.
+    var bh = "        title: A\n           id: a.conf\n      options: root=/dev/sda\n";
+    var ct1 = netns_concat2(bh, "              x: init=/bin/sh\n              rd.break\n");
+    var c1_t, c1_v = bootloader_parse_bootctl_list(ct1, arr, 8);
+    assert_eq(c1_v, 1, "bctl_cont_label_entries");
+    var c1 = load64(arr);
+    var c1o = bootloader_entry_options(c1);
+    assert(streq(c1o, "root=/dev/sda x: init=/bin/sh rd.break") == 1, "bctl_cont_label_joined");
+    assert(is_err_result(bootloader_validate_kernel_cmdline(c1o)) == 1, "bctl_cont_label_rejected");
+    var ct2 = netns_concat2(bh, "              id: b.conf init=/bin/sh\n");
+    var c2_t, c2_v = bootloader_parse_bootctl_list(ct2, arr, 8);
+    var c2 = load64(arr);
+    assert(streq(bootloader_entry_id(c2), "a.conf") == 1, "bctl_cont_id_kept");
+    var c2o = bootloader_entry_options(c2);
+    assert(is_err_result(bootloader_validate_kernel_cmdline(c2o)) == 1, "bctl_cont_id_rejected");
+    # A line of blanks inside the value does not end the block.
+    var ct3 = netns_concat2(bh, "              \n              init=/bin/sh\n\n");
+    ct3 = netns_concat2(ct3, "        title: B\n           id: b.conf\n");
+    var c3_t, c3_v = bootloader_parse_bootctl_list(ct3, arr, 8);
+    assert_eq(c3_v, 2, "bctl_cont_blank_entries");
+    var c3o = bootloader_entry_options(load64(arr));
+    assert(is_err_result(bootloader_validate_kernel_cmdline(c3o)) == 1, "bctl_cont_blank_rejected");
+    assert(streq(bootloader_entry_id(load64(arr + 8)), "b.conf") == 1, "bctl_cont_blank_next_block");
+    # The colon column resets per block, and a short blank line still ends one.
+    var ct4 = "   id: a.conf\n   \n     title: B\n        id: b.conf\n";
+    var c4_t, c4_v = bootloader_parse_bootctl_list(ct4, arr, 8);
+    assert_eq(c4_v, 2, "bctl_cont_short_blank");
+    assert(streq(bootloader_entry_title(load64(arr + 8)), "B") == 1, "bctl_cont_column_resets");
+
     var h_t, h_v = bootloader_parse_bootctl_list("Boot Loader Entries:\n\n  id: x.conf\n  title: X\n", arr, 8);
     assert(is_ok(h_t) == 1, "bctl_hdr_ok");
     assert_eq(h_v, 1, "bctl_header_dropped");
@@ -600,7 +628,7 @@ fn _file_url(path) {
 }
 
 fn test_fd_hygiene() {
-    println("-- fd hygiene (defer is skipped on a Result return) --");
+    println("-- fd hygiene --");
     var sbd = str_builder_new();
     str_builder_add_cstr(sbd, "/tmp/agnodrm-fd-");
     str_builder_add_int(sbd, sys_getpid());
@@ -664,6 +692,642 @@ fn test_fd_hygiene() {
 # Main
 # ================================================================
 
+fn _tmpx_holds(path, text) {
+    var buf = alloc(64);
+    var n = file_read_all(path, buf, 63);
+    if (n != strlen(text)) { return 0; }
+    store8(buf + n, 0);
+    return streq(buf, text);
+}
+
+# ================================================================
+# fuse: a whole mount table, however long (audit F-7)
+# ================================================================
+
+fn test_fuse_mount_table() {
+    println("-- fuse mount table (audit F-7) --");
+    var sbp = str_builder_new();
+    str_builder_add_cstr(sbp, "/tmp/agnodrm-mounts-");
+    str_builder_add_int(sbp, sys_getpid());
+    var path = str_data(str_builder_build(sbp));
+    # Well past both old limits: 8 KiB of table, and 128 FUSE mounts.
+    var sb = str_builder_new();
+    var i = 0;
+    while (i < 3000) {
+        str_builder_add_cstr(sb, "tmpfs /run/mnt");
+        str_builder_add_int(sb, i);
+        str_builder_add_cstr(sb, " tmpfs rw,nosuid 0 0\n");
+        i = i + 1;
+    }
+    i = 0;
+    while (i < 200) {
+        str_builder_add_cstr(sb, "sshfs#u@h:/ /mnt/f");
+        str_builder_add_int(sb, i);
+        str_builder_add_cstr(sb, " fuse.sshfs rw 0 0\n");
+        i = i + 1;
+    }
+    var data = str_builder_build(sb);
+    assert(str_len(data) > 65536, "mnt_fx_past_first_chunk");
+    assert_eq(file_write_all(path, str_data(data), str_len(data)), str_len(data), "mnt_fx_write");
+
+    var fd = sys_open(path, O_RDONLY, 0);
+    var a_t, a_v = _fuse_collect_mounts(fd, 1);
+    sys_close(fd);
+    assert(is_ok(a_t) == 1, "mnt_fuse_only_ok");
+    assert_eq(vec_len(a_v), 200, "mnt_fuse_only_all");
+    assert(streq(fuse_mount_mountpoint(vec_get(a_v, 199)), "/mnt/f199") == 1, "mnt_last_entry");
+
+    fd = sys_open(path, O_RDONLY, 0);
+    var b_t, b_v = _fuse_collect_mounts(fd, 0);
+    sys_close(fd);
+    assert_eq(vec_len(b_v), 3200, "mnt_all_entries");
+
+    # The public reader stops at the caller's array, whatever the table holds.
+    var one = alloc(16);
+    store64(one + 8, 0x5A5A);
+    var o_t, o_v = fuse_parse_proc_mounts(one, 1, 0);
+    assert(is_ok(o_t) == 1, "mnt_bounded_ok");
+    assert(o_v <= 1, "mnt_bounded_count");
+    assert_eq(load64(one + 8), 0x5A5A, "mnt_bounded_canary");
+
+    # A table past the cap fails rather than parse part of itself.
+    fd = sys_open("/dev/zero", O_RDONLY, 0);
+    var z_t, z_v = _fuse_collect_mounts(fd, 0);
+    sys_close(fd);
+    assert(is_err_result(z_t) == 1, "mnt_too_large_err");
+
+    # A read failure is an Err, not an empty table.
+    var e_t, e_v = _fuse_collect_mounts(0 - 1, 0);
+    assert(is_err_result(e_t) == 1, "mnt_read_error_err");
+
+    xunlink(path);
+    return 0;
+}
+
+# ================================================================
+# update slot paths (audit F-3, F-4, F-5, F-13), under a scratch root
+# ================================================================
+
+fn _updfx_write(root, rel, text) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, root);
+    str_builder_add_cstr(sb, rel);
+    var path = str_data(str_builder_build(sb));
+    xunlink(path);
+    return file_write_all(path, text, strlen(text));
+}
+
+# An executable stub. It runs under /bin/sh, never the host's tool.
+fn _updfx_tool(root, rel, text) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, root);
+    str_builder_add_cstr(sb, rel);
+    var path = str_data(str_builder_build(sb));
+    xunlink(path);
+    var fd = file_create_exclusive(path, 0x1ED);  # mode 0755
+    sys_write(fd, text, strlen(text));
+    sys_close(fd);
+    return 0;
+}
+
+fn _updfx_holds(root, rel, text) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, root);
+    str_builder_add_cstr(sb, rel);
+    return _tmpx_holds(str_data(str_builder_build(sb)), text);
+}
+
+fn _updfx_rm(root, rel) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, root);
+    str_builder_add_cstr(sb, rel);
+    return xunlink(str_data(str_builder_build(sb)));
+}
+
+# What _update_cmdline_slot makes of `text`: the slot, 0 for none, -1 for an Err.
+fn _updfx_cmdline_slot(root, text) {
+    _updfx_write(root, "/proc/cmdline", text);
+    var t, v = _update_cmdline_slot();
+    if (is_err_result(t) == 1) { return 0 - 1; }
+    return v;
+}
+
+fn test_update_slots() {
+    println("-- update slot paths (audit F-3, F-4, F-5, F-13) --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-upd-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "upd_fx_mkdir");
+    var dirs = vec_new();
+    vec_push(dirs, "/proc");
+    vec_push(dirs, "/var");
+    vec_push(dirs, "/var/lib");
+    vec_push(dirs, "/var/lib/agnos");
+    vec_push(dirs, "/var/lib/agnos/updates");
+    vec_push(dirs, "/usr");
+    vec_push(dirs, "/usr/bin");
+    var di = 0;
+    while (di < vec_len(dirs)) {
+        var dsb = str_builder_new();
+        str_builder_add_cstr(dsb, root);
+        str_builder_add_cstr(dsb, vec_get(dirs, di));
+        assert_eq(xmkdir(str_data(str_builder_build(dsb)), 0x1C0), 0, "upd_fx_subdir");
+        di = di + 1;
+    }
+    _update_root = root;
+
+    var sf = _update_path("/var/lib/agnos/update-state.json");
+    var image = _update_path("/var/lib/agnos/updates/image.img");
+    var slot_a = _blfx_path(root, "rootfs_a");
+    var slot_b = _blfx_path(root, "rootfs_b");
+    _updfx_tool(root, "/usr/bin/argonaut", "#!/bin/sh\nexit 0\n");
+    var efi_tail = "\n  exit 0\nfi\necho \"$*\" > \"$0.log\"\n";
+    var efi_head = "#!/bin/sh\nif [ $# -eq 0 ]; then\n  ";
+    var efi_list = "printf 'BootCurrent: 0003\\nBoot0003* AGNOS-B\\tHD(1)\\nBoot0004* AGNOS-A\\tHD(2)\\n'";
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat3(efi_head, efi_list, efi_tail));
+    file_write_all(image, "NEWIMAGE", 8);
+    file_write_all(slot_a, "OLD-A", 5);
+    file_write_all(slot_b, "OLD-B", 5);
+    var cfg = update_config_new();
+    update_config_set_state_file(cfg, sf);
+    update_config_set_slot_a(cfg, slot_a);
+    update_config_set_slot_b(cfg, slot_b);
+    var man = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
+    vec_push(update_manifest_files(man), update_file_new(image, "00", 8));
+
+    # F-3: a rollback from B must leave the state saying A, with no cmdline slot
+    # for update_get_current_slot to prefer.
+    _updfx_write(root, "/proc/cmdline", "ro quiet\n");
+    var s = update_state_new(SLOT_B, "2026.1.1");
+    update_state_set_pending(s, "2026.1.1");
+    update_state_set_rollback(s, 1);
+    update_state_set_boot_count(s, 3);
+    var sv_t, sv_v = update_save_state(s, sf);
+    assert(is_ok(sv_t) == 1, "upd_fx_state");
+    var rb_t, rb_v = update_rollback(cfg);
+    assert(is_ok(rb_t) == 1, "upd_rollback_ok");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "a") == 1, "upd_rollback_marker");
+    var l_t, l_v = update_load_state(sf);
+    assert(is_ok(l_t) == 1, "upd_rollback_load");
+    assert_eq(update_state_slot(l_v), SLOT_A, "upd_rollback_state_slot");
+    assert_eq(update_state_boot_count(l_v), 0, "upd_rollback_boot_count");
+    assert_eq(update_state_rollback_available(l_v), 0, "upd_rollback_cleared");
+    assert_eq(update_state_pending(l_v), 0, "upd_rollback_pending_cleared");
+    assert(streq(update_state_version(l_v), "2026.1.1") == 1, "upd_rollback_version_kept");
+
+    # F-13: --bootnext got the entry's hex number, not its label.
+    assert(_updfx_holds(root, "/usr/bin/efibootmgr.log", "--bootnext 0004\n") == 1, "upd_bootnext_number");
+
+    # The host has not rebooted, so it still runs B while the state says A. With no
+    # agnos.slot= nothing can tell, so nothing is written: the state's answer would
+    # overwrite B, the running slot.
+    var np_t, np_v = update_apply(cfg, man);
+    assert(is_err_result(np_t) == 1, "upd_apply_no_cmdline_refused");
+    assert(_tmpx_holds(slot_a, "OLD-A") == 1, "upd_apply_no_cmdline_a_intact");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "upd_apply_no_cmdline_b_intact");
+
+    # Rebooted into A: the update goes to B, not to the slot the host runs from.
+    _updfx_write(root, "/proc/cmdline", "ro agnos.slot=a quiet\n");
+    var a_t, a_v = update_apply(cfg, man);
+    assert(is_ok(a_t) == 1, "upd_apply_ok");
+    assert(_tmpx_holds(slot_a, "OLD-A") == 1, "upd_apply_running_slot_intact");
+    assert(_tmpx_holds(slot_b, "NEWIMAGE") == 1, "upd_apply_other_slot_written");
+    file_write_all(slot_b, "OLD-B", 5);
+
+    # And from B, A: the cmdline decides, whatever the state says.
+    _updfx_write(root, "/proc/cmdline", "ro agnos.slot=b quiet\n");
+    var ab_cl_t, ab_cl_v = update_apply(cfg, man);
+    assert(is_ok(ab_cl_t) == 1, "upd_apply_from_b_ok");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "upd_apply_from_b_running_intact");
+    assert(_tmpx_holds(slot_a, "NEWIMAGE") == 1, "upd_apply_from_b_other_written");
+    file_write_all(slot_a, "OLD-A", 5);
+
+    # The state-file fallback: the slot it says, not the default.
+    var fb = update_state_new(SLOT_B, "2026.1.1");
+    var fb_t, fb_v = update_save_state(fb, sf);
+    assert(is_ok(fb_t) == 1, "upd_fb_save");
+    _updfx_write(root, "/proc/cmdline", "ro quiet\n");
+    var g_t, g_v = update_get_current_slot();
+    assert(is_ok(g_t) == 1, "upd_fallback_ok");
+    assert_eq(g_v, SLOT_B, "upd_fallback_state_slot");
+
+    # F-4: a slot that cannot be read is refused, not guessed.
+    _updfx_write(root, "/proc/cmdline", "ro agnos.slot=x\n");
+    var x_t, x_v = update_apply(cfg, man);
+    assert(is_err_result(x_t) == 1, "upd_apply_bad_slot_refused");
+    assert(_tmpx_holds(slot_a, "OLD-A") == 1, "upd_apply_bad_slot_a_intact");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "upd_apply_bad_slot_b_intact");
+
+    # Only a whole agnos.slot= token counts.
+    assert_eq(_updfx_cmdline_slot(root, "ro agnos.slot=b quiet\n"), SLOT_B, "upd_cl_b");
+    assert_eq(_updfx_cmdline_slot(root, "agnos.slot=A"), SLOT_A, "upd_cl_upper_no_newline");
+    assert_eq(_updfx_cmdline_slot(root, "\tagnos.slot=a\n"), SLOT_A, "upd_cl_tab");
+    assert_eq(_updfx_cmdline_slot(root, "xagnos.slot=b quiet\n"), 0, "upd_cl_not_the_key");
+    assert_eq(_updfx_cmdline_slot(root, "ro quiet\n"), 0, "upd_cl_absent");
+    assert_eq(_updfx_cmdline_slot(root, "agnos.slot=banana\n"), 0 - 1, "upd_cl_long_value");
+    assert_eq(_updfx_cmdline_slot(root, "agnos.slot=\n"), 0 - 1, "upd_cl_empty_value");
+    assert_eq(_updfx_cmdline_slot(root, "agnos.slot=a agnos.slot=b\n"), 0 - 1, "upd_cl_conflict");
+    assert_eq(_updfx_cmdline_slot(root, "agnos.slot=b agnos.slot=b\n"), SLOT_B, "upd_cl_repeated");
+    # Tokens split as the kernel splits them.
+    assert_eq(_updfx_cmdline_slot(root, "foo=\"bar agnos.slot=a baz\" ro\n"), 0, "upd_cl_quoted_inside");
+    assert_eq(_updfx_cmdline_slot(root, "foo=\"a b\" agnos.slot=b\n"), SLOT_B, "upd_cl_after_quoted");
+    assert_eq(_updfx_cmdline_slot(root, "foo=\"open agnos.slot=a\n"), 0, "upd_cl_unterminated_quote");
+    assert_eq(_updfx_cmdline_slot(root, "ro -- agnos.slot=a\n"), 0, "upd_cl_after_dashes");
+    assert_eq(_updfx_cmdline_slot(root, "agnos.slot=b -- agnos.slot=a\n"), SLOT_B, "upd_cl_before_dashes");
+    assert_eq(_updfx_cmdline_slot(root, "agnos.slot=\"b\"\n"), 0 - 1, "upd_cl_quoted_value");
+    # Past the 1023 bytes the old read stopped at.
+    var lsb = str_builder_new();
+    var li = 0;
+    while (li < 300) {
+        str_builder_add_cstr(lsb, "param=value ");
+        li = li + 1;
+    }
+    str_builder_add_cstr(lsb, "agnos.slot=b\n");
+    assert_eq(_updfx_cmdline_slot(root, str_data(str_builder_build(lsb))), SLOT_B, "upd_cl_long_line");
+
+    _updfx_write(root, "/proc/cmdline", "ro agnos.slot=a\n");
+
+    # An image outside the staging directory is refused before anything runs.
+    # The file exists, so only that check can stop dd.
+    var elsewhere = _blfx_path(root, "elsewhere.img");
+    assert_eq(file_write_all(elsewhere, "ELSEWHERE", 9), 9, "upd_fx_elsewhere");
+    var outside = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
+    vec_push(update_manifest_files(outside), update_file_new(elsewhere, "00", 9));
+    var st_t, st_v = update_apply(cfg, outside);
+    assert(is_err_result(st_t) == 1, "upd_apply_outside_staging_refused");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "upd_apply_outside_staging_intact");
+    xunlink(elsewhere);
+
+    # F-5: an unsaved state is an Err, and a switch that failed leaves no marker.
+    var bad = update_config_new();
+    update_config_set_state_file(bad, _blfx_path(root, "no/such/state.json"));
+    update_config_set_slot_a(bad, slot_a);
+    update_config_set_slot_b(bad, slot_b);
+    _updfx_rm(root, "/var/lib/agnos/next-slot");
+    _updfx_rm(root, "/usr/bin/efibootmgr.log");
+    var w_t, w_v = update_switch_slot(bad, SLOT_B);
+    assert(is_err_result(w_t) == 1, "upd_switch_save_fail_err");
+    assert_eq(file_exists(_update_path("/var/lib/agnos/next-slot")), 0, "upd_switch_no_marker");
+    assert_eq(file_exists(_update_path("/usr/bin/efibootmgr.log")), 0, "upd_switch_no_bootnext");
+    var ab_t, ab_v = update_apply(bad, man);
+    assert(is_err_result(ab_t) == 1, "upd_apply_save_fail_err");
+
+    # A failed switch leaves an earlier one standing, marker included.
+    var gs_t, gs_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(gs_t) == 1, "upd_good_switch");
+    var bs_t, bs_v = update_switch_slot(bad, SLOT_A);
+    assert(is_err_result(bs_t) == 1, "upd_failed_switch_err");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "b") == 1, "upd_failed_switch_marker_kept");
+    assert(_updfx_holds(root, "/usr/bin/efibootmgr.log", "--bootnext 0003\n") == 1, "upd_failed_switch_firmware_kept");
+
+    # A plain switch keeps the rollback record.
+    var ks = update_state_new(SLOT_A, "2026.1.1");
+    update_state_set_rollback(ks, 1);
+    var ksv_t, ksv_v = update_save_state(ks, sf);
+    var p_t, p_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(p_t) == 1, "upd_switch_ok");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "b") == 1, "upd_switch_marker");
+    assert(_updfx_holds(root, "/usr/bin/efibootmgr.log", "--bootnext 0003\n") == 1, "upd_switch_bootnext");
+    var k_t, k_v = update_load_state(sf);
+    assert_eq(update_state_slot(k_v), SLOT_B, "upd_switch_state_slot");
+    assert_eq(update_state_rollback_available(k_v), 1, "upd_switch_keeps_rollback");
+
+    # No entry for the slot: the switch stands, and --bootnext is not called.
+    _updfx_rm(root, "/usr/bin/efibootmgr.log");
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat3(efi_head, "echo 'BootCurrent: 0003'", efi_tail));
+    var ne_t, ne_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_ok(ne_t) == 1, "upd_no_entry_ok");
+    assert_eq(file_exists(_update_path("/usr/bin/efibootmgr.log")), 0, "upd_no_entry_no_call");
+
+    # A BootNext that cannot follow the switch is cleared, not left pointing back.
+    var clr_list = "printf 'BootNext: 0003\\nBoot0003* AGNOS-B\\tHD(1)\\n'";
+    _updfx_rm(root, "/usr/bin/efibootmgr.log");
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat3(efi_head, clr_list, efi_tail));
+    var cl_t, cl_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_ok(cl_t) == 1, "upd_clear_bootnext_ok");
+    assert(_updfx_holds(root, "/usr/bin/efibootmgr.log", "--delete-bootnext\n") == 1, "upd_clear_bootnext");
+    # The same when --bootnext itself fails.
+    var fail_tail = "\n  exit 0\nfi\necho \"$*\" >> \"$0.log\"\n[ \"$1\" = --bootnext ] && exit 1\nexit 0\n";
+    _updfx_rm(root, "/usr/bin/efibootmgr.log");
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat3(efi_head, clr_list, fail_tail));
+    var fl_t, fl_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(fl_t) == 1, "upd_failed_bootnext_ok");
+    var both = "--bootnext 0003\n--delete-bootnext\n";
+    assert(_updfx_holds(root, "/usr/bin/efibootmgr.log", both) == 1, "upd_failed_bootnext_cleared");
+
+    # efibootmgr failing, as on a host with no EFI, costs nothing either.
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 2\n");
+    var nf_t, nf_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(nf_t) == 1, "upd_no_efi_ok");
+
+    # The entry-list parser.
+    var el = "BootCurrent: 0003\nBootNext: 0009\nBootOrder: 0003,0004\nBoot0001  Plain\n";
+    el = netns_concat2(el, "Boot00AF* AGNOS-A rescue\tHD(9)\nBoot00B0* AGNOS-AB\tHD(8)\n");
+    el = netns_concat2(el, "Boot00C1* AGNOS-A\tHD(1)\nBoot00C2  AGNOS-B\n");
+    assert(streq(_update_efi_bootnum(el, "AGNOS-A"), "00C1") == 1, "upd_efi_exact_label");
+    assert(streq(_update_efi_bootnum(el, "AGNOS-B"), "00C2") == 1, "upd_efi_inactive_no_tab");
+    assert(streq(_update_efi_bootnum(el, "Plain"), "0001") == 1, "upd_efi_plain");
+    assert_eq(_update_efi_bootnum(el, "AGNOS-C"), 0, "upd_efi_missing");
+    assert_eq(_update_efi_bootnum("", "AGNOS-A"), 0, "upd_efi_empty");
+    assert_eq(_update_efi_bootnum("BootXYZW* AGNOS-A\n", "AGNOS-A"), 0, "upd_efi_not_hex");
+    assert_eq(_update_efi_bootnum("Boot0003*AGNOS-A\n", "AGNOS-A"), 0, "upd_efi_no_space");
+
+    _update_root = 0;
+    _updfx_rm(root, "/proc/cmdline");
+    _updfx_rm(root, "/var/lib/agnos/update-state.json");
+    _updfx_rm(root, "/var/lib/agnos/next-slot");
+    _updfx_rm(root, "/var/lib/agnos/updates/image.img");
+    _updfx_rm(root, "/usr/bin/argonaut");
+    _updfx_rm(root, "/usr/bin/efibootmgr");
+    _updfx_rm(root, "/usr/bin/efibootmgr.log");
+    xunlink(slot_a);
+    xunlink(slot_b);
+    while (di > 0) {
+        di = di - 1;
+        var usb = str_builder_new();
+        str_builder_add_cstr(usb, root);
+        str_builder_add_cstr(usb, vec_get(dirs, di));
+        assert_eq(xrmdir(str_data(str_builder_build(usb))), 0, "upd_fx_rmdir");
+    }
+    assert_eq(xrmdir(root), 0, "upd_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# netns: every setup step is checked and undone (audit F-10)
+# ================================================================
+
+fn _nsfx_log_has(log, text) {
+    var buf = alloc(4096);
+    var n = file_read_all(log, buf, 4095);
+    if (n < 0) { return 0; }
+    store8(buf + n, 0);
+    return strstr(buf, text) >= 0;
+}
+
+fn test_netns_setup() {
+    println("-- netns setup steps (audit F-10) --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-ip-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "ns_fx_mkdir");
+    var stub = _blfx_path(root, "ip");
+    var log = _blfx_path(root, "ip.log");
+    _netns_ip_path = stub;
+    var cfg = netns_config_new("agent-1", "10.0.0.2", "10.0.0.1", 24, 1);
+
+    # Fail each configuration step in turn: no handle, and the create is undone.
+    var steps = vec_new();
+    vec_push(steps, "\"addr add 10.0.0.1/24 dev \"*");
+    vec_push(steps, "*\"ip addr add 10.0.0.2/24 dev \"*");
+    vec_push(steps, "\"link set veth-agent-1-h up\"");
+    vec_push(steps, "*\"ip link set veth-agent-1-a up\"");
+    vec_push(steps, "*\"ip link set lo up\"");
+    vec_push(steps, "*\"ip route add default via \"*");
+    var i = 0;
+    while (i < vec_len(steps)) {
+        var sb = str_builder_new();
+        str_builder_add_cstr(sb, "#!/bin/sh\necho \"$*\" >> \"$0.log\"\ncase \"$*\" in\n");
+        str_builder_add_cstr(sb, vec_get(steps, i));
+        str_builder_add_cstr(sb, ") exit 1;;\nesac\nexit 0\n");
+        _updfx_tool(root, "/ip", str_data(str_builder_build(sb)));
+        xunlink(log);
+        var f_t, f_v = netns_create_agent_netns(cfg);
+        assert(is_err_result(f_t) == 1, "ns_step_err");
+        # Reached only past step 3, so this is the step under test failing.
+        assert(_nsfx_log_has(log, "link delete") == 1, "ns_step_veth_undone");
+        assert(_nsfx_log_has(log, "netns delete") == 1, "ns_step_ns_undone");
+        i = i + 1;
+    }
+
+    # All steps pass: a handle, and nothing undone.
+    _updfx_tool(root, "/ip", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
+    xunlink(log);
+    var o_t, o_v = netns_create_agent_netns(cfg);
+    assert(is_ok(o_t) == 1, "ns_ok");
+    assert(_nsfx_log_has(log, "route add default via 10.0.0.1") == 1, "ns_ok_reached_route");
+    assert_eq(_nsfx_log_has(log, "delete"), 0, "ns_ok_nothing_undone");
+
+    _netns_ip_path = 0;
+    xunlink(stub);
+    xunlink(log);
+    assert_eq(xrmdir(root), 0, "ns_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# run_capture reports how the tool ended (audit F-11)
+# ================================================================
+
+fn _capfx(script) {
+    var args = vec_new();
+    vec_push(args, "/bin/sh");
+    vec_push(args, "-c");
+    vec_push(args, script);
+    return args;
+}
+
+fn test_run_capture_status() {
+    println("-- run_capture exit status (audit F-11) --");
+    var buf = alloc(64);
+    var a_t, a_v = agnodrm_run_capture(_capfx("printf hi"), buf, 63, "failed");
+    assert(is_ok(a_t) == 1, "cap_ok");
+    assert_eq(a_v, 2, "cap_bytes");
+    assert(memeq(buf, "hi", 2) == 1, "cap_output");
+    var b_t, b_v = agnodrm_run_capture(_capfx("printf partial; exit 1"), buf, 63, "failed");
+    assert(is_err_result(b_t) == 1, "cap_nonzero_err");
+    var c_t, c_v = agnodrm_run_capture(_capfx("kill -9 $$"), buf, 63, "failed");
+    assert(is_err_result(c_t) == 1, "cap_signal_err");
+    var missing = vec_new();
+    vec_push(missing, "/no/such/tool");
+    var d_t, d_v = agnodrm_run_capture(missing, buf, 63, "failed");
+    assert(is_err_result(d_t) == 1, "cap_missing_tool_err");
+
+    # A full buffer closes the pipe, and the tool dies of SIGPIPE: that is truncation,
+    # which the caller checks by bytes_read, not a tool failure.
+    var e_t, e_v = agnodrm_run_capture(_capfx("exec yes x"), buf, 63, "failed");
+    assert(is_ok(e_t) == 1, "cap_full_buffer_ok");
+    assert_eq(e_v, 63, "cap_full_buffer_bytes");
+    # With no buffer at all there is no truncation to report, so a failure still shows.
+    var z_t, z_v = agnodrm_run_capture(_capfx("exit 1"), buf, 0, "failed");
+    assert(is_err_result(z_t) == 1, "cap_zero_buffer_err");
+
+    # bootctl output that does not fit is refused, never parsed cut or swapped for
+    # the entries directories.
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-cap-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "cap_fx_mkdir");
+    var stub = _blfx_path(root, "tool");
+    _bootloader_bootctl = stub;
+    var arr = alloc(16 * 8);
+    _updfx_tool(root, "/tool", "#!/bin/sh\nexec yes '      options: root=/dev/sda'\n");
+    var f_t, f_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_err_result(f_t) == 1, "cap_bootctl_overflow_refused");
+    # bootctl failing, with a partial listing, is not parsed either.
+    _updfx_tool(root, "/tool", "#!/bin/sh\necho '  id: partial.conf'\nexit 1\n");
+    var g_t, g_v = bootloader_list_boot_entries(arr, 16);
+    var seen = 0;
+    if (is_ok(g_t) == 1) {
+        var gi = 0;
+        while (gi < g_v) {
+            if (streq(bootloader_entry_id(load64(arr + gi * 8)), "partial.conf") == 1) { seen = 1; }
+            gi = gi + 1;
+        }
+    }
+    assert_eq(seen, 0, "cap_bootctl_failed_not_parsed");
+    _bootloader_bootctl = 0;
+
+    # journald_query keeps what fits when journalctl has more to say.
+    _journald_tool = stub;
+    var f = journald_filter_new();
+    _updfx_tool(root, "/tool", "#!/bin/sh\nexec yes '{\"MESSAGE\":\"hi\",\"PRIORITY\":\"6\"}'\n");
+    var j1_t, j1_v = journald_query(f);
+    assert(is_ok(j1_t) == 1, "jq_full_buffer_ok");
+    assert(vec_len(j1_v) > 0, "jq_full_buffer_entries");
+    # Exit 1 is bad input without --grep, and no match with it.
+    _updfx_tool(root, "/tool", "#!/bin/sh\nexit 1\n");
+    var j2_t, j2_v = journald_query(f);
+    assert(is_err_result(j2_t) == 1, "jq_exit1_err");
+    var fg = journald_filter_new();
+    journald_filter_set_grep(fg, str_from("nomatch"));
+    var j3_t, j3_v = journald_query(fg);
+    assert(is_ok(j3_t) == 1, "jq_grep_no_match_ok");
+    assert_eq(vec_len(j3_v), 0, "jq_grep_no_match_empty");
+    _updfx_tool(root, "/tool", "#!/bin/sh\nexit 2\n");
+    var j4_t, j4_v = journald_query(fg);
+    assert(is_err_result(j4_t) == 1, "jq_grep_exit2_err");
+    _updfx_tool(root, "/tool", "#!/bin/sh\nkill -9 $$\n");
+    var j5_t, j5_v = journald_query(f);
+    assert(is_err_result(j5_t) == 1, "jq_signal_err");
+    _journald_tool = "/no/such/journalctl";
+    var j6_t, j6_v = journald_query(f);
+    assert(is_err_result(j6_t) == 1, "jq_missing_tool_err");
+    _journald_tool = 0;
+
+    xunlink(stub);
+    assert_eq(xrmdir(root), 0, "cap_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# journal datagrams: a newline cannot forge a field (audit F-9)
+# ================================================================
+
+# The field names in a datagram, by the protocol's rules, or -1 if it is malformed.
+fn _jfx_keys(payload) {
+    var p = str_data(payload);
+    var n = str_len(payload);
+    var keys = vec_new();
+    var pos = 0;
+    while (pos < n) {
+        var ks = pos;
+        while (pos < n) {
+            var c = load8(p + pos);
+            if (c == 10) { break; }
+            if (c == 61) { break; }
+            pos = pos + 1;
+        }
+        if (pos >= n) { return 0 - 1; }
+        var klen = pos - ks;
+        var name = alloc(klen + 1);
+        memcpy(name, p + ks, klen);
+        store8(name + klen, 0);
+        vec_push(keys, name);
+        if (load8(p + pos) == 61) {
+            while (pos < n) {
+                if (load8(p + pos) == 10) { break; }
+                pos = pos + 1;
+            }
+            pos = pos + 1;
+        } else {
+            pos = pos + 1;
+            if (pos + 8 > n) { return 0 - 1; }
+            var vlen = load64(p + pos);
+            pos = pos + 8 + vlen;
+            if (pos >= n) { return 0 - 1; }
+            if (load8(p + pos) != 10) { return 0 - 1; }
+            pos = pos + 1;
+        }
+    }
+    return keys;
+}
+
+fn test_journald_payload() {
+    println("-- journal datagrams (audit F-9) --");
+    var sb = str_builder_new();
+    _journald_add_base_fields(sb, "hello", 6, "agnodrm");
+    var plain = str_builder_build(sb);
+    assert(streq(str_data(plain), "PRIORITY=6\nMESSAGE=hello\nSYSLOG_IDENTIFIER=agnodrm\n") == 1, "jp_plain");
+
+    # A forged field stays inside MESSAGE, and the protocol reads three fields.
+    var sb2 = str_builder_new();
+    _journald_add_base_fields(sb2, "x\nPRIORITY=0\nSYSLOG_IDENTIFIER=sshd", 6, "agnodrm");
+    var forged = str_builder_build(sb2);
+    var keys = _jfx_keys(forged);
+    assert(keys != 0 - 1, "jp_forged_wellformed");
+    assert_eq(vec_len(keys), 3, "jp_forged_three_fields");
+    assert(streq(vec_get(keys, 0), "PRIORITY") == 1, "jp_forged_k0");
+    assert(streq(vec_get(keys, 1), "MESSAGE") == 1, "jp_forged_k1");
+    assert(streq(vec_get(keys, 2), "SYSLOG_IDENTIFIER") == 1, "jp_forged_k2");
+
+    # The binary form's bytes: KEY\n, a little-endian u64, the value, \n.
+    var sb3 = str_builder_new();
+    _journald_add_field(sb3, "K", "a\nb");
+    var bin = str_builder_build(sb3);
+    assert_eq(str_len(bin), 2 + 8 + 3 + 1, "jp_bin_len");
+    assert_eq(load8(str_data(bin) + 1), 10, "jp_bin_key_end");
+    assert_eq(load64(str_data(bin) + 2), 3, "jp_bin_size");
+    assert(memeq(str_data(bin) + 10, "a\nb\n", 4) == 1, "jp_bin_value");
+
+    # Field names the journal accepts, and no others.
+    assert_eq(_journald_key_valid("CODE_FILE"), 1, "jk_ok");
+    assert_eq(_journald_key_valid("A1_2"), 1, "jk_digits");
+    assert_eq(_journald_key_valid("CODE=X"), 0, "jk_equals");
+    assert_eq(_journald_key_valid(""), 0, "jk_empty");
+    assert_eq(_journald_key_valid(0), 0, "jk_null");
+    assert_eq(_journald_key_valid("A\nB"), 0, "jk_newline");
+    assert_eq(_journald_key_valid("lower"), 0, "jk_lower");
+    assert_eq(_journald_key_valid("_PID"), 0, "jk_trusted");
+    assert_eq(_journald_key_valid("9X"), 0, "jk_digit_first");
+    var klong = alloc(66);
+    memset(klong, 65, 65);
+    store8(klong + 65, 0);
+    assert_eq(_journald_key_valid(klong), 0, "jk_too_long");
+    store8(klong + 64, 0);
+    assert_eq(_journald_key_valid(klong), 1, "jk_max_len");
+
+    # journald_send_fields drops a name the journal would not accept, with its value.
+    var fkeys = vec_new();
+    var fvals = vec_new();
+    vec_push(fkeys, "GOOD_KEY");
+    vec_push(fvals, "kept");
+    vec_push(fkeys, "CODE=X");
+    vec_push(fvals, "a\nPRIORITY=0");
+    vec_push(fkeys, "");
+    vec_push(fvals, "PRIORITY=0\nB");
+    vec_push(fkeys, "NULL_VALUE");
+    vec_push(fvals, 0);
+    var sbf = str_builder_new();
+    _journald_add_base_fields(sbf, "m", 6, "agnodrm");
+    _journald_add_extra_fields(sbf, fkeys, fvals);
+    var fkv = _jfx_keys(str_builder_build(sbf));
+    assert(fkv != 0 - 1, "jp_fields_wellformed");
+    assert_eq(vec_len(fkv), 4, "jp_fields_count");
+    assert(streq(vec_get(fkv, 3), "GOOD_KEY") == 1, "jp_fields_kept");
+
+    # The identifier and extra-field values take the same path.
+    var sb4 = str_builder_new();
+    _journald_add_base_fields(sb4, "m", 6, "id\nPRIORITY=0");
+    _journald_add_field(sb4, "EXTRA", "v\nMESSAGE=forged");
+    var keys2 = _jfx_keys(str_builder_build(sb4));
+    assert_eq(vec_len(keys2), 4, "jp_other_fields");
+    return 0;
+}
+
 # ================================================================
 # temp files refuse a planted name (audit F-1)
 # ================================================================
@@ -677,14 +1341,6 @@ fn _tmpx_name(base, ahead) {
     str_builder_add_cstr(sb, ".");
     str_builder_add_int(sb, _agnodrm_tmp_ctr + ahead);
     return str_data(str_builder_build(sb));
-}
-
-fn _tmpx_holds(path, text) {
-    var buf = alloc(64);
-    var n = file_read_all(path, buf, 63);
-    if (n != strlen(text)) { return 0; }
-    store8(buf + n, 0);
-    return streq(buf, text);
 }
 
 fn test_tmp_exclusive() {
@@ -809,6 +1465,11 @@ fn main() {
     test_bootctl_parse();
     test_fd_hygiene();
     test_tmp_exclusive();
+    test_update_slots();
+    test_fuse_mount_table();
+    test_netns_setup();
+    test_run_capture_status();
+    test_journald_payload();
     test_fuse();
     test_udev();
     test_drm();

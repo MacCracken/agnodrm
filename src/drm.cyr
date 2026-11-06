@@ -176,8 +176,6 @@ fn drm_list_devices(result_arr, max_cards): i64 {
     if (fd < 0) {
         return drm_err_not_supported("DRM (/dev/dri not found)");
     }
-    # Closed explicitly on every return, not with `defer`: cyrius skips a defer
-    # block when the fn returns a value-form Result (see src/error.cyr).
 
     # Read directory entries
     var buf = alloc(4096);

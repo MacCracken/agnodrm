@@ -25,19 +25,21 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
 
-## Open findings from the 1.7.0 closeout (opened 2026-11-05)
+## Moving the cyrius pin to 6.7.18 ✅ (done at 1.7.1, 2026-11-05)
 
-From the independent code review; details in [`docs/audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md).
-None is fixed. In priority order:
+- [x] `./lib/` rebuilt clean (40 files, byte-identical to the 6.7.18 snapshot) and `cyrius.lock` regenerated.
+- [x] `dist/` regenerated; sidecars unchanged. Floor re-measured: 6.6.7.
+- [x] Audit F-2 to F-14 closed; see [`docs/audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md).
 
-- [ ] **F-3 (HIGH): `update_rollback` undoes its own switch.** It can make the next `update_apply` target the
-      running slot.
-- [ ] **F-4 (MEDIUM): `update_apply` guesses the live slot** when detection fails. It should fail closed.
-- [ ] **F-5 (MEDIUM): `update_save_state`'s Result is dropped** at three sites.
-- [ ] **F-6 (MEDIUM): the bootctl parser can hide an `options` continuation** from the cmdline validator.
-- [ ] **F-7 (MEDIUM): `/proc/mounts` is cut at 8 KiB.**
-- [ ] **F-8 – F-14 (LOW).** F-11 needs the floor at ≥ 6.6.7; F-14 changes a runtime identifier. F-2 clears with a
-      pin at ≥ 6.7.15.
+Left open:
+
+- [ ] **Emit `agnos.slot=` from the boot entries.** `update_apply` refuses without it, and nothing in the workspace
+      sets it. This lands in the boot stack, not here.
+- [ ] **Find what the 6.7.x compiler changed for `memeq_16`** (+1.9 ns on identical source, not placement).
+- [ ] **`bench_all.bcyr` measures code placement:** `strlen_16ch` swings 11 → 15 ns on layout alone, and
+      `parse_subsystem` 41 → 46 ns. A release can read as a regression with no code change.
+- [ ] **`update_get_current_slot` still guesses.** Its callers should learn to tell a guess from an answer, at a
+      future API change.
 
 ## Moving the cyrius pin to 6.7.9 ✅ (done at 1.7.0, 2026-11-05)
 

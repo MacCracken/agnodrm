@@ -62,11 +62,26 @@ fn agnodrm_cstr_starts_with(str, prefix): i64 {
 }
 
 # Run a subprocess (cstr argv vec) and capture stdout into a caller buffer.
-# Returns Ok(bytes_read) or Err(errmsg) on exec failure. `errmsg` is the
-# per-tool diagnostic. Shared by dmverity/luks/tpm `*_run_capture`.
+# Returns Ok(bytes_read), or Err(errmsg) unless the tool ran and exited 0: a failed
+# tool must not read as a tool that said nothing, and output from one that failed
+# may be partial. `errmsg` is the per-tool diagnostic. status[0] is the exit code,
+# 127 if execve failed, or negative if the end was never observed; exec_capture_status
+# is why the consumer floor is 6.6.7.
+#
+# A full buffer is the exception. The reader stops there and closes the pipe, so a
+# tool with more to say dies of SIGPIPE, which says nothing about the tool. That comes
+# back as Ok(buflen), and bytes_read >= buflen is how a caller sees truncation: the
+# bootctl path refuses a cut list on it, and an Err here would skip that check.
 fn agnodrm_run_capture(args, buf, buflen, errmsg): i64 {
-    var n = exec_capture(args, buf, buflen);
+    var status = alloc(16);
+    var n = exec_capture_status(args, buf, buflen, status);
     if (n < 0) {
+        return drm_err_unknown(errmsg);
+    }
+    if (buflen > 0) {
+        if (n >= buflen) { return Ok(n); }
+    }
+    if (load64(status) != 0) {
         return drm_err_unknown(errmsg);
     }
     return Ok(n);

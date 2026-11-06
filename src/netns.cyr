@@ -163,7 +163,7 @@ fn netns_generate_agent_ips(agent_name): i64 {
     memcpy(agent_ip, prefix, 7);
 
     # Convert third octet to string
-    var tbuf = alloc(4);
+    var tbuf = alloc(24);  # 24, not a digit count: see agnodrm_tmp_create
     var tlen = fmt_int_buf(third, tbuf);
 
     memcpy(host_ip + 7, tbuf, tlen);
@@ -212,9 +212,8 @@ fn netns_validate_config(config): i64 {
 
     var plen = netns_config_prefix_len(config);
     # `< 1` (not `== 0`): a negative prefix_len passed both old checks, and
-    # netns_create_agent_netns formats it with fmt_int_buf into an alloc(4)
-    # scratch — a large negative value needs far more than 3 chars and wrote
-    # past the end.
+    # netns_create_agent_netns formatted it into a 4-byte scratch, which a large
+    # negative value overran.
     if (plen < 1) { return drm_err_invalid_argument("invalid prefix length: < 1"); }
     if (plen > 32) { return drm_err_invalid_argument("invalid prefix length: > 32"); }
 
@@ -249,11 +248,17 @@ fn netns_truncate_veth(base): i64 {
 # cmd + 2 args and passed the whole argv array as a single argument, so
 # `ip netns add <name>` never reached `ip`; execve also needs an absolute
 # path, not a bare "ip".)
+#
+# _netns_ip_path is a test seam, 0 outside tests/tcyr: a stub to run in place of
+# /usr/sbin/ip, so a test can make a chosen step fail. Nothing but a test sets it.
+var _netns_ip_path = 0;
+
 fn netns_run_ip(args): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("network namespaces (ip command)");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    if (_netns_ip_path != 0) { vec_set(args, 0, _netns_ip_path); }
     var rc = exec_vec(args);
     if (rc != 0) { return drm_err_io(0, "ip command failed"); }
     return Ok(0);
@@ -282,6 +287,31 @@ fn netns_concat3(a, b, c): i64 {
 # ================================================================
 # Create agent network namespace
 # ================================================================
+
+# Remove what netns_create_agent_netns made: the host veth, whose peer goes with it,
+# then the namespace. Best effort: this runs after a failure, whose Err is returned.
+fn _netns_undo_create(veth_host, ns_name): i64 {
+    var cl1 = vec_new();
+    vec_push(cl1, "/usr/sbin/ip"); vec_push(cl1, "link");
+    vec_push(cl1, "delete"); vec_push(cl1, veth_host);
+    netns_run_ip(cl1);
+    var cl2 = vec_new();
+    vec_push(cl2, "/usr/sbin/ip"); vec_push(cl2, "netns");
+    vec_push(cl2, "delete"); vec_push(cl2, ns_name);
+    netns_run_ip(cl2);
+    return 0;
+}
+
+# Run one configuration step. A step that fails undoes the create, so a caller never
+# holds a handle to a namespace with no address, no route or a link left down.
+fn _netns_setup_step(args, veth_host, ns_name): i64 {
+    var res_t, res_v = netns_run_ip(args);
+    if (is_err_result(res_t) == 1) {
+        _netns_undo_create(veth_host, ns_name);
+        return Err(res_v);
+    }
+    return Ok(0);
+}
 
 # Create a network namespace for an agent with veth pair and IP configuration.
 # Returns Result: Ok(handle_ptr) or Err.
@@ -326,20 +356,12 @@ fn netns_create_agent_netns(config): i64 {
     vec_push(args3, veth_agent); vec_push(args3, "netns"); vec_push(args3, ns_name);
     var res3_t, res3_v = netns_run_ip(args3);
     if (is_err_result(res3_t) == 1) {
-        # Cleanup
-        var cl1 = vec_new();
-        vec_push(cl1, "/usr/sbin/ip"); vec_push(cl1, "link");
-        vec_push(cl1, "delete"); vec_push(cl1, veth_host);
-        netns_run_ip(cl1);
-        var cl2 = vec_new();
-        vec_push(cl2, "/usr/sbin/ip"); vec_push(cl2, "netns");
-        vec_push(cl2, "delete"); vec_push(cl2, ns_name);
-        netns_run_ip(cl2);
+        _netns_undo_create(veth_host, ns_name);
         return Err(res3_v);
     }
 
     # 4. Assign IPs
-    var plen_str = alloc(4);
+    var plen_str = alloc(24);  # 24, not a digit count: see agnodrm_tmp_create
     var plen_slen = fmt_int_buf(netns_config_prefix_len(config), plen_str);
     store8(plen_str + plen_slen, 0);
 
@@ -350,7 +372,8 @@ fn netns_create_agent_netns(config): i64 {
     var args4 = vec_new();
     vec_push(args4, "/usr/sbin/ip"); vec_push(args4, "addr"); vec_push(args4, "add");
     vec_push(args4, host_cidr); vec_push(args4, "dev"); vec_push(args4, veth_host);
-    netns_run_ip(args4);
+    var res4_t, res4_v = _netns_setup_step(args4, veth_host, ns_name);
+    if (is_err_result(res4_t) == 1) { return Err(res4_v); }
 
     # ip netns exec <ns> ip addr add <agent_cidr> dev <agent>
     # (the inner `ip` is PATH-resolved by `ip netns exec`, so it stays bare)
@@ -358,34 +381,39 @@ fn netns_create_agent_netns(config): i64 {
     vec_push(args5, "/usr/sbin/ip"); vec_push(args5, "netns"); vec_push(args5, "exec"); vec_push(args5, ns_name);
     vec_push(args5, "ip"); vec_push(args5, "addr"); vec_push(args5, "add"); vec_push(args5, agent_cidr);
     vec_push(args5, "dev"); vec_push(args5, veth_agent);
-    netns_run_ip(args5);
+    var res5_t, res5_v = _netns_setup_step(args5, veth_host, ns_name);
+    if (is_err_result(res5_t) == 1) { return Err(res5_v); }
 
     # 5. Bring interfaces up
     var args6 = vec_new();
     vec_push(args6, "/usr/sbin/ip"); vec_push(args6, "link"); vec_push(args6, "set");
     vec_push(args6, veth_host); vec_push(args6, "up");
-    netns_run_ip(args6);
+    var res6_t, res6_v = _netns_setup_step(args6, veth_host, ns_name);
+    if (is_err_result(res6_t) == 1) { return Err(res6_v); }
 
     # Bring up agent side in namespace
     var args7 = vec_new();
     vec_push(args7, "/usr/sbin/ip"); vec_push(args7, "netns"); vec_push(args7, "exec"); vec_push(args7, ns_name);
     vec_push(args7, "ip"); vec_push(args7, "link"); vec_push(args7, "set"); vec_push(args7, veth_agent);
     vec_push(args7, "up");
-    netns_run_ip(args7);
+    var res7_t, res7_v = _netns_setup_step(args7, veth_host, ns_name);
+    if (is_err_result(res7_t) == 1) { return Err(res7_v); }
 
     # Bring up loopback in namespace
     var args8 = vec_new();
     vec_push(args8, "/usr/sbin/ip"); vec_push(args8, "netns"); vec_push(args8, "exec"); vec_push(args8, ns_name);
     vec_push(args8, "ip"); vec_push(args8, "link"); vec_push(args8, "set"); vec_push(args8, "lo");
     vec_push(args8, "up");
-    netns_run_ip(args8);
+    var res8_t, res8_v = _netns_setup_step(args8, veth_host, ns_name);
+    if (is_err_result(res8_t) == 1) { return Err(res8_v); }
 
     # Set default route inside namespace
     var args9 = vec_new();
     vec_push(args9, "/usr/sbin/ip"); vec_push(args9, "netns"); vec_push(args9, "exec"); vec_push(args9, ns_name);
     vec_push(args9, "ip"); vec_push(args9, "route"); vec_push(args9, "add"); vec_push(args9, "default");
     vec_push(args9, "via"); vec_push(args9, netns_config_host_ip(config));
-    netns_run_ip(args9);
+    var res9_t, res9_v = _netns_setup_step(args9, veth_host, ns_name);
+    if (is_err_result(res9_t) == 1) { return Err(res9_v); }
 
     # Build netns path
     var netns_path = netns_concat2("/var/run/netns/", ns_name);
@@ -613,9 +641,6 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     vec_push(nft_args, ns_name); vec_push(nft_args, "nft"); vec_push(nft_args, "-f");
     vec_push(nft_args, tmp_path);
 
-    # Unlinked explicitly after the run, not with `defer`: cyrius skips a defer
-    # block when the fn returns a value-form Result (see src/error.cyr), so the
-    # old `defer { sys_unlink(tmp_path); }` left every temp file behind.
     var run_t, run_v = netns_run_ip(nft_args);
     sys_unlink(tmp_path);
     if (is_err_result(run_t) == 1) { return Err(run_v); }

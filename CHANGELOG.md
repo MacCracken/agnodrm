@@ -7,6 +7,155 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] — 2026-11-05
+
+**Every open audit finding is closed, and the cyrius pin moves 6.7.9 → 6.7.18.** F-3 to F-14 are repaired, and
+F-2 clears with the pin. `./lib/`, `dist/` and `cyrius.lock` are refreshed. No public API change: 317 fns.
+
+⚠ **`update_apply` now refuses unless the kernel cmdline carries `agnos.slot=`.** Nothing in the workspace emits
+that token yet, so any boot entry without it can no longer take an update. Add it before relying on
+`update_apply`. Nothing in the workspace calls `update_apply` today. See `Fixed`.
+
+⚠ **Consumer floor rises 6.6.6 → 6.6.7**, for `exec_capture_status`. On 6.6.6 both bundles fail to build. `defer`
+is fixed at 6.6.7, so the no-`defer` rule is retired; existing code keeps its explicit releases. stiva (pin 6.6.10)
+is above the floor.
+
+⚠ **Other behaviour changes:** see `Changed`. In short, several calls that returned `Ok` now return `Err`, and
+`journald_info` and its siblings log as `agnodrm`, not `agnosys`.
+
+### Fixed
+
+- **F-3 (HIGH): `update_rollback` undid its own switch.** It saved a stale snapshot over `update_switch_slot`'s
+  state, so the state kept the old slot. The switch and the clearing of the pending and rollback records are now
+  one write.
+- **F-4 (MEDIUM): `update_apply` could overwrite the running slot.** It guessed slot A when slot detection failed,
+  and trusted the state file. That file records where the next boot goes, so it is wrong between a switch and the
+  reboot and after a firmware fallback. `update_apply` now acts only on `agnos.slot=` and refuses otherwise.
+  - Tokens split as the kernel splits them: blanks in double quotes do not end one, and `--` ends the kernel's
+    parameters.
+  - `agnos.slot=banana` read as slot B, because only the first character was read; it is now an `Err`, as are two
+    tokens that disagree. `xagnos.slot=b` is not the key.
+  - A token past byte 1023 of the cmdline was missed.
+- **F-5 (MEDIUM): failed state saves were ignored** in `update_apply`, `update_switch_slot` and `update_rollback`;
+  each now returns the `Err`. A switch that cannot save restores the marker to what it said and leaves the firmware
+  alone, so an `Err` means nothing changed.
+- **F-6 (MEDIUM, since 1.6.2): a bootctl continuation could hide kernel parameters from the validator.** A line
+  whose first word ended in `:` read as a label, and a line of blanks ended the block, so `init=/bin/sh` could
+  vanish from `options`. A continuation is now recognised by its indent past the label colon column, never by its
+  text.
+- **F-7 (MEDIUM): `/proc/mounts` was cut at 8 KiB, about 90 mounts,** so a FUSE mount past the cut read as not
+  mounted. `fuse_get_status` and `fuse_list_mounts` also stopped at 128 FUSE mounts. The table is now read to EOF in
+  a growing buffer, with no mount cap. Past 16 MiB it is an `Err`, and so is a read error.
+- **F-8 (LOW): `journald_query` wrote one byte past its buffer** on a full 128 KiB capture. Confirmed gone under
+  the poison allocator.
+- **F-9 (LOW): a newline in a journal message or value forged fields.** A value holding one now uses the protocol's
+  length-prefixed form, so multi-line messages stay whole. Verified against real journald: a forged `PRIORITY=0`
+  stayed inside `MESSAGE`. `journald_send_fields` skips a field name the journal would not accept.
+- **F-10 (LOW): `netns_create_agent_netns` ignored failures in steps 4-9** and returned a handle to a half-built
+  namespace. Each step is now checked, and a failure undoes the veth pair and the namespace.
+- **F-11 (LOW): `agnodrm_run_capture` discarded the exit status,** so a failed or missing tool read as a tool that
+  printed nothing, and `bootloader_list_boot_entries` could not reach its fallback. `journald_query` had the same
+  gap. Both now read the status. A full buffer is the exception: the reader closes the pipe, so the tool dies of
+  SIGPIPE, and that is reported as `Ok(buflen)` for the caller's truncation check.
+- **F-12 (LOW):** a 4-byte scratch given to `fmt_int_buf`, which writes 24 bytes below cyrius 6.6.18.
+- **F-13 (LOW): `efibootmgr --bootnext AGNOS-A` could never work.** It takes a hex boot number, and its failure was
+  ignored. The number now comes from the entry list, by exact label. A BootNext that cannot follow a switch is
+  cleared, so a stale one cannot send the next boot to the wrong slot. This stays best effort.
+- **F-14 (LOW):** the runtime journal identifier was still `agnosys`.
+- **F-2 (LOW):** cleared by the pin. `lib/process.cyr` has a same-fd guard at 6.7.15.
+
+### Changed
+
+- **cyrius pin 6.7.9 → 6.7.18.** No source change was needed. `./lib/` was rebuilt clean: 40 files, byte-identical
+  to the 6.7.18 snapshot. `cyrius.lock` regenerated. Sidecars unchanged: 11 leaves, core 7.
+- ⚠ **Calls that returned `Ok` and now return `Err`:**
+  - `update_apply`: no `agnos.slot=`, an unreadable or conflicting one, or a failed state save.
+  - `update_switch_slot`, `update_rollback`: a failed state save.
+  - `agnodrm_run_capture`: a tool that did not exit 0, unless it filled the buffer.
+  - `udev_list_devices`: a missing `udevadm`, or one that exits non-zero.
+  - `journald_query`: a missing `journalctl`, a signal, or a non-zero exit, except 1 with `--grep`.
+  - `netns_create_agent_netns`: any failed step.
+  - `fuse_parse_proc_mounts`, `fuse_list_mounts`: a read error, or a table past 16 MiB.
+- ⚠ **`update_switch_slot` now orders its work** marker, state, firmware, so `BootNext` is set only after the state
+  saved.
+- ⚠ **`journald_info` and its siblings log as `agnodrm`:** a `journalctl -t agnosys` filter stops matching.
+- ⚠ **`journald_send_fields` drops more field names:** lowercase, `_`-leading, digit-leading, empty or over 64 bytes.
+  journald ignored these anyway.
+- Four private test seams: `_update_root`, `_netns_ip_path`, `_bootloader_bootctl`, `_journald_tool`, all 0 outside
+  `tests/tcyr`. Test fixtures never run a host tool.
+- `test_update_slots`, `test_fuse_mount_table`, `test_netns_setup`, `test_run_capture_status` and
+  `test_journald_payload` added, with new bootctl cases: **298 → 475 assertions**.
+
+### Known issues
+
+- `update_apply` needs `agnos.slot=`; see the note at the top.
+- With `agnos.slot=` set, a rollback then `update_apply` before the reboot writes the slot about to boot. The running
+  slot is safe; the rollback image is not.
+- With `--grep`, a bad regex reads as no entries, because journalctl exits 1 for both.
+- `memeq_16` is 1.9 ns slower on this pin, cause not isolated; see `Performance`.
+- The four committed qemu core dumps remain.
+
+### Performance
+
+40 alternating runs of 1.7.0 (6.7.9) against 1.7.1 (6.7.18), median [min..max] ns:
+
+| Bench | 1.7.0 | 1.7.1 | Reading |
+|---|---|---|---|
+| `strlen_16ch` | 11 [11..12] | 15 [14..15] | Code placement, not the code; see below |
+| `map_get_hit` | 72 [69..73] | 78 [76..82] | Mostly placement; see below |
+| `memeq_16` | 29 [28..29] | 31 [30..32] | **The pin. Compiler-level cause not isolated** |
+| `validate_cmdline_safe` | 930 [546..1942] | 1077 [447..2897] | Noise: the ranges overlap entirely |
+| `starts_with_hit` | 13 [12..13] | 12 [12..12] | −7.7% |
+| `parse_subsystem` | 46 [44..46] | 44 [42..44] | −5.4%, literal placement as in 1.7.0 |
+| `validate_ver_good` | 54 [52..55] | 52 [50..53] | −4.6% |
+| `is_dangerous_token_miss` | 104 [100..105] | 100 [97..105] | −4.3% |
+| `is_dangerous_token_hit` | 111 [106..112] | 107 [102..108] | −3.6% |
+
+The other 9 rows moved by at most 1 ns. No function in these rows changed, and `lib/string.cyr` and
+`lib/hashmap.cyr` are byte-identical on both pins.
+
+- **`strlen_16ch` is code placement.** The final source reads 11.0 ns at 11 of 12 padding sizes ahead of the benches,
+  and 14.6 ns at one, with no logic change. Padding at the top of the file repeats it: 11.4 ns, and 15.0 ns at the
+  same size. The pin alone left it at 11.2 ns; the repairs' code landed the tree on the slow layout.
+- **`map_get_hit` is mostly placement,** and it calls `strlen`. Padding alone moves it 72.8 – 77.1 ns.
+- **`memeq_16` is not placement.** It moved 28.0 → 29.9 ns on 1.7.0's own source with only the pin changed, and
+  stayed at 29.7 – 31.4 ns across 24 layouts. The function's source is unchanged. Comparing the compiled function
+  across toolchains did not reach a conclusion. It is 16 bytes compared in about 2 ns more, and it is not on a hot path
+  here.
+
+In the tracked `bench-history.csv` row, `validate_cmdline_safe` falls 1,213 → 727 ns, which is that bench's noise, and
+`map_get_miss` shows no collision this time.
+
+### Build Metrics
+
+| Target | 1.7.0 | 1.7.1 | Delta |
+|---|---|---|---|
+| x86_64 (DCE) | 28,424 B | **28,384 B** | −40 B |
+| agnos (DCE) | 24,384 B | **24,488 B** | +104 B |
+| aarch64 (DCE) | 270,000 B | **269,960 B** | −40 B |
+
+`dist/agnodrm.cyr` 4,915 → 5,217 lines; `dist/agnodrm-core.cyr` 1,297 → 1,310.
+
+### Verification
+
+- `scripts/audit.sh`: 12/12 clean on the final tree, all three targets warning-free.
+- 475/475 on x86_64, under `qemu-aarch64`, and on cyrius 6.6.7, 6.6.20 and 6.7.9. All 4 fuzz harnesses clean on both
+  architectures, after the parser changes.
+- Floor: a probe holding only the sidecar leaves and calling every public fn builds on x86_64, aarch64 and agnos on
+  6.6.7, 6.6.10, 6.6.20, 6.7.9 and 6.7.18. On 6.6.6 it fails on `exec_capture_status`.
+- Downstream: stiva built and tested against this exact bundle on its 6.6.10 pin: 326/326, the same as its baseline.
+  It calls none of the changed fns.
+- CI's steps replayed in an isolated `$HOME` built only from the 6.7.18 release tarball: every `dist/` file and
+  `cyrius.lock` came out byte-identical.
+- Mutation: each repair was reverted in a scratch copy. All 37 mutants fail the suite, including a survivor found in
+  the staging-path test, which was passing for the wrong reason and was fixed.
+- Independent review, then a re-check of its fixes: it found three HIGH regressions in the first cut of these repairs,
+  all closed before release. See `docs/audit/2026-11-05-audit.md`.
+- Real tools, read-only: `journalctl` for `journald_query` and its exit codes, and one info-level line sent to this
+  host's journal for F-9. `bootctl`, `efibootmgr`, `udevadm`, `ip` and `nft` were not run; those paths used stubs built
+  from their documented or observed output.
+- Not run on a real agnos system.
+
 ## [1.7.0] — 2026-11-05
 
 **Audit F-1 fixed, and the cyrius pin moves 6.6.20 → 6.7.9.** The three predictable temp-file sites now create

@@ -93,14 +93,15 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 
 - `update_atomic_write` / `update_atomic_copy`: write an exclusive temp beside the target (`agnodrm_tmp_create`: `<path>.tmp.<pid>.<ctr>`, 0644), fsync, then rename over `<path>`. There is no directory fsync, so the rename itself is not guaranteed durable across a crash. Concurrent writers to the same path each get their own temp, and the last rename wins.
 - **Temp files are created exclusively (audit F-1, fixed 1.7.0).** Through 1.6.3 these fns and `netns_apply_nftables_ruleset` opened a predictable temp path with `O_CREAT|O_TRUNC`, so a symlink planted there redirected the write and the rename installed the link over the destination. `agnodrm_tmp_create` now uses `file_create_exclusive`, which refuses a name that exists as anything, including a dangling link. A taken name moves to the next counter; after 64 the call fails with `EEXIST` and writes nothing. Exclusivity is the guard, not the name: the counter starts from `getrandom` only so that a restart with the same pid does not walk the same names, and the worst a planted name can do is refuse the write. A crash can leave a temp behind, and it is never reused or cleaned up. The suffix takes up to about 23 bytes, so a target file name over about 232 bytes fails with `ENAMETOOLONG`. None of this makes an untrusted directory safe: anyone who can write there can still replace `<path>` itself. See [`audit/2026-11-05-audit.md`](audit/2026-11-05-audit.md).
+- **`update_apply` trusts only `agnos.slot=` on the kernel cmdline (1.7.1).** The state file records where the next boot goes, so it is wrong between a switch and the reboot and after a firmware fallback, and a wrong answer overwrites the running root. With no token, or an unreadable one, the call refuses. Tokens split as the kernel splits them, and two that disagree are an `Err`. `update_get_current_slot` keeps its fallbacks as a guess for display. A host needs `agnos.slot=` in its boot entries to take updates.
 - Since 1.6.2, `update_atomic_copy` fails when the fsync fails, as `update_atomic_write` always did. Before, it renamed an unflushed file over the target.
 - `update_state_to_json` emitted the `pending` cstring as an integer through 1.6.1, so a pending update exposed a heap address in the JSON. Since 1.6.2 it is a quoted string, or `null`.
 
 ## journald
 
 - Unix datagram socket to /run/systemd/journal/socket.
-- Journal protocol: `KEY=VALUE\n` for single-line, binary length prefix for multi-line.
-- Fields with newline characters in keys are skipped (injection prevention).
+- Journal protocol: `KEY=VALUE\n` for single-line, binary length prefix for multi-line (real since 1.7.1: until then a value's newline ended its field, and the rest parsed as forged fields, audit F-9). `journald_send_fields` skips a field name the journal would not accept.
+- `journald_send_fields` skips field names the journal would not accept, which covers newlines and `=` (injection prevention).
 - No authentication — any process can write to the journal socket.
 - **`journald_query` uses argv-based exec — no shell.** Every filter value (`unit`, `grep`, `since`, `until`, `boot`, `priority`, `lines`) lands in its own `argv[i]` entry via `lib/process.cyr::exec_capture`; journalctl reads the value verbatim, no metacharacter expansion. Consumers passing external input through filter setters are safe from command injection. Audit finding F-1 (HIGH) — fixed in 1.0.1, fuzz coverage at `fuzz/journald_filter.fcyr`.
 
@@ -144,13 +145,7 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 
 ## All modules
 
-- **No `defer` for cleanup in a Result-returning fn.** cyrius 6.6.0–6.6.6 skips a `defer` block
-  when the fn returns a value-form Result. It is fixed at 6.6.7, but the consumer floor is still
-  6.6.6, so the rule stands until the floor rises. Through 1.6.1, agnodrm leaked one fd or socket per call
-  in eight fns (`journald_send` leaked a socket per log line, a slow path to `EMFILE`), and left the
-  nft temp file behind in a ninth. Since 1.6.2 every release is explicit, and
-  `tests/tcyr/test_integration.tcyr` `test_fd_hygiene` counts `/proc/self/fd` around repeated calls.
-  Tracker (closed): `docs/development/issues/archive/2026-09-22-cyrius-defer-skipped-on-result-return.md`.
+- **`defer` and Results.** cyrius 6.6.0–6.6.6 skipped a `defer` block when the fn returned a value-form Result. Through 1.6.1 agnodrm leaked one fd or socket per call in eight fns (`journald_send` leaked a socket per log line, a slow path to `EMFILE`) and left the nft temp file behind in a ninth. Since 1.6.2 every release is explicit. `defer` is fixed at 6.6.7, the consumer floor since 1.7.1. `tests/tcyr/test_integration.tcyr` `test_fd_hygiene` counts `/proc/self/fd` around repeated calls. Tracker (closed): `docs/development/issues/archive/2026-09-22-cyrius-defer-skipped-on-result-return.md`.
 - **No raw syscalls or flag literals** (1.6.2). Every syscall goes through a stdlib per-target
   helper and every open flag / stat offset is a per-target name. Raw values caused 1.6.1's aarch64
   `O_DIRECT`-for-`O_DIRECTORY` bug and 1.6.2's aarch64 `st_uid`-for-`st_mode` bug in
