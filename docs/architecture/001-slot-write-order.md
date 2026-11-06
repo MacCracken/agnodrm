@@ -8,7 +8,9 @@ and a review's injected power cuts found a rollback that booted the bad slot wit
 ## What each write means
 
 - **`BootNext`** outranks everything and is spent by the boot that uses it. Nothing here touches `BootOrder`.
-- **The marker** is what argonaut reads. It is what commits a move.
+- **The marker** is what commits a move. It was written for argonaut to read, but **nothing reads it yet**: at 1.7.3 no
+  repo in the workspace reads `next-slot`, emits `agnos.slot=` or creates the `AGNOS-A` / `AGNOS-B` boot entries. This
+  document is the design that boot stack has to meet, not a description of one. See the roadmap's 1.9.x.
 - **The state file** records what is known: the slot the next boot is meant to reach, the pending image, and whether a
   good slot is behind it.
 
@@ -77,7 +79,8 @@ out: the marker has moved to the good slot, the record stays, and running the ca
 
 - A state file written by 1.7.1's `update_apply` has `rollback_available` set with nothing switched, and reads as a
   trial. Nothing in the workspace has ever run that code.
-- Nothing updates `BootOrder`, so whether a slot stays selected past its one `BootNext` depends on argonaut.
+- Nothing updates `BootOrder`, so whether a slot stays selected past its one `BootNext` depends on a reader of the marker,
+  which does not exist yet.
 - The table assumes `fsync` means what it says on the slot's storage.
 - The test holds the rule, not each line of the order. Going forward, the marker and the firmware can swap without a row
   going bad: `BootNext` only takes the host onto a trial the state already records. It is a model of the boot order, not

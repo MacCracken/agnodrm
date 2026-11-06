@@ -117,6 +117,7 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 - `journald_send_fields` refuses extras that restate `MESSAGE`, `PRIORITY` or `SYSLOG_IDENTIFIER` (audit F-46).
 - **`journald_query` uses argv-based exec — no shell.** Every filter value lands in its own `argv[i]` entry. `--unit`, `--since`, `--until`, `--priority` and `--grep` take a required argument, so the next word is the value whatever it looks like. **`--boot` takes an optional one, so it is passed as one word, `--boot=<value>`.** Through 1.7.1 it was two, and a value that did not parse as a boot id stayed on the command line, where `--vacuum-time=1s` is an option and `_UID=0` a match (audit F-20). Fuzz coverage at `fuzz/journald_filter.fcyr`.
 - `journald_query` reads the whole output or fails, growing its buffer to 32 MiB (audit F-21). It passes `--all`, since journalctl otherwise prints fields over 4096 bytes as null. The reader decodes escapes, byte arrays and repeated fields, so one ESC byte cannot hide a line behind an empty message (audit F-47). It sets no deadline: a hostile `--grep` pattern runs for as long as PCRE2 takes.
+- `journald_query` gives journalctl a deadline: 60 s printing nothing, then as long again to exit, so a `--grep` pattern that never finishes ends as `ETIMEDOUT` rather than a hang. It measures silence, not total time: a pattern that keeps matching slowly fills the 32 MiB bound instead. A slow query on a very large journal can hit it.
 
 ## bootloader
 

@@ -8,7 +8,8 @@
 # the pinned count fails until it is walked.
 #
 # After each cut the firmware model boots the host: BootNext, spent by the boot that uses
-# it, then the marker argonaut reads, then BootOrder, which is slot A. From that one world
+# it, then the marker, then BootOrder, which is slot A. Nothing outside this repo reads the
+# marker yet, so that order is the design, not a measured boot stack. From that one world
 # this asks what the rule in that document promises:
 #
 #   - the boot reached a whole image, one the state can explain;

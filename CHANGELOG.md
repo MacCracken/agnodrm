@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.3] — 2026-11-05
+
+**Quick items off the roadmap, and a plan for what is left.** The power-cut walk and the `sha256sum` fix ship here, with a
+deadline on `journald_query`, aarch64 tests in CI, a release gate on `state.md`, and the four committed core dumps gone. The
+roadmap now holds every open item in one plan, 1.8.x to 1.x.x, with a V2.0 backlog. No API change: 321 public fns, floor
+6.6.10, pin 6.7.18.
+
+⚠ **Behaviour change:** `journald_query` fails with `ETIMEDOUT` if journalctl prints nothing for 60 s and then does not exit
+within another 60. Before, it waited forever. A slow `--grep` over a very large journal can now hit this.
+
+The roadmap review found two things worth knowing. Nothing calls this library: stiva is the only repo with a
+`[deps.agnodrm]`, and its sources name none of the public fns. And the A/B flow has no boot stack: no repo outside this one
+reads the marker, emits `agnos.slot=` or creates the boot entries. See the roadmap's Forward plan.
+
 ### Added
 
 - **`tests/tcyr/test_powercut.tcyr`: a power cut at every durable write of the A/B slot flows.** 1.7.2's last review round
@@ -25,16 +39,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forward, which is safe in the model. This is a model of the boot order, not a power cut.
 - `test_integration`: a real move clears a boot count no trial explains. Only an older or edited state file can hold one,
   so no flow reached that line, and nothing tested it.
+- **A deadline on `journald_query`.** A `--grep` pattern could run for as long as it liked, with the caller blocked behind
+  it. journalctl now gets 60 s printing nothing, then as long again to exit, and the call fails with `ETIMEDOUT`. What it
+  printed first is thrown away. This measures silence, not total time. The process's own deadline is put back, and the new
+  test seam `_journald_deadline_ms` is 0 outside tests. All four mutants are caught, one of them by hanging.
+- **The test files run on aarch64 in CI,** under qemu, with core dumps off. That lane only built before, and 1.6.1's and
+  1.6.2's aarch64-only bugs were found by hand.
+- **A release fails unless the CHANGELOG and `state.md` name its tag.** This is the CI half of the old V1.4.0, and needs no
+  cross-repo tooling. Replayed by hand: a right tag and a `v` prefix pass, and a stale `state.md` or a missing section fail.
 
 ### Changed
 
 - **`_update_cut`, a compile-time seam.** `src/update.cyr` calls it at every durable write, under
   `#define AGNODRM_POWERCUT`, and only the new test sets that and defines the function, so nothing in `src/` or a bundle can
-  stop a flow. Every binary is byte-identical to 1.7.2's: `src/main.cyr` and the API probe, which calls every public fn, on
-  x86_64, aarch64 and agnos. The bundle's text gains the guarded calls, and nothing else changes for a consumer.
+  stop a flow. It adds no bytes to a build: with it in, `src/main.cyr` and the API probe, which calls every public fn, were
+  byte-identical to 1.7.2's on x86_64, aarch64 and agnos.
+- **`test_integration` no longer runs the host's `sha256sum`.** CLAUDE.md forbids it, yet the stub exec'd the real tool, and
+  where that tool failed the suite segfaulted. The new stub is sh builtins alone and reads the file it is given, so hashing
+  the wrong file still gives the wrong digest, and anything but the fixture image comes out one hex digit off the end. Two
+  assertions are new: a damaged image under a correct manifest, which nothing tested, and the right digest from a tool that
+  then failed. The digest check goes from 8 of 11 mutants caught to all 11: a compare stopping at 1 or 63 characters, and a
+  failed tool being ignored, used to pass. A logging script bound over each tool the rule names and this host has, in a
+  private mount namespace, shows neither test file running one.
 - `scripts/audit.sh` gate 7 reads every test file. It had only ever seen one, so its count named the first file alone, and
   its `passed, 0 failed` grep matched if any file passed. A failing file did already fail the gate, through `cyrius test`'s
   exit status, so no failure was hidden.
+
+### Deprecated
+
+- `netns_truncate_veth` now carries `#deprecated`. It was due for removal at 2.0 with nothing warning its callers. The soft
+  removal protocol is in CONTRIBUTING.
+
+### Removed
+
+- The four qemu core dumps committed before 1.1.12, 37 MB. A checkout of this tag does not carry them. Earlier tags and the
+  history still do, so a full clone is no smaller.
+
+### Documentation
+
+- **`docs/development/roadmap.md`: a Forward plan** with 31 open items sized and ordered, from 1.8.x (what this repo can do
+  alone) through 1.9.x (a boot stack), 1.10.x (authenticated updates) and 1.x.x (blocked on someone else), and one V2.0
+  backlog. The old "left open" lists point at it. Closed on review: `map_get_miss`, `defer` and the `#ifplat` migration.
+- `docs/architecture/001-slot-write-order.md` said argonaut reads the marker. Nothing does, and it now says so.
+- `V1.5.x` said network fetch waits on an HTTP client. `lib/http.cyr` exists; it waits on authenticity.
+
+### Performance
+
+- No change. Alternating the 1.7.2 and 1.7.3 bench binaries for 9 rounds, pinned to one core, every row is within ±4.2% and
+  the two ranges overlap on all 22. A first unpinned run read `memeq_16` +50% and `compare_versions` +45% with no code
+  change on either path. That was noise, and the tracked row is a pinned re-run. `ok_create` 3 → 2 ns in that row is rounding.
+
+**Not verified:** the new CI step and release gate were replayed by hand, not run on GitHub. The digest stub has not run
+under dash, which `ubuntu-latest` uses for `/bin/sh`; a difference there would fail loudly, on `upd_apply_ok`.
 
 ## [1.7.2] — 2026-11-05
 

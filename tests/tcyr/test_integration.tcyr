@@ -826,10 +826,23 @@ fn _updfx_rm(root, rel) {
     return xunlink(str_data(str_builder_build(sb)));
 }
 
-# sha256 of "NEWIMAGE", the fixture image's bytes.
+# sha256 of "NEWIMAGE", the fixture image's bytes, and that digest one hex digit off.
 var _UPDFX_SHA = "a1fd16012676b0b9aab1acc3efa9f545365649533f409630ed617d6fd3641b9a";
-# Runs under /bin/sh with the empty env exec_vec passes, so the path is absolute.
-var _UPDFX_SHATOOL = "#!/bin/sh\nexec /usr/bin/sha256sum \"$@\"\n";
+var _UPDFX_SHA_OFF = "a1fd16012676b0b9aab1acc3efa9f545365649533f409630ed617d6fd3641b9b";
+
+# Stands in for sha256sum with sh builtins alone: exec_vec's env is empty, and a test does
+# not run a host tool. It reads the file it is given, so a caller that hashes the wrong
+# file, or none, still gets the wrong digest. Anything but the fixture image comes out one
+# digit off the end, which only a compare of all 64 characters notices.
+fn _updfx_digest_tool() {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "#!/bin/sh\nread -r body < \"$1\"\nd=");
+    str_builder_add_cstr(sb, _UPDFX_SHA_OFF);
+    str_builder_add_cstr(sb, "\nif [ \"$body\" = NEWIMAGE ]; then d=");
+    str_builder_add_cstr(sb, _UPDFX_SHA);
+    str_builder_add_cstr(sb, "; fi\necho \"$d  $1\"\n");
+    return str_data(str_builder_build(sb));
+}
 
 # A manifest for one 8-byte raw image holding "NEWIMAGE".
 fn _updfx_manifest(image) {
@@ -876,7 +889,7 @@ fn test_update_slots() {
     var slot_a = _blfx_path(root, "rootfs_a");
     var slot_b = _blfx_path(root, "rootfs_b");
     _updfx_tool(root, "/usr/bin/argonaut", "#!/bin/sh\nexit 0\n");
-    _updfx_tool(root, "/usr/bin/sha256sum", _UPDFX_SHATOOL);
+    _updfx_tool(root, "/usr/bin/sha256sum", _updfx_digest_tool());
     var efi_tail = "\n  exit 0\nfi\necho \"$*\" > \"$0.log\"\n";
     var efi_head = "#!/bin/sh\nif [ $# -eq 0 ]; then\n  ";
     var efi_list = "printf 'BootCurrent: 0003\\nBoot0003* AGNOS-B\\tHD(1)\\nBoot0004* AGNOS-A\\tHD(2)\\n'";
@@ -1728,7 +1741,7 @@ fn test_update_lifecycle() {
     var ar_log = _update_path("/usr/bin/argonaut.log");
     _updfx_tool(root, "/usr/bin/argonaut", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
     _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 0\n");
-    _updfx_tool(root, "/usr/bin/sha256sum", _UPDFX_SHATOOL);
+    _updfx_tool(root, "/usr/bin/sha256sum", _updfx_digest_tool());
     file_write_all(image, "NEWIMAGE", 8);
     file_write_all(slot_a, "OLD-A", 5);
     file_write_all(slot_b, "OLD-B", 5);
@@ -2220,6 +2233,11 @@ fn test_update_lifecycle() {
     vec_push(update_manifest_files(wrong), update_file_new(image, wh, 8));
     var wr_t, wr_v = update_apply(cfg, wrong);
     assert(is_err_result(wr_t) == 1, "lc_refuse_digest");
+    # What verify is for: the manifest is right and the image is damaged.
+    file_write_all(image, "NEWIMAG3", 8);
+    var dg_t, dg_v = update_apply(cfg, man);
+    assert(is_err_result(dg_t) == 1, "lc_refuse_damaged_image");
+    file_write_all(image, "NEWIMAGE", 8);
     var nodir = _updfx_manifest(_update_path("/var/lib/agnos/updates"));
     update_file_set_path(vec_get(update_manifest_files(nodir), 0), _update_path("/var/lib/agnos/updates/d"));
     xmkdir(_update_path("/var/lib/agnos/updates/d"), 0x1C0);
@@ -2239,6 +2257,9 @@ fn test_update_lifecycle() {
     assert(is_err_result(dv_t) == 1, "lc_refuse_link_to_device");
     xunlink(dev_link);
     # A digest off a bad tool is no digest; verify off skips the tool.
+    _updfx_tool(root, "/usr/bin/sha256sum", netns_concat3("#!/bin/sh\necho ", _UPDFX_SHA, "\nexit 1\n"));
+    var ft_t, ft_v = update_apply(cfg, man);
+    assert(is_err_result(ft_t) == 1, "lc_refuse_failed_tool");
     _updfx_rm(root, "/usr/bin/sha256sum");
     var nt_t, nt_v = update_apply(cfg, man);
     assert(is_err_result(nt_t) == 1, "lc_refuse_no_tool");
@@ -2247,7 +2268,7 @@ fn test_update_lifecycle() {
     var nv_t, nv_v = update_apply(cfg, wrong);
     assert(is_ok(nv_t) == 1, "lc_verify_off");
     update_config_set_verify(cfg, 1);
-    _updfx_tool(root, "/usr/bin/sha256sum", _UPDFX_SHATOOL);
+    _updfx_tool(root, "/usr/bin/sha256sum", _updfx_digest_tool());
     # Either hex case matches.
     var up = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
     var uph = "A1FD16012676B0B9AAB1ACC3EFA9F545365649533F409630ED617D6FD3641B9A";
@@ -2904,6 +2925,27 @@ fn test_journald_io() {
     assert(str_eq(journald_entry_message(last), str_from("line-3999")) == 1, "jq_big_newest_kept");
     var nf_t, nf_v = journald_query(0);
     assert(is_err_result(nf_t) == 1, "jq_null_filter");
+
+    # A --grep that never finishes ends as an Err, and leaves the process's deadline alone.
+    var dl_before = proc_timeout_ms();
+    _journald_deadline_ms = 100;
+    _updfx_tool(root, "/jc", "#!/bin/sh\nwhile :; do :; done\n");
+    var dq_t, dq_v = journald_query(journald_filter_new());
+    assert(is_err_result(dq_t) == 1, "jq_deadline_silent");
+    assert_eq(drm_syserr_errno(dq_v), ETIMEDOUT, "jq_deadline_errno");
+    assert_eq(proc_timeout_ms(), dl_before, "jq_deadline_put_back");
+    # What it printed before it stopped is not the answer.
+    _updfx_tool(root, "/jc", "#!/bin/sh\necho '{\"MESSAGE\":\"partial\"}'\nwhile :; do :; done\n");
+    var dp_t, dp_v = journald_query(journald_filter_new());
+    assert(is_err_result(dp_t) == 1, "jq_deadline_partial");
+    assert_eq(drm_syserr_errno(dp_v), ETIMEDOUT, "jq_deadline_partial_errno");
+    # A tool that finishes inside it is unaffected.
+    _updfx_tool(root, "/jc", "#!/bin/sh\necho '{\"MESSAGE\":\"quick\"}'\n");
+    var dk_t, dk_v = journald_query(journald_filter_new());
+    assert(is_ok(dk_t) == 1, "jq_deadline_quick_ok");
+    assert_eq(vec_len(dk_v), 1, "jq_deadline_quick_one");
+    _journald_deadline_ms = 0;
+
     _journald_tool = 0;
     xunlink(out);
     xunlink(_blfx_path(root, "jc"));

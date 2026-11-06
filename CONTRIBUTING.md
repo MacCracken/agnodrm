@@ -78,6 +78,16 @@ The 1.0 surface is **frozen** — adding new modules is rare and requires a majo
 - Caller-provided buffers for hot-path functions (avoid heap allocation in syscall wrappers)
 - Packed errors (`syserr_pack`) for fast paths, heap errors (`syserr_new`) when diagnostics matter
 
+## Deprecating a Public Function
+
+A public function goes in steps, so a consumer sees a warning before it sees a break:
+
+1. Add `#deprecated("what to use instead; removed in agnodrm X.0.0")` on the line above it. Every call site then warns at
+   compile time, and the API snapshot still passes.
+2. Say so under `Deprecated` in the CHANGELOG, and add it to the roadmap's V2.0 backlog with a migration note.
+3. Leave it for at least one minor release.
+4. Remove it at the next major, with a `Breaking` entry in the CHANGELOG and `scripts/check-api-surface.sh --update`.
+
 ## Commits, Tags, Releases
 
 - The maintainer (Robert MacCracken) handles all git operations — do not push, tag, or release

@@ -367,6 +367,9 @@ fn _netns_veth_name(name, tail): i64 {
     return netns_concat3("veth-", hex, tail);
 }
 
+# Cut a name to fit IFNAMSIZ. The library no longer uses this: _netns_veth_name hashes a
+# long name, so two that share a start stay distinct.
+#deprecated("the library names veths with a hash; removed in agnodrm 2.0.0")
 fn netns_truncate_veth(base): i64 {
     var len = strlen(base);
     if (len <= 15) {

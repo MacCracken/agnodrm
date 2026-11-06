@@ -249,6 +249,32 @@ jobs:
           done
           echo "agnodrm-aarch64: $(wc -c < build/agnodrm-aarch64) bytes"
 
+      - name: Test on aarch64 under qemu
+        # The step above proves the code compiles, and aarch64 has shipped bugs an x86_64 run
+        # cannot show: 1.6.1's O_DIRECT, 1.6.2's st_mode offset. ulimit: a crash under qemu
+        # writes a core into the cwd, which is how four came to be committed. Log to a file,
+        # never `| tee`.
+        run: |
+          if [ ! -x "$HOME/.cyrius/bin/cycc_aarch64" ]; then
+            echo "::warning::cycc_aarch64 not shipped with Cyrius $CYRIUS_VERSION — skipping aarch64 tests"
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          ulimit -c 0
+          for t in tests/tcyr/*.tcyr; do
+            [ -f "$t" ] || continue
+            name=$(basename "$t" .tcyr)
+            echo "=== $name ==="
+            log="/tmp/ci_$name-aarch64.build.log"
+            CYRIUS_DCE=1 cyrius build --aarch64 "$t" "/tmp/ci_$name-aarch64" > "$log" 2>&1 || {
+              cat "$log"; echo "ERROR: aarch64 test build failed: $name"; exit 1; }
+            cat "$log"
+            scripts/audit.sh --check-build-log "aarch64 test $name" "$log"
+            qemu-aarch64 "/tmp/ci_$name-aarch64"
+            rm -f "/tmp/ci_$name-aarch64"
+          done
+
       - name: Cross-build agnos
         # agnodrm carries #ifdef CYRIUS_TARGET_AGNOS gating across
         # drm/udev/fuse/bootloader/netns/journald/update (added 1.4.6 +

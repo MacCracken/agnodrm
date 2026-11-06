@@ -1,6 +1,6 @@
 # cyrius `#derive(Serialize)` doesn't handle cstring-pointer fields
 
-**Status:** OPEN (passive — tracked internally, not refiled upstream: a cstring field type is a feature, not a cyrius bug). Re-verified against cyrius 6.6.6 at agnodrm 1.6.2 (2026-09-22): still unsupported; see the section at the end. Re-verified against 6.6.20 at 1.6.3 (2026-11-05): a cstring field still serializes as its heap address (`{"name":6295249,"n":7}`).
+**Status:** OPEN (passive — tracked internally, not refiled upstream: a cstring field type is a feature, not a cyrius bug). Re-verified against cyrius 6.6.6 at agnodrm 1.6.2 (2026-09-22): still unsupported; see the section at the end. Re-verified against 6.6.20 at 1.6.3 (2026-11-05): a cstring field still serializes as its heap address (`{"name":6295249,"n":7}`). Re-verified against 6.7.18 at 1.7.3: the same (`{"name":6297221,"count":7}`). After the 1.4.4 decomposition only `update_state` and `drm_verinfo` of the five structs below remain here.
 **Filed:** 2026-05-09
 **Reporter:** agnosys 1.1.12 / 1.2.0 (during V1.1.12 `#derive(Serialize)` migration; surfaced when 5 of agnosys's 7 diagnostic-status structs needed hand-rolled `_to_json` shims because their fields hold cstring pointers, not `Str` fat pointers).
 **cyrius version observed:** 5.10.6 → 5.10.19 (consistent across the V1.1.12 → 1.2.0 cycle).

@@ -37,6 +37,11 @@ jobs:
             echo "VERSION ($FILE_VERSION) != tag ($TAG)"; exit 1; }
           grep -q '^version = "\${file:VERSION}"' cyrius.cyml || {
             echo "cyrius.cyml version must be \${file:VERSION}"; exit 1; }
+          grep -q "^## \[$TAG\]" CHANGELOG.md || {
+            echo "CHANGELOG.md has no [$TAG] section"; exit 1; }
+          # By hand until the release hook exists (roadmap, 1.x.x).
+          grep -qE "^\*\*Last refresh:\*\* [0-9-]+ \($TAG[ )]" docs/development/state.md || {
+            echo "docs/development/state.md: Last refresh does not name $TAG"; exit 1; }
           echo "Version verified: $TAG (cyrius.cyml pulls from VERSION via \${file:VERSION})"
 
       - name: Install Cyrius toolchain

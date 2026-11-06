@@ -9,9 +9,10 @@
 > Genesis repo: [agnosticos](https://github.com/MacCracken/agnosticos)
 >
 > **Live state** (versions, sizes, counts, in-flight) → [`state.md`](state.md).
-> Roadmap is durable: completed phases stay; future phases get appended. **The
-> phases below predate the agnosys → agnodrm decomposition** — they record how
-> the full library was built before its non-device subsystems moved to their
+> **What is next** is the [Forward plan](#forward-plan), the one list of open work. The
+> sections after it are history: completed phases stay, and what each left open has moved
+> up. **The phases from Phase 1 down predate the agnosys → agnodrm decomposition** — they
+> record how the full library was built before its non-device subsystems moved to their
 > proper homes (so they still list the moved modules).
 
 ## Scope
@@ -19,11 +20,143 @@
 Agnodrm owns **device access** — udev enumeration + DRM/KMS — on a small
 error/util support layer, plus a deferred Linux-eccentric group (journald /
 netns / bootloader / update / fuse) parked post-v1. It does NOT own:
-- **GPU detection / compute** → ai-hwaccel + mabda (consume agnodrm[udev,drm])
-- **Rendering pipeline** → soorat (consumes agnodrm[drm])
-- **Firewall rules** → nein (consumes agnodrm[netns])
+- **GPU detection / compute** → ai-hwaccel + mabda (meant to consume agnodrm[udev,drm])
+- **Rendering pipeline** → soorat (meant to consume agnodrm[drm])
+- **Firewall rules** → nein (meant to consume agnodrm[netns])
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
+
+## Forward plan
+
+Every open item is here, so there is one list to keep honest. **S** fits in a sitting. **M** needs its own tests and fuzz.
+**L** needs a decision first. The order can change; an item should not vanish without a note.
+
+Two facts from the 1.7.3 review set that order:
+
+- **Nothing calls this library yet.** stiva is the only repo with a `[deps.agnodrm]`, and its sources name none of the 321
+  public fns. It lists the dep for LUKS and dm-verity, which left for sigil at 1.4.4, so the dep is a leftover. ai-hwaccel,
+  mabda, soorat and nein are the intended consumers, and none is wired.
+- **The A/B flow has no boot stack.** No repo outside this one reads `next-slot`, emits `agnos.slot=`, creates the
+  `AGNOS-A` / `AGNOS-B` boot entries or calls `efibootmgr`, and `update_apply` refuses without `agnos.slot=`. The flow is
+  tested against a model of a design, not against anything that boots.
+
+### 1.7.3 — quick items ✅
+
+- [x] `tests/tcyr/test_powercut.tcyr`: a power cut at every durable write of the A/B flows, made permanent.
+- [x] `test_integration` no longer runs the host's `sha256sum`, and the digest check catches 3 more mutants.
+- [x] A deadline on `journald_query`, for a `--grep` that never finishes.
+- [x] The four committed qemu core dumps removed. See
+      [`issues/archive/2026-10-07-committed-qemu-core-dumps.md`](issues/archive/2026-10-07-committed-qemu-core-dumps.md).
+- [x] The test files run on aarch64 in CI, under qemu.
+- [x] A release fails unless `state.md` and the CHANGELOG name its tag.
+- [x] `netns_truncate_veth` carries `#deprecated`, and CONTRIBUTING has the removal protocol.
+- [x] [`001-slot-write-order.md`](../architecture/001-slot-write-order.md) no longer says argonaut reads the marker.
+- [x] Closed on review: `map_get_miss` (1.7.2 pinned the seed), `defer` (the floor is past 6.6.7), and the `#ifplat`
+      migration (`src/` has no arch gates left).
+
+### 1.8.x — Finish what is local
+
+Work this repo can do and prove alone. All additive; no consumer has to move.
+
+- [ ] **The 1.7.x closeout pass.** CLAUDE.md requires it before `1.8.0`. It ships as the last 1.7.x patch. **S**
+- [ ] **BLS `efi`, `uki`, `uki-url` and `extra` keys** on `bootloader_entry`, so a validator can see every way an entry
+      boots. **M**
+- [ ] **The journal's sealed-memfd path** for messages over about 212 KB, which return `EMSGSIZE` today. **M**
+- [ ] **Clear the rename residue.** CLAUDE.md (17 mentions), the README (28), `docs/architecture/overview.md` (12) and
+      CONTRIBUTING's title still describe agnosys: the Goal section, `dist/agnosys.cyr`, `AGNOSYS_LOG`, a module list that
+      left at 1.4.4. **S**
+- [ ] **Platform matrix.** `docs/architecture/002-platform-matrix.md`: what each module does on x86_64, aarch64 and
+      agnos. **S**
+- [ ] **Bring `consumer-integration.yml` back.** Paused with `if: false` since 2026-06-19. It still builds five bundle
+      profiles that no longer exist and names kybernet and libro, neither of which depends on agnodrm. Reconceive it
+      once a real consumer exists; stiva alone would test a dep it does not use. **M**
+- [ ] **Run the fuzz harnesses on aarch64 in CI, and the tests in `release.yml`.** 1.7.3 runs the tests in `ci.yml` only,
+      and the aarch64 fuzz binaries are built and never run. **S**
+- [ ] **Make a bench row mean something.** One unpinned run can read +50% with no code change, as 1.7.3's first did, and
+      only an alternating, pinned A/B cleared it. `bench-history.sh` should pin a core and record a median. On top of that,
+      `bench_all.bcyr` measures code placement: `strlen_16ch` swings 11 → 15 ns on layout alone. **M**
+- [ ] **Find what the 6.7.x compiler changed for `memeq_16`** (+1.9 ns on identical source, not placement). Worth an hour
+      and no more. **S**
+
+### 1.9.x — Give the A/B flow a boot stack
+
+Cross-repo, and the order matters: nothing past the first item can land until it is decided.
+
+- [ ] **Decide what reads the marker.** argonaut, gnoboot or the loader, as an ADR. **L**
+- [ ] **`BootOrder`.** Nothing updates it, so a slot stays selected past its one `BootNext` only if the reader sees to it.
+      The ADR above answers this. **S**
+- [ ] **Emit `agnos.slot=` from the boot entries,** and create the `AGNOS-A` / `AGNOS-B` entries `update_switch_slot`
+      looks up by label. This lands in the boot stack, not here. **M**
+- [ ] **Prove a reboot.** With the kernel's `boot_id` in the state file, a rollback could finish on a host whose
+      `efibootmgr` fails. It refuses there today, which is safe to wait out. A new state-file field: walk the write-order
+      table and add rows to `test_powercut`. **M**
+- [ ] **Run it for real, once.** Real `bootctl`, `efibootmgr`, a block device, a booted systemd-boot and a real power
+      cut. None of them has ever touched this code. **L**
+
+### 1.10.x — Authenticated updates
+
+`update_apply` compares a sha256 against an unsigned manifest, so it catches a corrupt image and not a forged one. Nothing
+here is worth doing until 1.9.x can boot the result.
+
+- [ ] **Decide how a signature gets checked,** as an ADR. The library takes no non-stdlib runtime dependency, so it is
+      sigil as a tool, or a verifier the caller supplies. **L**
+- [ ] **Authenticate updates,** with the signature check that decides. **M**
+- [ ] **Network manifest fetch** in `update_check`. Local paths and `file://` only today. `lib/http.cyr` exists now, so
+      what blocks this is authenticity: fetching an unsigned manifest is strictly worse than refusing. Never before the
+      signature check. **M**
+- [ ] **Hash in process.** `update_apply` runs `sha256sum` because the stdlib has no sha256 leaf (6.7.18 has `sha1` only).
+      Drop the subprocess when one lands. **S**
+
+### 1.x.x — Waiting on someone else
+
+No date. Each moves up the moment its blocker clears.
+
+- [ ] **Wire a real consumer.** ai-hwaccel, mabda, soorat or nein, on their side. The roadmap above assumes one arrives;
+      see the V2.0 decision below if none does.
+- [ ] **`state.md` release hook** (was V1.4.0). Auto-bump version, sizes and counts. The hook lives in agnosticos tooling.
+      Its CI half shipped at 1.7.3.
+- [ ] **Allocator lock cost** (was V1.4.x). `alloc()` takes a process-wide lock this single-threaded library does not
+      need: `ok_create` +321%, `from_errno` +210% when measured at 1.4.1, on cold paths only. No opt-out exists at 6.7.18.
+      Ask upstream for one first; move to `lib/freelist.cyr` only if a consumer feels the cost.
+- [ ] **`#derive(Serialize)` for cstring fields.** Re-verified at 6.7.18: it prints the heap address. `update_state` and
+      `drm_verinfo` keep their hand-rolled serializers. See
+      [`issues/2026-05-09-cyrius-derive-serialize-cstring.md`](issues/2026-05-09-cyrius-derive-serialize-cstring.md).
+- [ ] **macOS and Windows.** Revisit when a consumer needs them.
+
+### V2.0 backlog
+
+Everything that breaks the API, in one list, and none of it ships in 1.x. Each item gets a `Breaking` section in the
+CHANGELOG with a migration note, and the snapshot bumps at the 2.0.0 tag. Removals follow the protocol in CONTRIBUTING.
+
+**Decide first:**
+
+- [ ] **Where the deferred group lives.** journald, netns, bootloader, update and fuse are 5 of the 9 modules and about
+      three quarters of the code, and nothing calls them. 2.0 is the moment to keep them or move them to whoever turns
+      up, as 1.4.4 did for the rest: update and bootloader toward the boot stack, netns toward nein. Everything below
+      that touches those modules waits on this answer.
+
+**Remove** (each carries `#deprecated`):
+
+- [ ] **`bootloader_is_dangerous_token`** (audit F-2, 1.5.3) — no callers but the bench suite, and it diverges from the
+      validator beside it: a case-insensitive substring search where `bootloader_validate_kernel_cmdline` matches exact
+      tokens, so the obvious-looking helper is the looser one. *Migration:* use `bootloader_validate_kernel_cmdline`.
+- [ ] **`netns_nft_append`** — a fixed 16 KiB buffer that silently drops what does not fit. The renderer stopped using it
+      at 1.7.2 (audit F-43). *Migration:* a `str_builder`.
+- [ ] **`netns_truncate_veth`** — two long names with the same start come out the same. *Migration:* none needed; the
+      library names veths itself.
+
+**Change the contract:**
+
+- [ ] **Allowlist-based kernel-cmdline validation** (audit F-1, 1.5.3). `bootloader_validate_kernel_cmdline` can only ever
+      report "nothing listed matched", so an unlisted interpreter or a novel parameter still passes. An allowlist API
+      (permit a declared set, reject the rest) is a breaking change of contract.
+- [ ] **`update_get_current_slot` still guesses.** Its callers should be able to tell a guess from an answer.
+- [ ] **Inert fields:** `enable_nat`, the netns DNS fields, `min_version`, `max_retries`, `backup_dir`. Nothing reads
+      them. Implement them or remove them.
+- [ ] **Sweep `src/util.cyr`** for consolidation that would be API-breaking, and fold it in the same major.
+
+Obsolete, for the record: `agnosys_checked_syscall` left with `src/syscall.cyr` at 1.4.4, and the unused `label` parameter
+of `dmverity_validate_hex` left with dmverity. If the latter still applies, it is on sigil's roadmap.
 
 ## P(-1) audit ✅ (done at 1.7.2, 2026-11-05)
 
@@ -31,17 +164,7 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - [x] The slot write order written down in [`docs/architecture/001-slot-write-order.md`](../architecture/001-slot-write-order.md).
 - [x] `audit.sh` to 14 gates; four new fuzz harnesses; CI checks the toolchain hash and runs least-privilege.
 
-Left open:
-
-- [ ] **Authenticate updates.** `update_apply` compares a sha256 against an unsigned manifest, so it catches a corrupt image and not a forged one. The signature check belongs with sigil.
-- [ ] **Proving a reboot.** With the kernel's `boot_id` in the state file, a rollback could finish on a host whose `efibootmgr` fails. It refuses there today, which is safe to wait out.
-- [ ] **The journal's sealed-memfd path** for messages over about 212 KB, which return `EMSGSIZE` today.
-- [ ] **BLS `efi`, `uki`, `uki-url` and `extra` keys** on `bootloader_entry`, so a validator can see every way an entry boots.
-- [ ] **Inert fields:** `enable_nat`, the netns DNS fields, `min_version`, `max_retries`, `backup_dir`. Implement or remove them at 2.0.
-- [ ] **`BootOrder`.** Nothing updates it, so a slot stays selected past its one `BootNext` only if argonaut sees to it. Check against argonaut.
-- [ ] **A deadline on `journald_query`** for hostile `--grep` patterns.
-- [ ] **Run aarch64 tests in CI.** The lane builds and never runs, and this release's aarch64 run is local, under `qemu-aarch64`.
-- [ ] **Remove at 2.0:** `netns_nft_append`, `netns_truncate_veth`, `bootloader_is_dangerous_token`.
+What this left open moved to the [Forward plan](#forward-plan).
 
 ## Moving the cyrius pin to 6.7.18 ✅ (done at 1.7.1, 2026-11-05)
 
@@ -49,15 +172,7 @@ Left open:
 - [x] `dist/` regenerated; sidecars unchanged. Floor re-measured: 6.6.7.
 - [x] Audit F-2 to F-14 closed; see [`docs/audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md).
 
-Left open:
-
-- [ ] **Emit `agnos.slot=` from the boot entries.** `update_apply` refuses without it, and nothing in the workspace
-      sets it. This lands in the boot stack, not here.
-- [ ] **Find what the 6.7.x compiler changed for `memeq_16`** (+1.9 ns on identical source, not placement).
-- [ ] **`bench_all.bcyr` measures code placement:** `strlen_16ch` swings 11 → 15 ns on layout alone, and
-      `parse_subsystem` 41 → 46 ns. A release can read as a regression with no code change.
-- [ ] **`update_get_current_slot` still guesses.** Its callers should learn to tell a guess from an answer, at a
-      future API change.
+What this left open moved to the [Forward plan](#forward-plan).
 
 ## Moving the cyrius pin to 6.7.9 ✅ (done at 1.7.0, 2026-11-05)
 
@@ -76,12 +191,11 @@ Left open:
 Left open by the bump:
 
 - [x] **Audit F-1 (MEDIUM): temp files follow a planted symlink.** Fixed at 1.7.0 with `agnodrm_tmp_create`.
-- [ ] **Remove the four committed qemu core dumps.** Every `cyrius deps` checkout carries ~38 MB. See
-      [`issues/2026-10-07-committed-qemu-core-dumps.md`](issues/2026-10-07-committed-qemu-core-dumps.md).
-- [ ] **Make `map_get_miss` seed-independent.** With one key in 16 slots, about 1 process in 16 reads
-      twice the time, and a single-run `bench-history.csv` row can land on it (1.6.3's did).
-- [ ] **`defer` can return once the consumer floor reaches 6.6.7**, with `test_fd_hygiene` still
-      passing. Nothing needs it today.
+- [x] **Remove the four committed qemu core dumps.** Done at 1.7.3. See
+      [`issues/archive/2026-10-07-committed-qemu-core-dumps.md`](issues/archive/2026-10-07-committed-qemu-core-dumps.md).
+- [x] **Make `map_get_miss` seed-independent.** Done at 1.7.2, which pins the hash seed in `bench_all.bcyr`.
+- [x] **`defer` can return once the consumer floor reaches 6.6.7.** The floor passed it at 1.7.2, and CLAUDE.md lets new
+      code use either. Nothing needs it, so the existing explicit releases stay.
 
 ## Moving the cyrius pin to 6.6.5 ✅ (done at 1.6.1, 2026-09-22 — pin went straight to 6.6.6)
 
@@ -529,13 +643,9 @@ language-feature surface — these are durable infrastructure improvements.
 
 #### V1.2.1 — `#ifplat` cosmetic migration (was 8.3)
 
-- [ ] Migrate `#ifdef CYRIUS_ARCH_X86` / `#ifdef CYRIUS_ARCH_AARCH64` to `#ifplat x86` / `#ifplat aarch64` across `src/syscall_*_linux.cyr` and any other arch-gated blocks.
-- [ ] Per-module Linux-only declaration: audit / pam / journald / dmverity / ima / secureboot are kernel-Linux-by-definition (kernel netlink frames, PAM config, dm-verity ioctls).
-- [ ] Cross-platform candidates declared: `error`, `syscall` (already split via `lib/syscalls_*.cyr` in cyrius 5.5.x), `logging`, `certpin` (pure crypto, no syscalls).
-- [ ] `docs/architecture/NNN-platform-matrix.md` documenting the matrix.
-- [ ] Track upstream cyrius macOS/Windows port progress; revisit when consumer demand exists.
-
-**Rationale:** purely cosmetic syntactic uplift on the arch-gated code, plus documentation discipline so accidental Linux-isms in portable modules get caught early.
+Closed on review at 1.7.3. The arch-gated `src/syscall_*_linux.cyr` files left in the 1.4.4 decomposition, and `src/` has
+no `CYRIUS_ARCH_*` or `#ifplat` gate left, so there is nothing to migrate. The modules this slot called Linux-only moved
+too. The platform matrix and the macOS / Windows watch moved to the [Forward plan](#forward-plan).
 
 #### V1.2.2 — Capability map per public fn ✅ SHIPPED 2026-05-09 (in 1.2.1)
 
@@ -557,8 +667,8 @@ language-feature surface — these are durable infrastructure improvements.
 
 #### V1.2.4 — `#deprecated` adoption channel
 
-- [ ] Adopt cyrius's `#deprecated("reason / migration")` attribute for any post-1.0 API drift (graceful deprecation path before removal).
-- [ ] Document the soft-removal protocol in CONTRIBUTING.md: deprecate → one-minor bake → remove with `Breaking` in CHANGELOG.
+- [x] Adopt cyrius's `#deprecated("reason / migration")` attribute for any post-1.0 API drift. Since 1.7.3 every fn due for removal carries it.
+- [x] Document the soft-removal protocol in CONTRIBUTING.md: deprecate → one-minor bake → remove with `Breaking` in CHANGELOG. Done at 1.7.3.
 
 **Rationale:** today every public-fn rename is either a hard break (snapshot bump) or a frozen API call. `#deprecated` adds a third channel — warning at every call site, snapshot still passes, consumers see the warning in their CI before the actual removal.
 
@@ -583,8 +693,8 @@ hygiene. See CHANGELOG `[1.3.0]` and `docs/audit/2026-06-01-audit.md`.
 #### V1.4.0 — `state.md` release post-hook (was 8.6)
 
 - [x] state.md created at 1.0.1
-- [ ] Release post-hook auto-bumps state.md (version, binary size, test counts)
-- [ ] CI gate that fails the release if state.md `Last refresh` doesn't match the tag
+- Release post-hook auto-bumps state.md (version, binary size, test counts): moved to the [Forward plan](#forward-plan).
+- [x] CI gate that fails the release if state.md `Last refresh` doesn't match the tag. Done at 1.7.3, in `release.yml`.
 
 **Rationale:** template's "release post-hook bumps state.md. If the hook doesn't, fix the hook — don't hand-maintain state." Lands when agnosticos meta-tooling supports it (cross-repo concern — hook lives in agnosticos toolchain, not this repo).
 
@@ -597,35 +707,18 @@ single-threaded agnosys this is pure overhead — 1.4.1 measured `ok_create` +32
 zero-alloc `syserr_pack` hot path unchanged). Confined to cold/diagnostic heap
 routes today, but worth removing. Options, in preference order:
 
-- [ ] **Upstream:** request a `CYRIUS_SINGLE_THREADED` (or `CYRIUS_NO_ALLOC_LOCK`)
-  define that compiles `_alloc_lock_acquire/release` to no-ops — cleanest, zero
-  agnosys churn, benefits every single-threaded consumer. File against cyrius.
-- [ ] **Local:** migrate hot allocations to the non-locking freelist/page
-  allocator (`lib/freelist.cyr` — `fl_alloc`/`pg_alloc`), the patra pattern.
-  Larger change; revisit only if upstream declines and the cold-path cost starts
-  mattering to a consumer.
+Both options moved to the [Forward plan](#forward-plan), under 1.x.x. At 6.7.18 the stdlib has no such define.
 
 #### V1.5.x — `update` module deferred capabilities (documented 2026-08-24 at 1.5.3)
 
-Two capabilities in `src/update.cyr` are deliberately unimplemented. Both were
-carried as bare in-code notes until the 1.5.3 P(-1) sweep; recorded here so the
-code can cite a tracked entry (cyrlint requires every deferral to cross-reference
-a CHANGELOG / roadmap / issue entry).
+Two capabilities in `src/update.cyr` are deliberately unimplemented. Both were carried as bare in-code notes until the
+1.5.3 P(-1) sweep, and are recorded here so the code can cite a tracked entry (cyrlint requires every deferral to
+cross-reference a CHANGELOG / roadmap / issue entry). Both have moved to the [Forward plan](#forward-plan), under 1.10.x.
 
-- [ ] **Manifest SHA-256 digest verification** (`update_verify_manifest`,
-  `update_parse_manifest`). The manifest carries a `sha256_digest` field that is
-  parsed and stored but never checked, so `update_verify_manifest` validates
-  **structural integrity only** — it is not an authenticity check and must not be
-  relied on as one. Blocked on a SHA-256 primitive: cyrius stdlib ships `sha1`
-  and `keccak` but no `sha256` leaf (verified against the 6.5.35 snapshot;
-  re-verified against 6.6.6 at 1.6.1), and
-  agnodrm takes no non-stdlib runtime dependency, so vendoring sigil's
-  implementation is not an option. Lands when cyrius stdlib grows `sha256`.
-- [ ] **Network manifest fetch** (`update_check`). Local paths and `file://`
-  URLs only; a non-`/` path returns `not_supported`. Blocked on an HTTP client
-  in cyrius stdlib. Note this is a deliberate *security* boundary as much as a
-  gap — fetching an unauthenticated manifest over the network without the
-  digest check above would be strictly worse than refusing.
+- **Manifest digest verification.** Partly done at 1.7.2: `update_apply` checks the image against the manifest's sha256,
+  through `sha256sum`. `update_verify_manifest` still checks structure only, and neither is an authenticity check.
+- **Network manifest fetch** (`update_check`). Local paths and `file://` URLs only. The note here used to say this waited
+  on an HTTP client, and the stdlib has `lib/http.cyr` now. It waits on authenticity instead.
 
 #### V1.6.x — `bootloader` deferred capability (documented 2026-09-22 at 1.6.1)
 
@@ -702,51 +795,34 @@ reproduce.
 
 ### V2.0 — Breaking API cleanup
 
-The first major bump folds the API-breaking removals deferred from the 1.3.0
-audit (Tier-3 hygiene). **Deprecated as of 1.3.0** — noted here and in
-CHANGELOG `[Unreleased] Deprecated`. Since 1.6.2 the one deprecated fn still in
-agnodrm, `bootloader_is_dangerous_token`, also carries cyrius's
-`#deprecated("…")` attribute, so every call site warns at compile time (issue
-`archive/2026-05-09-cyrius-deprecated-unproven.md`). Consumers should migrate
-before 2.0.0.
-
-- [x] ~~**Remove `agnosys_checked_syscall`**~~ — obsolete for agnodrm: the fn left with `src/syscall.cyr` in the 1.4.4 decomposition (commit `6308083`) and no longer exists here. *Migration (for older bundles):* use `wrap_syscall`.
-- [ ] **Remove `bootloader_is_dangerous_token`** (audit F-2, 1.5.3; `#deprecated` since 1.6.2) — public, **0 production callers** (only the bench suite), and its semantics *diverge* from the validator beside it: it is a case-insensitive **substring** search while `bootloader_validate_kernel_cmdline` matches **exact tokens**. A consumer reaching for the obvious-looking helper gets looser behaviour than the library's own validator. *Migration:* use `bootloader_validate_kernel_cmdline`.
-- [ ] **Allowlist-based kernel-cmdline validation** (audit F-1, 1.5.3) — the structural answer to the denylist. `bootloader_validate_kernel_cmdline` can only ever report "nothing listed matched"; 1.5.3 widened the list 21 → 48 entries and added a `rdinit=` prefix rule, but an unlisted interpreter or a novel parameter still passes. An allowlist API (permit a declared set, reject the rest) is a breaking contract change, hence 2.0.
-- [x] ~~**Remove the unused `label` parameter of `dmverity_validate_hex`**~~ — obsolete for agnodrm: dmverity moved to sigil in the 1.4.4 decomposition; the item belongs to sigil's roadmap if it still applies there.
-- [ ] Sweep for any other `src/util.cyr` consolidation candidates whose extraction would be API-breaking, and fold them in the same major.
-
-Each removal gets a `Breaking` section in CHANGELOG with a migration note and an `api-surface` snapshot bump at the 2.0.0 tag.
+Moved to the [V2.0 backlog](#v20-backlog) in the Forward plan.
 
 ## V1.0+ Verification
 
 - [x] **1.1.0** shipped 2026-05-06 — V1.1.0 (`#derive(accessors)`) complete; closeout patch (1.0.13) clean; 16 of 16 struct-bearing modules migrated. See CHANGELOG `[1.1.0]` for the consumer banner and `[1.0.13]` for the cumulative baseline.
-- [ ] Subsequent V1.1.x slots (1.1.1 through 1.1.7) ship as patches against 1.1.
-- [ ] **1.2.0** ships when V1.2.0 (multi-profile distlib) is complete; closeout against the consumer set.
-- [ ] V1.2.x slots may ship in any order; gate is bench parity + audit clean.
+- [x] Subsequent V1.1.x slots shipped as patches against 1.1, through V1.1.12.
+- [x] **1.2.0** shipped 2026-05-09 with V1.2.0 (multi-profile distlib).
+- [x] V1.2.x slots shipped or closed; see each slot above.
 - [x] **1.3.0** shipped 2026-06-01 — correctness + refactor/optimization minor (re-scoped from the post-hook plan; pin 6.0.24, 4 buffer/exec fixes, `src/util.cyr` dedup, bench wins). See CHANGELOG `[1.3.0]`.
 - [x] **1.3.1** shipped 2026-06-01 — `src/util.cyr` consolidation closeout (name_char + the shared pam read-fd helper, closing a latent overflow). Non-breaking; see CHANGELOG `[1.3.1]`.
-- [ ] V1.4.0 ships when the agnosticos meta-tooling supports the state.md release post-hook.
+- [x] V1.4.0's hook moved to the [Forward plan](#forward-plan).
 
 ## Consumer Map (durable)
 
-Volatile per-consumer status lives in [`state.md`](state.md). The mapping itself is durable:
+Volatile per-consumer status lives in [`state.md`](state.md). This is who each module is meant for. Nothing is wired yet:
+see the [Forward plan](#forward-plan). The table before 1.7.3 listed the modules that left at 1.4.4, and their consumers
+are in the decomposition plan.
 
-| Consumer | Modules needed |
+| Intended consumer | Modules |
 |----------|---------------|
-| kavach | security (landlock, seccomp) |
-| aegis | mac |
-| shakti | pam |
-| libro | audit |
-| stiva | luks, dmverity |
-| sigil | tpm, ima, secureboot, certpin |
-| ark | fuse, update |
-| argonaut | journald, bootloader |
-| daimon | security (seccomp), certpin |
-| nein | netns |
+| ai-hwaccel, mabda | udev, drm |
 | yukti | udev |
 | soorat | drm |
-| hoosh | certpin |
+| nein | netns |
+| argonaut | journald, bootloader |
+| ark | fuse, update |
+
+stiva declares `[deps.agnodrm]` for LUKS and dm-verity, which moved to sigil, and calls nothing here.
 
 ## Moving the cyrius pin to 6.6.6 ✅ (done at 1.6.1, 2026-09-22)
 
