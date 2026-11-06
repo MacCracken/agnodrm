@@ -34,8 +34,18 @@ enum JournalConst {
     JOURNAL_QUERY_CHUNK = 131072;
     JOURNAL_QUERY_MAX = 33554432;
     # How long journalctl may print nothing. A rare match in a large journal can be quiet
-    # for a while, so this is generous; the reaper then waits as long again before it kills.
+    # for a while, so this is generous. The stdlib then waits as long again before it kills.
     JOURNAL_QUERY_DEADLINE_MS = 60000;
+    # The sealed-memfd path, which the stdlib does not name; see memfd_create(2), fcntl(2)
+    # and cmsg(3). Both arches agree on all of them.
+    JOURNAL_MFD_FLAGS = 3;          # MFD_CLOEXEC | MFD_ALLOW_SEALING
+    JOURNAL_MFD_NOEXEC = 8;         # MFD_NOEXEC_SEAL, which a kernel before 6.3 refuses
+    JOURNAL_F_ADD_SEALS = 1033;
+    JOURNAL_SEALS = 15;             # F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE
+    JOURNAL_SCM_RIGHTS = 1;
+    JOURNAL_CMSG_LEN = 20;          # CMSG_LEN(sizeof(int))
+    JOURNAL_CMSG_SPACE = 24;        # CMSG_SPACE(sizeof(int))
+    JOURNAL_MSGHDR_SIZE = 56;
 }
 
 # Syslog priority levels
@@ -320,7 +330,48 @@ fn _journald_layout(buf, message, priority, identifier, fields_keys, fields_vals
     return pos;
 }
 
-# Check, lay out and send one datagram. The buffer is scratch: from alloc(), every line
+# 1 if a send failed because the entry would not fit, which is what sd_journal_sendv
+# retries as a memfd. Anything else is a real failure.
+fn _journald_too_big(ret): i64 {
+    if (ret == (0 - EMSGSIZE)) { return 1; }
+    if (ret == (0 - ENOBUFS)) { return 1; }
+    return ret == (0 - EAGAIN);
+}
+
+#ifndef CYRIUS_TARGET_AGNOS
+# Hand journald `len` bytes at `buf` as a sealed memfd, the protocol's form for an entry
+# that does not fit a datagram: the same bytes, and a datagram holding nothing but the fd.
+# All four seals, so journald can map it instead of copying it, and so nobody can change
+# it under the mapping. With vm.memfd_noexec=2 a memfd has to ask for MFD_NOEXEC_SEAL, and
+# a kernel before 6.3 refuses that flag, so it asks first and falls back.
+# Returns 0 or above on success, or a negative errno.
+fn _journald_send_memfd(sock, buf, len): i64 {
+    var ctl[24];
+    var msg[56];
+    var mfd = sys_memfd_create("journal-data", JOURNAL_MFD_FLAGS | JOURNAL_MFD_NOEXEC);
+    if (mfd == (0 - EINVAL)) { mfd = sys_memfd_create("journal-data", JOURNAL_MFD_FLAGS); }
+    if (mfd < 0) { return mfd; }
+    var ret = _agnodrm_write_all(mfd, buf, len);
+    if (ret >= 0) { ret = sys_fcntl(mfd, JOURNAL_F_ADD_SEALS, JOURNAL_SEALS); }
+    if (ret >= 0) {
+        memset(&ctl, 0, JOURNAL_CMSG_SPACE);
+        store64(&ctl, JOURNAL_CMSG_LEN);
+        store32(&ctl + 8, SOL_SOCKET);
+        store32(&ctl + 12, JOURNAL_SCM_RIGHTS);
+        store32(&ctl + 16, mfd);
+        memset(&msg, 0, JOURNAL_MSGHDR_SIZE);
+        store64(&msg, _journald_sockaddr());
+        store32(&msg + 8, SOCKADDR_UN_SIZE);
+        store64(&msg + 32, &ctl);
+        store64(&msg + 40, JOURNAL_CMSG_SPACE);
+        ret = sys_sendmsg(sock, &msg, 0);
+    }
+    sys_close(mfd);
+    return ret;
+}
+#endif
+
+# Check, lay out and send one entry. The buffer is scratch: from alloc(), every line
 # logged would stay in the heap for good, 442 MiB per million (audit F-40).
 fn _journald_deliver(message, priority, identifier, fields_keys, fields_vals): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
@@ -351,10 +402,11 @@ fn _journald_deliver(message, priority, identifier, fields_keys, fields_vals): i
 
     # sendto(fd, buf, len, flags, dest_addr, addrlen)
     var ret = sys_sendto(fd, buf, len, 0, _journald_sockaddr(), SOCKADDR_UN_SIZE);
+    if (_journald_too_big(ret) == 1) { ret = _journald_send_memfd(fd, buf, len); }
     sys_close(fd);
     _agnodrm_scratch_free(buf, len);
     if (ret < 0) {
-        return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
+        return drm_err_syscall_failed(0 - ret, "send to journal socket failed");
     }
 
     return Ok(0);
@@ -368,8 +420,9 @@ fn _journald_deliver(message, priority, identifier, fields_keys, fields_vals): i
 #
 # The journal native protocol uses newline-separated KEY=VALUE pairs
 # sent as a single datagram to /run/systemd/journal/socket. A message too big for one
-# datagram, about 212 KB, comes back as an Err (EMSGSIZE): the protocol's sealed-memfd
-# path is not implemented (roadmap.md).
+# datagram, about 212 KB, goes as a sealed memfd holding the same bytes. journald takes it
+# or drops it without telling the sender: over its entry limit, Ok here means sent, not
+# stored.
 #
 # Returns Result: Ok(0) on success, Err on failure.
 fn journald_send(message, priority, identifier): i64 {
@@ -672,10 +725,13 @@ fn _journald_parse_output(buf, n): i64 {
 # last one made from half a line, and lost the newest, which is what "last N" is for
 # (audit F-21). A query that big should set lines or since.
 #
-# A --grep pattern can run for as long as it likes, so journalctl gets a deadline: silent
-# for JOURNAL_QUERY_DEADLINE_MS, then as long again to exit, and the call is an Err
-# (ETIMEDOUT), at about two minutes at worst. What it printed first is thrown away, like any
-# capture that did not finish. The process's own deadline is put back.
+# A --grep pattern can run for as long as it likes, so journalctl gets a deadline. Silent for
+# JOURNAL_QUERY_DEADLINE_MS, or for the process's own deadline if that is tighter, the call
+# is an Err (ETIMEDOUT), even if journalctl would have finished a moment later. What it
+# printed first is thrown away, like any capture that did not finish. The stdlib gives it
+# as long again before killing it, so the caller waits up to twice the deadline. This
+# measures silence, not total time, and restarts for each larger buffer, so output that
+# trickles in is bounded by JOURNAL_QUERY_MAX instead. The process's deadline is put back.
 fn journald_query(filter): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     # agnos has no journalctl subprocess and no systemd journal to query — the
@@ -696,11 +752,15 @@ fn journald_query(filter): i64 {
     var status = alloc(16);
     var deadline = JOURNAL_QUERY_DEADLINE_MS;
     if (_journald_deadline_ms != 0) { deadline = _journald_deadline_ms; }
+    var outer = proc_timeout_ms();
+    if (outer > 0) {
+        if (outer < deadline) { deadline = outer; }
+    }
     var cap = JOURNAL_QUERY_CHUNK;
     while (cap <= JOURNAL_QUERY_MAX) {
         var buf = _agnodrm_scratch_new(cap);
         if (buf == 0) { return drm_err_io(ENOMEM, "no memory for journalctl output"); }
-        var outer = proc_set_timeout_ms(deadline);
+        proc_set_timeout_ms(deadline);
         var nbytes = exec_capture_status(args, buf, cap, status);
         proc_set_timeout_ms(outer);
         if (load64(status) == (0 - 2)) {  # exec_capture_status's mark for a deadline kill

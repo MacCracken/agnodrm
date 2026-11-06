@@ -1432,6 +1432,14 @@ fn _update_set_bootnext(slot, hold, strict): i64 {
         return Ok(0);
     }
     var list_t, list_v = agnodrm_run_capture(list_args, buf, cap, "efibootmgr failed");
+    if (is_ok(list_t) == 1) {
+        # A cut list can lose the entry a hold compares BootNext against.
+        if (list_v >= cap) {
+            _agnodrm_scratch_free(buf, cap + 1);
+            if (strict != 1) { return Ok(0); }
+            return drm_err_io(0, "efibootmgr output exceeds 64 KiB; cannot tell where the firmware boots next");
+        }
+    }
     if (is_err_result(list_t) == 1) {
         _agnodrm_scratch_free(buf, cap + 1);
         if (strict != 1) { return Ok(0); }

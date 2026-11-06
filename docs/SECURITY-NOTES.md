@@ -113,11 +113,11 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
 - `journald_send_fields` skips field names the journal would not accept, which covers newlines and `=` (injection prevention).
 - No authentication — any process can write to the journal socket.
 - The bytes of a message reach the journal as given, ESC included, so a reader that writes them to a terminal must filter them (CVE-2026-40228 was journald's own `ForwardToWall` doing that).
-- A message too big for one datagram, about 212 KB, returns `EMSGSIZE`. The protocol's sealed-memfd path is not implemented, and nothing is cut.
+- A message too big for one datagram, about 212 KB, goes as a sealed memfd with the same bytes, as `sd_journal_sendv` does, and nothing is cut. journald takes it or drops it without telling the sender, so `Ok` means sent, not stored. It first asks for `MFD_NOEXEC_SEAL`, needed under `vm.memfd_noexec=2`, and falls back on a kernel before 6.3 that refuses it; neither branch can be forced on a modern default host, so neither has been run.
 - `journald_send_fields` refuses extras that restate `MESSAGE`, `PRIORITY` or `SYSLOG_IDENTIFIER` (audit F-46).
 - **`journald_query` uses argv-based exec — no shell.** Every filter value lands in its own `argv[i]` entry. `--unit`, `--since`, `--until`, `--priority` and `--grep` take a required argument, so the next word is the value whatever it looks like. **`--boot` takes an optional one, so it is passed as one word, `--boot=<value>`.** Through 1.7.1 it was two, and a value that did not parse as a boot id stayed on the command line, where `--vacuum-time=1s` is an option and `_UID=0` a match (audit F-20). Fuzz coverage at `fuzz/journald_filter.fcyr`.
-- `journald_query` reads the whole output or fails, growing its buffer to 32 MiB (audit F-21). It passes `--all`, since journalctl otherwise prints fields over 4096 bytes as null. The reader decodes escapes, byte arrays and repeated fields, so one ESC byte cannot hide a line behind an empty message (audit F-47). It sets no deadline: a hostile `--grep` pattern runs for as long as PCRE2 takes.
-- `journald_query` gives journalctl a deadline: 60 s printing nothing, then as long again to exit, so a `--grep` pattern that never finishes ends as `ETIMEDOUT` rather than a hang. It measures silence, not total time: a pattern that keeps matching slowly fills the 32 MiB bound instead. A slow query on a very large journal can hit it.
+- `journald_query` reads the whole output or fails, growing its buffer to 32 MiB (audit F-21). It passes `--all`, since journalctl otherwise prints fields over 4096 bytes as null. The reader decodes escapes, byte arrays and repeated fields, so one ESC byte cannot hide a line behind an empty message (audit F-47). : a hostile `--grep` pattern runs for as long as PCRE2 takes.
+- `journald_query` gives journalctl a deadline: 60 s printing nothing, or the process's own deadline if that is tighter, and the call is `ETIMEDOUT`, even if journalctl would have finished a moment later. The stdlib then gives it as long again before killing it, so the caller waits up to twice the deadline. It measures silence, not total time, and restarts for each larger buffer, so a pattern that keeps matching slowly fills the 32 MiB bound instead. A slow query on a very large journal can hit it.
 
 ## bootloader
 
@@ -130,11 +130,16 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
     `max_entries` fails the call, since neither may be left out. The bootloader reads any size.
   - Only names that stat as regular files are opened, and names are filtered first: `*.conf` only,
     no hidden names, no `/` or control bytes, at most 255 bytes.
-  - `efi`, `uki`, `uki-url` and `extra` keys are not read, so an entry that boots one of those shows
-    no `linux`. Treat that as suspect.
+  - `efi`, `uki`, `uki-url` and `extra` are read. `bootloader_entry_boot_kind` applies systemd-boot's rule, that an entry names exactly one way to boot. Only for `BOOT_ENTRY_LINUX` is `options` known to be the whole command line. A UKI takes `options` in place of its own line unless Secure Boot is on and it has one, and then its own line applies, which nothing here can read.
+  - `extra` hands a UKI credentials and system extensions. systemd-boot adds nothing from it to a command line, and it holds paths, so validating it proves nothing. What does add to a UKI's line is `/loader/addons` and `<uki>.efi.extra.d`, which the file path does not read.
+  - Values lose one matching pair of quotes, as systemd-boot takes them off, so a quote cannot hide an option. `initrd`, `options` and `extra` join on one space, so a path holding a space cannot be told from two.
+  - `auto-*.conf` is listed, though systemd-boot skips it, which errs toward showing it.
   - Remaining gap (LOW): the stat and the open are separate calls, so a FIFO swapped in between them
     can block the read. Doing that needs write access to the entries directory, i.e. root on `$BOOT`.
+- **`bootloader_list_boot_entries` reads the entry files as well as `bootctl`.** bootctl leaves out what systemd-boot boots: a name it calls invalid, or a line it cannot parse. Every file it did not report is added, and a bootctl entry with no boot key takes its file's. On a host where neither `/boot`, `/efi` nor `/boot/efi` holds the entries, bootctl's word stands.
 - **`bootctl list` output is parsed as display text.**
+  - It is not a clean channel. A blank line in a UKI's `.uname` section splits a block, and a newline in an addon's command line prints at column 0, where it can read as a label. `bootctl list --json` has neither problem: see the roadmap.
+  - From this path `BOOT_ENTRY_NONE` says only that bootctl showed no boot key. Automatic entries and "Reported by Boot Loader" entries look like that, and can boot.
   - Titles keep bootctl's marks, and linux / initrd keep its `<root>//` prefix and
     "(No such file or directory)" notes.
   - `is_default` is never inferred from those marks: an entry's own title can imitate them.

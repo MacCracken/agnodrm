@@ -20,14 +20,14 @@
 
 ## Goal
 
-**Own the Linux kernel boundary for AGNOS.** Every syscall, every audit netlink frame, every TPM/IMA/dm-verity ioctl flows through agnosys. Higher-level primitives (device abstraction, sandbox policy, container runtime, rendering pipeline) are the consumer's job; agnosys delivers the safe, measurable, auditable bottom-of-stack.
+**Own the device model for AGNOS.** udev enumeration and DRM/KMS device-node access, on a small error and util layer, safe, measurable and auditable. Higher-level primitives are the consumer's job.
 
 Scope boundaries (non-owned, by design):
-- **Higher-level device abstraction** → yukti (consumes agnosys[udev])
-- **Sandbox policy engine** → kavach (consumes agnosys[landlock,seccomp])
-- **Firewall rules** → nein (consumes agnosys[netns])
-- **Container runtime** → stiva (consumes agnosys[luks,dmverity])
-- **Rendering pipeline** → soorat (consumes agnosys[drm])
+- **Higher-level device abstraction** → yukti (meant to consume agnodrm[udev])
+- **GPU detection / compute** → ai-hwaccel, mabda (meant to consume agnodrm[udev,drm])
+- **Rendering pipeline** → soorat (meant to consume agnodrm[drm])
+- **Firewall rules** → nein (meant to consume agnodrm[netns])
+- **Trust, security, syscalls, logging** → sigil, kavach, aegis, cyrius, sakshi (moved out at 1.4.4)
 
 ## Current State
 
@@ -40,19 +40,19 @@ Per-module security considerations live in [`docs/SECURITY-NOTES.md`](docs/SECUR
 Project is a flat Cyrius library. **Do not manually create project structure** — use `cyrius` tooling. If the tools are missing something, fix the tools. Module discipline:
 
 - `src/<module>.cyr` is included via `include "src/<module>.cyr"` from `src/main.cyr`
-- `cyrius.cyml [lib] modules` lists the modules `cyrius distlib` concatenates into `dist/agnosys.cyr`
+- `cyrius.cyml [lib] modules` lists the modules `cyrius distlib` concatenates into `dist/agnodrm.cyr`
 - `cyrius.cyml [build]` does **not** carry `modules` — that re-includes through main.cyr's `include` directives and inflates the binary by ~76% (see CHANGELOG 1.0.1)
 
 ## Quick Start
 
 ```sh
-cyrius build src/main.cyr build/agnosys     # compile
+cyrius build src/main.cyr build/agnodrm     # compile
 CYRIUS_DCE=1 cyrius build ...               # release build with dead-code elim
 cyrius run src/main.cyr                     # compile + run
 cyrius check src/main.cyr                   # syntax check
 cyrius test                                 # run tests/tcyr/*.tcyr
 cyrius bench tests/bcyr/bench_all.bcyr      # run benchmarks
-cyrius distlib                              # regenerate dist/agnosys.cyr
+cyrius distlib                              # regenerate dist/agnodrm.cyr
 cyrius capacity --check src/main.cyr        # compiler-table utilization gate
 cyrius lint src/*.cyr                       # static checks
 cyrius vet src/main.cyr                     # include-graph audit
@@ -64,17 +64,16 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 ## Key Principles
 
 - **Correctness is the optimum sovereignty** — if it's wrong, you don't own it; the bugs own you
-- **Every change passes `scripts/audit.sh`** — same gates as CI; never claim a change is ready without it
+- **Every change passes `scripts/audit.sh`** — CI runs the same gates and adds aarch64 under qemu; never claim a change is ready without it
 - Test after EVERY change, not after the feature is "done"
 - ONE change at a time — never bundle unrelated changes
 - **Tests + benchmarks prove the change.** Don't claim perf wins without a bench diff
 - **Own the stack.** If an AGNOS crate wraps an external lib, depend on the AGNOS crate
 - **No magic.** Every operation is measurable, auditable, traceable
-- **Packed errors on hot paths** — `syserr_pack(kind, errno)` for zero-alloc
-- **Heap errors on cold paths** — `syserr_new(kind, errno, message)` when diagnostics matter
+- **Packed errors on hot paths** — `drm_syserr_pack(kind, errno)` for zero-alloc
+- **Heap errors on cold paths** — `drm_syserr_new(kind, errno, message)` when diagnostics matter
 - **Caller-provided buffers** — avoid heap allocation in syscall wrappers; caller owns memory
-- **Prefix all functions** — every public fn starts with its module prefix (`agnosys_`, `mac_`, `audit_`, `pam_`, `security_`, ...). API surface frozen at `docs/development/api-surface-1.0.md`; drift fails CI
-- **`AGNOSYS_LOG` env var** controls log level
+- **Prefix all functions** — every public fn starts with its module prefix (`agnodrm_`, `udev_`, `drm_`, `journald_`, `netns_`, `bootloader_`, `update_`, `fuse_`). The exceptions are `is_syscall_err`, `result_print_err` and `wrap_syscall`, which collide with sigil's; remove them at 2.0. API surface frozen at `docs/development/api-surface-1.0.snapshot`; drift fails CI
 - Programs call `main()` at top level: `var exit_code = main(); sys_exit(exit_code);`
 - Source files only need project includes — stdlib auto-resolves from `cyrius.cyml [deps] stdlib`
 
@@ -83,21 +82,21 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 - **Read the genesis repo's CLAUDE.md first** — [agnosticos/CLAUDE.md](https://github.com/MacCracken/agnosticos/blob/main/CLAUDE.md)
 - **Do not commit or push** — the user handles all git operations (commit, push, tag)
 - **NEVER use `gh` CLI** — use `curl` to GitHub API only
-- Do not add runtime dependencies — agnosys is a kernel interface, keep it lean (zero non-stdlib deps today)
+- Do not add runtime dependencies — keep agnodrm lean (zero non-stdlib deps today)
 - Do not skip `scripts/audit.sh` before claiming a change is ready
 - Do not skip benchmarks before claiming performance improvements
 - Do not tag a version (patch, minor, or major — pin-only refreshes included) without running `./scripts/bench-history.sh`, committing the appended `bench-history.csv` row (tracked history; `BENCHMARKS.md` is gitignored/derived), and a delta/regression check vs. the prior version; record material perf changes in the CHANGELOG `Performance` section
 - Do not skip fuzz verification before claiming a parser change works
 - Do not commit `build/`
-- Do not edit `dist/agnosys.cyr` by hand — regenerate via `cyrius distlib`
+- Do not edit `dist/agnodrm.cyr` by hand — regenerate via `cyrius distlib`
 - Do not hardcode toolchain versions in CI YAML — the `cyrius = "X.Y.Z"` pin in `cyrius.cyml [package]` is the only source of truth. A pin bump also replaces the line in `.github/toolchain.sha256` (see CI / Release), or every workflow fails at the toolchain step
 - Do not rename a public function without bumping the API snapshot via `scripts/check-api-surface.sh --update` and updating CHANGELOG `Breaking`
 - Do not use reserved keywords as variable names (`match`, `default`, `shared`, `in`, `secret`)
 - Do not define functions with 7+ parameters — split into `module_thing_new(...)` + `module_thing_set_*(...)` pattern
-- Do not use `sys_system()` with unsanitized input — command injection risk
+- Do not use `exec_cmd()`, which runs a shell, with unsanitized input — command injection risk. `src/` does not use it at all
 - **Do not issue raw syscalls** — call the stdlib's per-target helpers (`sys_*`, `file_*`, `x*` in `lib/syscalls*.cyr` / `lib/io.cyr` / `lib/fs.cyr`) and spell the per-target names (`SYS_*`, `O_*`, `STAT_*`, `SOCK_*`); never `syscall(N, …)` with a number, a raw open-flag literal, or a hard-coded struct offset. Numbers and flags differ per arch and per OS, and the toolchain only translates the rows it routes: raw literals are how 1.6.1's `O_DIRECT`-for-`O_DIRECTORY` and 1.6.2's `st_uid`-for-`st_mode` aarch64 bugs shipped. The one exception is a value the stdlib does not name (e.g. mode `0x1A4`), with a comment
 - Do not trust external data (file content, network input, user args) without validation
-- Do not run a host tool from a test: `efibootmgr`, `argonaut`, `sha256sum`, `bootctl`, `ip`, `nft`, `udevadm`, `journalctl` and `fusermount` go through the private seams (`_update_root`, `_netns_ip_path`, `_netns_run_dir`, `_bootloader_bootctl`, `_bootloader_root`, `_udev_tool`, `_journald_tool`, `_journald_socket`, `_fuse_fusermount`), which are 0 outside `tests/tcyr`. Do not send to the host's journal socket from a test. Do not copy a sibling repo into scratch without excluding its build trees: stiva's `rust-old/` is 6 GB
+- Do not run a host tool from a test: `efibootmgr`, `argonaut`, `sha256sum`, `bootctl`, `ip`, `nft`, `udevadm`, `journalctl` and `fusermount` go through the private seams (`dd` has none, and runs on fixture files) (`_update_root`, `_netns_ip_path`, `_netns_run_dir`, `_bootloader_bootctl`, `_bootloader_root`, `_udev_tool`, `_journald_tool`, `_journald_socket`, `_fuse_fusermount`), which are 0 outside `tests/tcyr`. Do not send to the host's journal socket from a test. Do not copy a sibling repo into scratch without excluding its build trees: stiva's `rust-old/` is 6 GB
 - Do not create a temp file with a predictable name and `O_TRUNC` — a planted symlink redirects the write (audit F-1, fixed 1.7.0). Use `agnodrm_tmp_create`, which creates exclusively
 - Do not reorder the A/B slot writes (state, marker, firmware) without walking the power-cut table in [`docs/architecture/001-slot-write-order.md`](docs/architecture/001-slot-write-order.md), which `tests/tcyr/test_powercut.tcyr` runs. 1.7.2's first repair got this wrong with every test green. A changed write count in that test is a new row to walk, not a number to bump. A durable write that does not go through `_update_commit_tmp` needs an `_update_cut` beside it, and that seam stays under `#ifdef AGNODRM_POWERCUT`, so no shipped build can stop mid-update
 - Do not take a scratch buffer from `alloc()`: it never frees, and `arena_free` does not either. Use `_agnodrm_scratch_new` / `_agnodrm_scratch_free`, and return only heap copies
@@ -120,7 +119,7 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 ### Work Loop (continuous)
 
 1. **Work phase** — new features, roadmap items, bug fixes (see `docs/development/roadmap.md`)
-2. **Build check** — `cyrius build src/main.cyr build/agnosys`
+2. **Build check** — `cyrius build src/main.cyr build/agnodrm`
 3. **Test + benchmark additions** for new code
 4. **Internal review** — performance, memory, correctness, edge cases
 5. **Security check** — any new syscall usage, user input handling, buffer allocation
@@ -128,7 +127,7 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 7. **Documentation** — CHANGELOG, roadmap, `docs/development/state.md`, any ADR the change earned
 8. **Version check** — `VERSION`, `cyrius.cyml`, CHANGELOG header in sync (`cyrius.cyml` reads VERSION via `${file:VERSION}`, so `./scripts/version-bump.sh <new>` is enough)
 9. **Benchmark every version** — run `./scripts/bench-history.sh` on **every** version bump (patch, minor, major — including pin-only refreshes). It appends a row to **`bench-history.csv` (tracked — commit it; the cross-version perf record)** and regenerates **`BENCHMARKS.md` (gitignored — derived from the CSV by the script: the newest run against the one before it)**. Diff against the prior version's row; any regression beyond run-to-run noise is called out in the CHANGELOG `Performance` section, and an unexplained regression blocks the bump — never tag a version without the bench + delta check
-10. **Regenerate `dist/agnosys.cyr`** if any `src/*.cyr` changed
+10. **Regenerate `dist/agnodrm.cyr`** if any `src/*.cyr` changed
 11. **Return to step 1**
 
 ### Security Hardening (before every release)
@@ -136,12 +135,12 @@ scripts/check-api-surface.sh                # diff public API vs. 1.0 snapshot
 Per [first-party-standards § Security Hardening](https://github.com/MacCracken/agnosticos/blob/main/docs/development/applications/first-party-standards.md#security-hardening-new--required-before-every-release). Minimum:
 
 1. **Input validation** — every fn accepting external data validates bounds, types, ranges
-2. **Buffer safety** — every `var buf[N]` verified; N is **bytes**, max access < N. NB: cyrius emits `var buf[N]` *inside fn scope* as **static data, not stack** — consecutive calls clobber any borrowed Str/buf return. Check call patterns at every site
+2. **Buffer safety** — every `var buf[N]` verified; N is **bytes**, max access < N. A pointer into one never outlives the call: see `var buf[N]` under Cyrius Conventions
 3. **Syscall review** — every syscall validated: args checked, returns handled, error paths complete
 4. **Pointer validation** — no raw pointer dereference of untrusted input without bounds
-5. **No command injection** — use `exec_vec()` with explicit argv; never `sys_system()` with unsanitized input
+5. **No command injection** — use `exec_vec()` with explicit argv; never `exec_cmd()` with unsanitized input
 6. **No path traversal** — file paths from external input validated, no `../` escape
-7. **Known CVE review** — check kernel interfaces (audit netlink, dm-verity, IMA, FUSE, LUKS, TPM, Landlock, seccomp, secureboot, PAM) against current CVE databases
+7. **Known CVE review** — check the interfaces we bind (DRM ioctls, udev, FUSE, the journal socket, netns, nftables, systemd-boot, EFI variables) against current CVE databases
 8. **Document findings** — all issues in `docs/audit/YYYY-MM-DD-audit.md`
 
 Severity levels: **CRITICAL** (remote / privilege escalation), **HIGH** (moderate effort), **MEDIUM** (specific conditions), **LOW** (defense-in-depth).
@@ -156,7 +155,7 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 4. **Refactor pass** — consolidate the minor's additions where parallel codepaths accreted
 5. **Code review pass** — walk diffs end-to-end for missed guards, ABI leaks, off-by-ones, silently-ignored errors
 6. **Cleanup sweep** — stale comments, dead `#ifdef` branches, unused includes, orphaned files
-7. **Security re-scan** — quick grep for new `sys_system`, unchecked writes, unsanitized input, buffer size mismatches, large `var buf[N]` (≥64KB)
+7. **Security re-scan** — quick grep for new `exec_cmd`, unchecked writes, unsanitized input, buffer size mismatches, large `var buf[N]` (≥64KB)
 8. **Downstream check** — every consumer in `docs/development/state.md` still builds against the new version
 9. **Doc sync** — CHANGELOG, roadmap, `docs/development/state.md`, CLAUDE.md (if durable content changed)
 10. **Version verify** — `VERSION`, `cyrius.cyml`, CHANGELOG header, intended git tag all match
@@ -183,12 +182,12 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 - **Error propagation** (6.6.x value form — a Result is a register pair): `var res_t, res_v = f(); if (is_err_result(res_t) == 1) { return Err(res_v); }`. Never `return res_t;` / `return res_v;` — the payload alone reaches the caller as a tag, so an `Err` reads as success (see `src/error.cyr`)
 - **Syscall wrappers** return raw values; use `wrap_syscall(ret)` for Result wrapping
 - **`defer` in a Result-returning fn is safe at the consumer floor** — cyrius 6.6.0–6.6.6 skipped a `defer` block when the fn returned a value-form Result, and agnodrm leaked one fd per call in nine fns until 1.6.2. It is fixed at 6.6.7, the floor since 1.7.1. Existing fds / sockets / temp files are released explicitly on each exit path; that stays, and new code may use either. `tests/tcyr/test_integration.tcyr` `test_fd_hygiene` guards both. Tracker (closed): [`docs/development/issues/archive/2026-09-22-cyrius-defer-skipped-on-result-return.md`](docs/development/issues/archive/2026-09-22-cyrius-defer-skipped-on-result-return.md)
-- **Structs**: heap-allocated via `alloc()`, accessed via `store64`/`load64` at fixed offsets. `#derive(accessors)` adoption is post-1.0 follow-up (see roadmap Phase 8)
+- **Structs**: heap-allocated via `alloc()`, with accessors from `#derive(accessors)`. Kernel-ABI structs use typed fields or explicit widths
 - **Strings**: null-terminated C strings at boundaries; `lib/str.cyr` fat pointers (`Str`) internally. Parser inputs from `str_split` expect `Str`, not cstring
 - **`toml_get` family** in cyrius 5.x stdlib expects **cstr** keys, not `Str` — passing `str_from("key")` silently returns 0
 - **Benchmarks**: `lib/bench.cyr` with `now_ns()`; CSV history via `scripts/bench-history.sh`
-- **`var buf[N]` inside a function** is **static data**, not stack — consecutive calls clobber. Diagnostic: build emits "large static data (N bytes)" warning. Always heap-allocate large buffers; small bufs are OK only when their contents are copied out before the next call
-- **Heap large buffers** — `var buf[256000]` bloats the binary by 256KB (and creates the static-data hazard above)
+- **`var buf[N]` inside a function** is per-call stack storage at the consumer floor and up (measured at 6.6.10, 6.6.20, 6.7.9 and 6.7.18), until it passes the fn's frame budget: a 70,000-byte local was still on the stack at 6.7.18, and a 300,000-byte one went static with a compiler warning. Either way a pointer into one is not valid after the call, so copy out what a caller keeps. Older notes in this repo call all of them static, which was true of earlier toolchains
+- **Heap large buffers** — a large `var buf[N]` risks static storage and the hazard above; use scratch
 - **Enum values for constants** — don't consume `gvar_toks` slots (4,096 initialized globals limit)
 - **No negative literals** — write `(0 - N)` not `-N`
 - **No mixed `&&` / `||`** in one expression — nest `if` blocks
@@ -209,10 +208,10 @@ Run a closeout pass before tagging `X.Y.0` or `X.0.0`. Ship as the last patch of
 - **Workflow hardening**: `permissions: contents: read` by default and `contents: write` only on the release job, `persist-credentials: false` on every checkout, and actions pinned to commit SHAs with the tag in a comment.
 - **fmt drift gate**: run the **`cyrfmt` binary** per file (`cyrfmt <file>` writes formatted source to stdout) and diff against the committed file; CI fails on any diff. **Do not use `cyrius fmt <file>` in a gate** — since cyrius 6.5.28 it **rewrites the file in place** and prints nothing, so diffing its stdout compares an empty stream against every file; that reported all of them as drifted at 1.5.2, where the empty output was misread as a "silent no-op". Never run it expecting a dry run (`--dry` is the report-only form). `cyrius fmt --check <file>` does work (exits 1 on unformatted input; verified at 6.6.6), but the `cyrfmt` stdout diff also shows *what* drifted. The gate must also **fail as a tooling error when the formatter returns empty output** — a formatter that produces nothing is broken, and must never be reported as source drift.
 - **lint warn-fail**: `cyrius lint` per file; any `warn ` line fails CI.
-- **cross-target build gate**: every build (x86_64, aarch64, **agnos**) runs in CI, in release, and in `scripts/audit.sh` gate 5. `--agnos` runs unconditionally — it is the stock x86_64 backend plus the `CYRIUS_TARGET_AGNOS` define, not a separate cross compiler, so there is no `cycc_*` presence check to skip it. Every compile's log — the three target builds, the test, fuzz and bench builds, in CI, release and `scripts/audit.sh` alike — goes through **`scripts/audit.sh --check-build-log <label> <log>`**, which promotes three warn-only classes to hard failures: **`warning: undefined function`** (a *reachable* undefined function is already a build error, but when DCE proves the call site unreachable cyrius only warns and exits 0 — how `_agnos_getenv` shipped at 1.5.2), **`non-exhaustive match over enum`**, and the value-form **`the tag is dropped`** (a Result-returning fn returning a single value on some path). `#deprecated` call-site warnings and `duplicate fn` warnings are exempt by design. The **aarch64** lane has refused undefined **tail** calls (`return f(...)`) and printed `#deprecated` warnings since cyrius 6.6.9; before that `cycc_aarch64` printed nothing and emitted a binary that SIGILLed ([tracker, closed](docs/development/issues/archive/2026-09-22-cyrius-aarch64-undefined-fn-silent.md)). CI runs the test files on aarch64 under `qemu-aarch64` but not the fuzz harnesses, and release runs neither, so an aarch64-only branch in a parser still needs a local qemu fuzz run, not just a build. Since cyrius reports an undefined function only inside a *reachable* fn, the agnos lane also builds `scripts/gen-api-probe.sh`'s probe, which calls every public fn — `src/main.cyr` alone reaches only the core modules and never compiled the other five modules' agnos arms. Capture build output to a file, never `| tee` — the default GitHub Actions step shell is `bash -e` with no `pipefail`, so a pipeline masks the compiler's exit status behind tee's.
-- **dist staleness gate**: CI runs `cyrius distlib` and fails if `dist/agnosys.cyr` differs from the committed copy.
+- **cross-target build gate**: every build (x86_64, aarch64, **agnos**) runs in CI, in release, and in `scripts/audit.sh` gate 5. `--agnos` runs unconditionally — it is the stock x86_64 backend plus the `CYRIUS_TARGET_AGNOS` define, not a separate cross compiler, so there is no `cycc_*` presence check to skip it. Every compile's log — the three target builds, the test, fuzz and bench builds, in CI, release and `scripts/audit.sh` alike — goes through **`scripts/audit.sh --check-build-log <label> <log>`**, which promotes three warn-only classes to hard failures: **`warning: undefined function`** (a *reachable* undefined function is already a build error, but when DCE proves the call site unreachable cyrius only warns and exits 0 — how `_agnos_getenv` shipped at 1.5.2), **`non-exhaustive match over enum`**, and the value-form **`the tag is dropped`** (a Result-returning fn returning a single value on some path). `#deprecated` call-site warnings and `duplicate fn` warnings are exempt by design. The **aarch64** lane has refused undefined **tail** calls (`return f(...)`) and printed `#deprecated` warnings since cyrius 6.6.9; before that `cycc_aarch64` printed nothing and emitted a binary that SIGILLed ([tracker, closed](docs/development/issues/archive/2026-09-22-cyrius-aarch64-undefined-fn-silent.md)). The test files and fuzz harnesses run on aarch64 under `qemu-aarch64`, in CI and in release, so an aarch64-only branch gets run, not just built. Since cyrius reports an undefined function only inside a *reachable* fn, the agnos lane also builds `scripts/gen-api-probe.sh`'s probe, which calls every public fn — `src/main.cyr` alone reaches only the core modules and never compiled the other five modules' agnos arms. Capture build output to a file, never `| tee` — the default GitHub Actions step shell is `bash -e` with no `pipefail`, so a pipeline masks the compiler's exit status behind tee's.
+- **dist staleness gate**: CI runs `cyrius distlib` and fails if `dist/agnodrm.cyr` differs from the committed copy.
 - **Workflow layout**:
-  - `.github/workflows/ci.yml` — toolchain → syntax → API surface → capacity → deps → fmt → lint → vet → dist gate → DCE build → ELF verify → aarch64 cross (best-effort) → aarch64 tests under qemu → agnos cross → smoke → tests → fuzz → bench
+  - `.github/workflows/ci.yml` — toolchain → syntax → API surface → capacity → deps → fmt → lint → vet → dist gate → DCE build → ELF verify → aarch64 cross (best-effort) → aarch64 tests and fuzz under qemu → agnos cross → smoke → tests → fuzz → bench
   - `.github/workflows/release.yml` — version gate → CI gate → DCE build → aarch64 cross → agnos cross (verify only) → tests → fuzz → regenerate dist → archive (source tar, single-file `.cyr`, prebuilt x86_64 + aarch64 binaries, cyrius.lock, SHA256SUMS)
 - **Concurrency**: CI uses `cancel-in-progress: true` keyed on workflow + ref.
 

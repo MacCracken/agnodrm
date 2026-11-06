@@ -35,6 +35,16 @@ enum BootloaderType {
     BOOT_UNKNOWN = 3;
 }
 
+# What an entry boots. See bootloader_entry_boot_kind.
+enum BootEntryKind {
+    BOOT_ENTRY_NONE = 0;
+    BOOT_ENTRY_LINUX = 1;
+    BOOT_ENTRY_EFI = 2;
+    BOOT_ENTRY_UKI = 3;
+    BOOT_ENTRY_UKI_URL = 4;
+    BOOT_ENTRY_CONFLICT = 5;
+}
+
 # ================================================================
 # Well-known paths
 # ================================================================
@@ -47,16 +57,56 @@ enum BootloaderType {
 
 # ================================================================
 # BootEntry struct
-# 7 fields * 8 = 56 bytes. Accessors auto-generated.
+# 11 fields * 8 = 88 bytes. Accessors auto-generated.
 # ================================================================
 
 #derive(accessors)
-struct bootloader_entry { id; title; linux; initrd; options; is_default; version; }
+struct bootloader_entry { id; title; linux; initrd; options; is_default; version; efi; uki; uki_url; extra; }
 
 fn bootloader_entry_new(): i64 {
-    var e = alloc(56);
-    memset(e, 0, 56);
+    var e = alloc(88);
+    memset(e, 0, 88);
     return e;
+}
+
+# What an entry names to boot, by systemd-boot's rule: exactly one of linux, efi, uki and
+# uki-url. Two of them, in either order, and it drops the entry, though bootctl still
+# lists it. For an entry file, none means it drops that too. A kind is not a promise that
+# it boots: systemd-boot also drops an entry for a missing file or another architecture.
+#
+# What a clean bootloader_validate_kernel_cmdline on `options` proves depends on the kind,
+# and `options` is worth validating for all of them:
+#   BOOT_ENTRY_LINUX    `options` is the kernel's command line.
+#   BOOT_ENTRY_UKI      `options` replaces the image's own command line unless Secure Boot
+#   BOOT_ENTRY_UKI_URL  is on and the image has one. Then the image's own applies, and
+#                       nothing here can read that, so the check covers one of two lines.
+#   BOOT_ENTRY_EFI      The program does what it likes with them.
+#
+# From bootloader_parse_bootctl_list, BOOT_ENTRY_NONE says only that bootctl showed no boot
+# key. Automatic entries look like that, and so does a file bootctl could not load, and
+# those can boot. A 0 entry is BOOT_ENTRY_NONE.
+fn bootloader_entry_boot_kind(e): i64 {
+    if (e == 0) { return BOOT_ENTRY_NONE; }
+    var kind = BOOT_ENTRY_NONE;
+    var seen = 0;
+    if (bootloader_entry_linux(e) != 0) {
+        kind = BOOT_ENTRY_LINUX;
+        seen = seen + 1;
+    }
+    if (bootloader_entry_efi(e) != 0) {
+        kind = BOOT_ENTRY_EFI;
+        seen = seen + 1;
+    }
+    if (bootloader_entry_uki(e) != 0) {
+        kind = BOOT_ENTRY_UKI;
+        seen = seen + 1;
+    }
+    if (bootloader_entry_uki_url(e) != 0) {
+        kind = BOOT_ENTRY_UKI_URL;
+        seen = seen + 1;
+    }
+    if (seen > 1) { return BOOT_ENTRY_CONFLICT; }
+    return kind;
 }
 
 # ================================================================
@@ -275,14 +325,107 @@ fn bootloader_parse_loader_conf(text): i64 {
 # Test seam, 0 outside tests/tcyr: a stub to run in place of /usr/bin/bootctl.
 var _bootloader_bootctl = 0;
 
-# List boot entries: `bootctl list` first, then the BLS Type #1 drop-ins.
+# Walk every readable one of /boot/loader/entries, /efi/loader/entries and
+# /boot/efi/loader/entries into result_arr from `count`, merged as systemd-boot merges the
+# ESP and XBOOTLDR. Two directories can each hold an id, and both are returned: hiding one
+# would hide what may boot. Two paths to one directory are read once. Returns the new
+# count, or a BOOTLOADER_SCAN_* refusal, BOOTLOADER_SCAN_NO_DIR when none could be read.
+fn _bootloader_scan_boot_dirs(result_arr, max_entries, count): i64 {
+    var dirs = vec_new();
+    vec_push(dirs, "/boot/loader/entries");
+    vec_push(dirs, "/efi/loader/entries");
+    vec_push(dirs, "/boot/efi/loader/entries");
+    var readable = 0;
+    var di = 0;
+    while (di < vec_len(dirs)) {
+        var dir = _bootloader_path(vec_get(dirs, di));
+        var seen = 0;
+        var pi = 0;
+        while (pi < di) {
+            seen = seen | _bootloader_same_dir(dir, _bootloader_path(vec_get(dirs, pi)));
+            pi = pi + 1;
+        }
+        di = di + 1;
+        if (seen == 1) { continue; }
+        var n = _bootloader_scan_entries_dir(dir, result_arr, max_entries, count);
+        if (n <= BOOTLOADER_SCAN_TOO_LARGE) { return n; }
+        if (n >= 0) {
+            readable = 1;
+            count = n;
+        } elif (n != 0 - ENOENT) {
+            # A directory that exists and cannot be read may hold what boots.
+            if (n != 0 - ENOTDIR) { return BOOTLOADER_SCAN_DIR_FAILED; }
+        }
+    }
+    if (readable == 0) { return BOOTLOADER_SCAN_NO_DIR; }
+    return count;
+}
+
+# Give a bootctl entry showing no boot key the keys of its file. bootctl drops a path it
+# will not take, such as one holding "..", and prints the entry without it, while
+# systemd-boot hands that path to the firmware. Returns 0.
+fn _bootloader_fill_boot_keys(e, f): i64 {
+    if (bootloader_entry_boot_kind(e) != BOOT_ENTRY_NONE) { return 0; }
+    bootloader_entry_set_linux(e, bootloader_entry_linux(f));
+    bootloader_entry_set_efi(e, bootloader_entry_efi(f));
+    bootloader_entry_set_uki(e, bootloader_entry_uki(f));
+    bootloader_entry_set_uki_url(e, bootloader_entry_uki_url(f));
+    return 0;
+}
+
+# Add to result_arr, which holds `count` entries from bootctl, every entry file bootctl did
+# not report. bootctl leaves out what systemd-boot boots: a file named "a b.conf", or one
+# with a line it cannot parse. Each entry from bootctl answers for one file, so a second
+# file of the same id, on the other partition, is still added. A counted file reads
+# "a+3.conf" here and "a.conf" there, and comes back under both, which errs toward showing
+# it. Returns the new count, or a BOOTLOADER_SCAN_* refusal. No directory to read leaves the
+# list as bootctl gave it.
+fn _bootloader_merge_files(result_arr, max_entries, count): i64 {
+    var bytes = max_entries * 8 + count + 1;
+    var files = _agnodrm_scratch_new(bytes);
+    if (files == 0) { return BOOTLOADER_SCAN_TOO_MANY; }
+    memset(files, 0, bytes);
+    var claimed = files + max_entries * 8;
+    var n = _bootloader_scan_boot_dirs(files, max_entries, 0);
+    var total = count;
+    var fi = 0;
+    while (fi < n) {
+        var f = load64(files + fi * 8);
+        var hit = 0;
+        var bi = 0;
+        while (bi < count) {
+            if (load8(claimed + bi) == 0) {
+                var reported = load64(result_arr + bi * 8);
+                if (streq(bootloader_entry_id(reported), bootloader_entry_id(f)) == 1) {
+                    store8(claimed + bi, 1);
+                    _bootloader_fill_boot_keys(reported, f);
+                    hit = 1;
+                    break;
+                }
+            }
+            bi = bi + 1;
+        }
+        if (hit == 0) {
+            if (total >= max_entries) {
+                _agnodrm_scratch_free(files, bytes);
+                return BOOTLOADER_SCAN_TOO_MANY;
+            }
+            store64(result_arr + total * 8, f);
+            total = total + 1;
+        }
+        fi = fi + 1;
+    }
+    _agnodrm_scratch_free(files, bytes);
+    if (n == BOOTLOADER_SCAN_NO_DIR) { return count; }
+    if (n < 0) { return n; }
+    return total;
+}
+
+# List boot entries: what `bootctl list` reports, and every BLS Type #1 entry file it did
+# not, since the two disagree about what is an entry (see _bootloader_merge_files).
 # result_arr: caller-allocated array of max_entries BootEntry pointers.
-# When bootctl is missing, fails, or prints nothing, every readable one of
-# /boot/loader/entries, /efi/loader/entries and /boot/efi/loader/entries is
-# parsed by _bootloader_scan_entries_dir and merged, as systemd-boot merges the ESP
-# and XBOOTLDR. Two directories can each hold an id, and both are returned: hiding one
-# would hide what may boot. Two paths to one directory are read once. is_default is
-# never set by either path (see _bootloader_scan_entries_dir).
+# When bootctl is missing, fails, or prints nothing, the entry files are the whole list.
+# is_default is never set by either path (see _bootloader_scan_entries_dir).
 # Returns Result: Ok(count) — 0 when a source was read and held no entries —
 # Err(not_supported) when bootctl produced nothing AND no entries directory
 # could be read, so "no source" no longer reads as "no entries", or Err when the
@@ -322,45 +465,22 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
             var p_t, p_v = bootloader_parse_bootctl_list(buf, result_arr, max_entries);
             _agnodrm_scratch_free(buf, cap + 1);
             if (is_err_result(p_t) == 1) { return Err(p_v); }
-            return Ok(p_v);
+            var merged = _bootloader_merge_files(result_arr, max_entries, p_v);
+            if (merged < 0) { return _bootloader_scan_err(merged); }
+            return Ok(merged);
         }
     }
     _agnodrm_scratch_free(buf, cap + 1);
 
     # Fallback (roadmap V1.6.x): read the loader entries directly, from all of them.
     # Through 1.7.1 the first directory won, so an empty /boot hid every entry on /efi.
-    var dirs = vec_new();
-    vec_push(dirs, "/boot/loader/entries");
-    vec_push(dirs, "/efi/loader/entries");
-    vec_push(dirs, "/boot/efi/loader/entries");
-    var count = 0;
-    var readable = 0;
-    var di = 0;
-    while (di < vec_len(dirs)) {
-        var dir = _bootloader_path(vec_get(dirs, di));
-        var seen = 0;
-        var pi = 0;
-        while (pi < di) {
-            seen = seen | _bootloader_same_dir(dir, _bootloader_path(vec_get(dirs, pi)));
-            pi = pi + 1;
-        }
-        di = di + 1;
-        if (seen == 1) { continue; }
-        var n = _bootloader_scan_entries_dir(dir, result_arr, max_entries, count);
-        if (n <= BOOTLOADER_SCAN_TOO_LARGE) { return _bootloader_scan_err(n); }
-        if (n >= 0) {
-            readable = 1;
-            count = n;
-        } elif (n != 0 - ENOENT) {
-            # A directory that exists and cannot be read may hold what boots.
-            if (n != 0 - ENOTDIR) {
-                return drm_err_io(0 - n, "a loader entries directory cannot be read");
-            }
-        }
+    var count = _bootloader_scan_boot_dirs(result_arr, max_entries, 0);
+    if (count >= 0) { return Ok(count); }
+    if (count == BOOTLOADER_SCAN_NO_DIR) {
+        var why = "bootctl list printed nothing and no loader/entries dir under /boot, /efi or /boot/efi is readable";
+        return drm_err_not_supported(why);
     }
-    if (readable == 1) { return Ok(count); }
-    var why = "bootctl list printed nothing and no loader/entries dir under /boot, /efi or /boot/efi is readable";
-    return drm_err_not_supported(why);
+    return _bootloader_scan_err(count);
     #endif
 }
 
@@ -397,6 +517,8 @@ enum BootloaderEntryLimits {
 var BOOTLOADER_SCAN_TOO_LARGE = 0 - 5000;
 var BOOTLOADER_SCAN_TOO_MANY = 0 - 5001;
 var BOOTLOADER_SCAN_UNREADABLE = 0 - 5002;
+var BOOTLOADER_SCAN_NO_DIR = 0 - 5003;
+var BOOTLOADER_SCAN_DIR_FAILED = 0 - 5004;
 
 fn _bootloader_scan_err(n): i64 {
     if (n == BOOTLOADER_SCAN_TOO_MANY) {
@@ -404,6 +526,9 @@ fn _bootloader_scan_err(n): i64 {
     }
     if (n == BOOTLOADER_SCAN_UNREADABLE) {
         return drm_err_io(0, "a loader entry cannot be read; not parsing part of the list");
+    }
+    if (n == BOOTLOADER_SCAN_DIR_FAILED) {
+        return drm_err_io(0, "a loader entries directory cannot be read");
     }
     return drm_err_io(0, "a loader entry is over 64 KiB; not parsing part of the list");
 }
@@ -434,9 +559,10 @@ fn _bootloader_has_conf_suffix(nd, nlen): i64 {
 # 1 if a directory entry name (Str) names a loader entry file we will open:
 # it ends in ".conf" in any case (systemd-boot folds it) after a
 # non-empty stem, is not hidden (which also excludes "." and ".."), is at most
-# BOOTLOADER_ENTRY_NAME_MAX bytes, and holds no '/', control byte or DEL.
-# Linux getdents cannot yield a '/' or an over-long name; those two checks are
-# defence in depth for any other dirent source.
+# BOOTLOADER_ENTRY_NAME_MAX bytes, and holds no '/' or control byte. Linux getdents
+# cannot yield a '/' or an over-long name; those two checks are defence in depth for any
+# other dirent source. DEL is legal on vfat and systemd-boot reads such a file, so a name
+# holding one is an entry like any other.
 fn _bootloader_entry_name_ok(name: Str): i64 {
     if (name == 0) { return 0; }
     var nlen = str_len(name);
@@ -449,7 +575,6 @@ fn _bootloader_entry_name_ok(name: Str): i64 {
         var ch = load8(nd + i);
         if (ch == 47) { return 0; }            # '/'
         if (ch < 32) { return 0; }             # control byte (NUL included)
-        if (ch == 127) { return 0; }           # DEL
         i = i + 1;
     }
     return _bootloader_has_conf_suffix(nd, nlen);
@@ -518,20 +643,46 @@ fn _bootloader_sb_append(sb, val): i64 {
     return sb;
 }
 
+# Strip one matching pair of quotes from a value, as systemd-boot does to every key of an
+# entry file: `options 'init=/bin/sh'` boots that option. A value that is only quotes is
+# empty, which is 0. `v` is a heap copy, and the result points into it.
+fn _bootloader_unquote(v): i64 {
+    if (v == 0) { return 0; }
+    var q = load8(v);
+    if (q != 34) {
+        if (q != 39) { return v; }
+    }
+    var n = strlen(v);
+    if (load8(v + n - 1) != q) { return v; }
+    if (n < 3) { return 0; }
+    store8(v + n - 1, 0);
+    return v + 1;
+}
+
+# A value from an entry file, as systemd-boot reads it.
+fn _bootloader_entry_value(line, linelen, kp): i64 {
+    return _bootloader_unquote(bootloader_extract_value(line, linelen, kp));
+}
+
 # Parse one BLS Type #1 entry body — `textlen` bytes at `text`, not
 # NUL-delimited — into entry `e`. Lines end at LF or CR, as systemd-boot ends them: with
 # LF alone, "# x\roptions init=/bin/sh" read as a comment here and booted as an option
 # (audit F-27). Trailing spaces/tabs are trimmed; blank lines and lines whose first
 # non-blank byte is '#' are skipped. The key is the first word, the value the
-# rest of the line after the separating whitespace. title / version / linux
-# are single-valued (last wins); initrd and options may repeat and are joined
-# with one space, as the BLS concatenates options. machine-id, sort-key, efi,
-# devicetree, devicetree-overlay and architecture have no bootloader_entry
-# field and are ignored, as are unknown keys and empty values. No key is
-# required: a missing one leaves its field 0. Returns 0.
+# rest of the line after the separating whitespace, less one matching pair of quotes.
+# title / version / linux / efi / uki / uki-url are single-valued (last wins); initrd,
+# options and extra may repeat and are joined with one space, as the BLS concatenates
+# options, so a path holding a space cannot be told from two. Any of the four boot keys
+# is kept even beside another: bootloader_entry_boot_kind says what that means. extra
+# hands a UKI credentials and system extensions; systemd-boot adds nothing from it to a
+# command line.
+# machine-id, sort-key, profile, devicetree, devicetree-overlay and architecture have no
+# bootloader_entry field and are ignored, as are unknown keys and empty values. No key
+# is required: a missing one leaves its field 0. Returns 0.
 fn _bootloader_parse_entry_text(e, text, textlen): i64 {
     var sb_initrd = 0;
     var sb_options = 0;
+    var sb_extra = 0;
     var pos = 0;
     while (pos < textlen) {
         var ls = pos;
@@ -568,35 +719,59 @@ fn _bootloader_parse_entry_text(e, text, textlen): i64 {
         var line = text + ls;
         var kp = _bootloader_entry_key(line, ll, "title");
         if (kp > 0) {
-            var tv = bootloader_extract_value(line, ll, kp);
+            var tv = _bootloader_entry_value(line, ll, kp);
             if (tv != 0) { bootloader_entry_set_title(e, tv); }
             continue;
         }
         kp = _bootloader_entry_key(line, ll, "version");
         if (kp > 0) {
-            var vv = bootloader_extract_value(line, ll, kp);
+            var vv = _bootloader_entry_value(line, ll, kp);
             if (vv != 0) { bootloader_entry_set_version(e, vv); }
             continue;
         }
         kp = _bootloader_entry_key(line, ll, "linux");
         if (kp > 0) {
-            var lv = bootloader_extract_value(line, ll, kp);
+            var lv = _bootloader_entry_value(line, ll, kp);
             if (lv != 0) { bootloader_entry_set_linux(e, lv); }
             continue;
         }
         kp = _bootloader_entry_key(line, ll, "initrd");
         if (kp > 0) {
-            sb_initrd = _bootloader_sb_append(sb_initrd, bootloader_extract_value(line, ll, kp));
+            sb_initrd = _bootloader_sb_append(sb_initrd, _bootloader_entry_value(line, ll, kp));
             continue;
         }
         kp = _bootloader_entry_key(line, ll, "options");
         if (kp > 0) {
-            sb_options = _bootloader_sb_append(sb_options, bootloader_extract_value(line, ll, kp));
+            sb_options = _bootloader_sb_append(sb_options, _bootloader_entry_value(line, ll, kp));
+            continue;
+        }
+        kp = _bootloader_entry_key(line, ll, "efi");
+        if (kp > 0) {
+            var ev = _bootloader_entry_value(line, ll, kp);
+            if (ev != 0) { bootloader_entry_set_efi(e, ev); }
+            continue;
+        }
+        kp = _bootloader_entry_key(line, ll, "uki");
+        if (kp > 0) {
+            var uv = _bootloader_entry_value(line, ll, kp);
+            if (uv != 0) { bootloader_entry_set_uki(e, uv); }
+            continue;
+        }
+        kp = _bootloader_entry_key(line, ll, "uki-url");
+        if (kp > 0) {
+            var rv = _bootloader_entry_value(line, ll, kp);
+            if (rv != 0) { bootloader_entry_set_uki_url(e, rv); }
+            continue;
+        }
+        kp = _bootloader_entry_key(line, ll, "extra");
+        if (kp > 0) {
+            sb_extra = _bootloader_sb_append(sb_extra, _bootloader_entry_value(line, ll, kp));
             continue;
         }
     }
     if (sb_initrd != 0) { bootloader_entry_set_initrd(e, str_data(str_builder_build(sb_initrd))); }
     if (sb_options != 0) { bootloader_entry_set_options(e, str_data(str_builder_build(sb_options))); }
+    if (sb_extra != 0) { bootloader_entry_set_extra(e, str_data(str_builder_build(sb_extra))); }
     return 0;
 }
 
@@ -692,8 +867,7 @@ fn _bootloader_scan_entries_dir(dir, result_arr, max_entries, count): i64 {
 # parsed, in byte-wise file-name order, into a bootloader_entry (id = the file name,
 # ".conf" included, as systemd-boot and the bootctl path report it; repeated
 # initrd / options joined with a space; is_default 0), into the caller-allocated
-# result_arr. Hidden and over-long names and non-regular files are skipped, as
-# systemd-boot skips them.
+# result_arr. Hidden names and non-regular files are skipped, as systemd-boot skips them.
 # Returns Result: Ok(count) — 0 for a readable directory with no entries — or
 # Err when `dir` is not a readable directory, an argument is invalid, or the entries
 # cannot all be returned: a file over 64 KiB (BOOTLOADER_ENTRY_FILE_MAX) or unreadable,
@@ -765,6 +939,38 @@ fn _bootloader_bootctl_flush(e, sb_initrd, sb_options, result_arr, max_entries, 
     return count + 1;
 }
 
+# Length of the tree glyph bootctl puts before an addon's command line: "└─" where the
+# locale is UTF-8, as it is under exec's empty env, else "`-". 0 if there is none.
+fn _bootloader_tree_glyph(v): i64 {
+    if (v == 0) { return 0; }
+    var n = strlen(v);
+    if (n >= 2) {
+        if (memeq(v, "`-", 2) == 1) { return 2; }
+    }
+    if (n < 6) { return 0; }
+    if (memeq(v, "\xe2\x94\x94\xe2\x94\x80", 6) == 1) { return 6; }
+    return 0;
+}
+
+# An "options:" value as systemd-boot would pass it: no glyph, one pair of quotes off.
+fn _bootloader_bootctl_option(line, linelen, kp): i64 {
+    var v = bootloader_extract_value(line, linelen, kp);
+    if (v == 0) { return 0; }
+    return _bootloader_unquote(v + _bootloader_tree_glyph(v));
+}
+
+# What a block can only be sure of once it ends: its extras, and that a Type #2 entry's
+# "linux:" was a UKI. Returns 0.
+fn _bootloader_bootctl_finish(e, sb_extra, type2): i64 {
+    if (e == 0) { return 0; }
+    if (sb_extra != 0) { bootloader_entry_set_extra(e, str_data(str_builder_build(sb_extra))); }
+    if (type2 != 1) { return 0; }
+    if (bootloader_entry_linux(e) == 0) { return 0; }
+    bootloader_entry_set_uki(e, bootloader_entry_linux(e));
+    bootloader_entry_set_linux(e, 0);
+    return 0;
+}
+
 # Parse `bootctl list` output. Each entry is a block of right-aligned
 # "key: value" lines, blocks separated by a blank line:
 #
@@ -787,7 +993,13 @@ fn _bootloader_bootctl_flush(e, sb_initrd, sb_options, result_arr, max_entries, 
 # Both are joined into the field with one space: dropping an options line
 # would drop a kernel parameter (say init=/bin/sh) from what a caller checks
 # with bootloader_validate_kernel_cmdline. Continuation lines under any other
-# key (devicetree-overlay, ...) are ignored. What makes a line a continuation is
+# key (devicetree-overlay, ...) are ignored. Three more differ from an entry file. bootctl
+# prints a Type #2 UKI under "linux:", so the block's "type:" moves it to uki. It prints an
+# addon's command line as an "options:" line after "extra:", behind a tree glyph, which is
+# taken off so the text reaches the validator. And it never unquotes, so an options line
+# is unquoted here as systemd-boot would. extra lists what bootctl kept, which is not
+# what the file says. See bootloader_entry_boot_kind on what it can and cannot show. What
+# makes a line a continuation is
 # its indent, never its text: an options line is free to read "x: init=/bin/sh"
 # or "id: other.conf", and it stays options. A line of blanks past the colon
 # column is an empty continuation, not the end of the block; only a line short of
@@ -808,6 +1020,8 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
     var current = 0;
     var sb_initrd = 0;
     var sb_options = 0;
+    var sb_extra = 0;
+    var type2 = 0;           # this block's "type:" says Type #2
     var cont = 0;            # field continuation lines extend: 0 none, 1 initrd, 2 options
     var colon = 0;           # this block's label colon column, 0 until one is seen
     var textlen = strlen(text);
@@ -828,11 +1042,14 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
             if (colon > 0) {
                 if (indent >= colon) { continue; }
             }
+            _bootloader_bootctl_finish(current, sb_extra, type2);
             count = _bootloader_bootctl_flush(current, sb_initrd, sb_options, result_arr, max_entries, count);
             if (count < 0) { return drm_err_invalid_argument("more boot entries than max_entries"); }
             current = 0;
             sb_initrd = 0;
             sb_options = 0;
+            sb_extra = 0;
+            type2 = 0;
             cont = 0;
             colon = 0;
             continue;
@@ -874,8 +1091,16 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
         }
         kp = bootloader_line_starts_with(line, linelen, "options:");
         if (kp > 0) {
-            sb_options = _bootloader_sb_append(sb_options, bootloader_extract_value(line, linelen, kp));
+            sb_options = _bootloader_sb_append(sb_options, _bootloader_bootctl_option(line, linelen, kp));
             cont = 2;
+            continue;
+        }
+        kp = bootloader_line_starts_with(line, linelen, "type:");
+        if (kp > 0) {
+            var ty = bootloader_extract_value(line, linelen, kp);
+            if (ty != 0) {
+                if (strstr(ty, "Type #2") >= 0) { type2 = 1; }
+            }
             continue;
         }
         kp = bootloader_line_starts_with(line, linelen, "version:");
@@ -883,7 +1108,28 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
             bootloader_entry_set_version(current, bootloader_extract_value(line, linelen, kp));
             continue;
         }
+        kp = bootloader_line_starts_with(line, linelen, "efi:");
+        if (kp > 0) {
+            bootloader_entry_set_efi(current, bootloader_extract_value(line, linelen, kp));
+            continue;
+        }
+        kp = bootloader_line_starts_with(line, linelen, "uki:");
+        if (kp > 0) {
+            bootloader_entry_set_uki(current, bootloader_extract_value(line, linelen, kp));
+            continue;
+        }
+        kp = bootloader_line_starts_with(line, linelen, "uki-url:");
+        if (kp > 0) {
+            bootloader_entry_set_uki_url(current, bootloader_extract_value(line, linelen, kp));
+            continue;
+        }
+        kp = bootloader_line_starts_with(line, linelen, "extra:");
+        if (kp > 0) {
+            sb_extra = _bootloader_sb_append(sb_extra, bootloader_extract_value(line, linelen, kp));
+            continue;
+        }
     }
+    _bootloader_bootctl_finish(current, sb_extra, type2);
     count = _bootloader_bootctl_flush(current, sb_initrd, sb_options, result_arr, max_entries, count);
     if (count < 0) { return drm_err_invalid_argument("more boot entries than max_entries"); }
 
@@ -947,6 +1193,7 @@ fn _bootloader_norm_token(src, n, out): i64 {
         var c = load8(src + i);
         i = i + 1;
         if (c == 34) { continue; }
+        if (c == 39) { continue; }   # bootctl shows a quote systemd-boot takes off
         if (c == 61) { inkey = 0; }
         if (c >= 65 && c <= 90) { c = c + 32; }
         if (inkey == 1) {
@@ -1173,11 +1420,20 @@ fn bootloader_validate_kernel_cmdline(options): i64 {
             word_quoted = quoted;
             var tlen = i - tok_start;
             if (tlen > 0) {
-                # Extract token to null-terminated buffer
+                # Extract the token to a NUL-terminated buffer. Scratch for a long one: cut
+                # short, init=/<128 bytes>/sh lost the name that makes it a shell.
                 var tok[128];
-                if (tlen > 127) { tlen = 127; }
-                var nlen = _bootloader_norm_token(options + tok_start, tlen, &tok);
-                if (_bootloader_token_danger(&tok, nlen, bare) == 1) {
+                var tokp = &tok;
+                var big = 0;
+                if (tlen > 127) {
+                    big = _agnodrm_scratch_new(tlen + 1);
+                    if (big == 0) { return drm_err_io(ENOMEM, "no memory for a cmdline token"); }
+                    tokp = big;
+                }
+                var nlen = _bootloader_norm_token(options + tok_start, tlen, tokp);
+                var hit = _bootloader_token_danger(tokp, nlen, bare);
+                if (big != 0) { _agnodrm_scratch_free(big, tlen + 1); }
+                if (hit == 1) {
                     return drm_err_invalid_argument("kernel cmdline contains dangerous parameter");
                 }
             }

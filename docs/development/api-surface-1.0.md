@@ -1,4 +1,4 @@
-# Agnosys 1.0 API Surface
+# Agnodrm 1.0 API Surface
 
 > Frozen at **1.0.0** (2026-04-17). The 1.0 baseline (556 fns) is the stable contract: removal or signature change of any 1.0-era fn requires a 2.0 bump. Post-1.0 additions (V1.1.x → V1.2.x) are listed inline below; all are additive.
 >
@@ -7,10 +7,10 @@
 
 ## Summary
 
-- Total public functions: **321**
+- Total public functions: **330**
 - Modules: **10**
 - 1.0 baseline (frozen): 556 fns
-- Post-1.0 additions (V1.1 + V1.2 cycles): -235 fns
+- Post-1.0 additions (V1.1 + V1.2 cycles): -226 fns
 - Outliers (fns lacking module prefix): 0
 
 
@@ -34,25 +34,34 @@
 - `bootloader_config_type(arg)` → (no behavioral docs)
 - `bootloader_danger_reset()` → (no behavioral docs)
 - `bootloader_detect()` → Detect the installed bootloader by probing well-known paths: systemd-boot under each place an ESP...
+- `bootloader_entry_boot_kind(arg)` → What an entry names to boot, by systemd-boot's rule: exactly one of linux, efi, uki and uki-url. ...
+- `bootloader_entry_efi(arg)` → (no behavioral docs)
+- `bootloader_entry_extra(arg)` → (no behavioral docs)
 - `bootloader_entry_id(arg)` → (no behavioral docs)
 - `bootloader_entry_initrd(arg)` → (no behavioral docs)
 - `bootloader_entry_is_default(arg)` → (no behavioral docs)
 - `bootloader_entry_linux(arg)` → (no behavioral docs)
 - `bootloader_entry_new()` → (no behavioral docs)
 - `bootloader_entry_options(arg)` → (no behavioral docs)
+- `bootloader_entry_set_efi(arg1, arg2)` → (no behavioral docs)
+- `bootloader_entry_set_extra(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_set_id(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_set_initrd(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_set_is_default(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_set_linux(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_set_options(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_set_title(arg1, arg2)` → (no behavioral docs)
+- `bootloader_entry_set_uki(arg1, arg2)` → (no behavioral docs)
+- `bootloader_entry_set_uki_url(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_set_version(arg1, arg2)` → (no behavioral docs)
 - `bootloader_entry_title(arg)` → (no behavioral docs)
+- `bootloader_entry_uki(arg)` → (no behavioral docs)
+- `bootloader_entry_uki_url(arg)` → (no behavioral docs)
 - `bootloader_entry_version(arg)` → (no behavioral docs)
 - `bootloader_extract_value(arg1, arg2, arg3)` → Extract the value after a key in a line (trim whitespace). Returns heap string pointer.
 - `bootloader_is_dangerous_token(arg1, arg2, arg3)` → DEPRECATED since 1.6.2, removed in 2.0.0 (roadmap V2.0). Case-insensitive SUBSTRING search for `t...
 - `bootloader_line_starts_with(arg1, arg2, arg3)` → Helper: check if line starts with prefix (skipping leading whitespace)
-- `bootloader_list_boot_entries(arg1, arg2)` → List boot entries: `bootctl list` first, then the BLS Type #1 drop-ins. result_arr: caller-alloca...
+- `bootloader_list_boot_entries(arg1, arg2)` → List boot entries: what `bootctl list` reports, and every BLS Type #1 entry file it did not, sinc...
 - `bootloader_list_loader_entries(arg1, arg2, arg3)` → List Boot Loader Specification Type #1 entries from one directory, e.g. "/boot/loader/entries". E...
 - `bootloader_parse_bootctl_list(arg1, arg2, arg3)` → Parse `bootctl list` output. Each entry is a block of right-aligned "key: value" lines, blocks se...
 - `bootloader_parse_loader_conf(arg)` → Parse loader.conf file contents. Returns { timeout, default_id } as a 16-byte struct.

@@ -111,7 +111,11 @@ fn test_update() {
 
     # Regression (1.3.0): update_check on a manifest larger than the old
     # 16384-byte read buffer must not overflow it, and is now read whole.
-    var mpath = "/tmp/agnos-update-bigmanifest.json";
+    var mpsb = str_builder_new();
+    str_builder_add_cstr(mpsb, "/tmp/agnos-update-bigmanifest-");
+    str_builder_add_int(mpsb, sys_getpid());
+    str_builder_add_cstr(mpsb, ".json");
+    var mpath = str_data(str_builder_build(mpsb));
     var mbuf = alloc(20000);
     var mhdr = "{\"version\":\"2099.1.1\",\"pad\":\"";
     var mp = strlen(mhdr);
@@ -122,7 +126,7 @@ fn test_update() {
     mp = mp + 2;
     assert(file_write_all(mpath, mbuf, mp) == mp, "big_write");
     var bcfg = update_config_new();
-    update_config_set_url(bcfg, "file:///tmp/agnos-update-bigmanifest.json");
+    update_config_set_url(bcfg, _file_url(mpath));
     var bres_t, bres_v = update_check(bcfg, "2026.1.0");
     assert(is_ok(bres_t) == 1, "big_check_ok");
     assert(bres_v != 0, "big_check_newer");
@@ -498,15 +502,16 @@ fn test_netns() {
     # real argv and execve's an absolute path. The privileged `ip` path
     # needs CAP_NET_ADMIN, so guard the mechanism netns depends on with a
     # rootless absolute-path command carrying two args past argv[0].
-    var ed = "/tmp/agnos-netns-exec-test/sub";
+    var edp = test_scratch("/tmp/agnos-netns-exec-test");
+    var ed = _blfx_path(edp, "sub");
     var margs = vec_new();
     vec_push(margs, "/usr/bin/mkdir");
     vec_push(margs, "-p");
     vec_push(margs, ed);
     exec_vec(margs);
     assert(is_dir(str_from(ed)) == 1, "exec_vec_multiarg");
-    xrmdir("/tmp/agnos-netns-exec-test/sub");
-    xrmdir("/tmp/agnos-netns-exec-test");
+    xrmdir(ed);
+    xrmdir(edp);
     return 0;
 }
 
@@ -533,6 +538,270 @@ fn test_journald() {
 # ================================================================
 # bootloader: bootctl list parser (regression, 1.6.2)
 # ================================================================
+
+fn _bkfx(text) {
+    var e = bootloader_entry_new();
+    _bootloader_parse_entry_text(e, text, strlen(text));
+    return e;
+}
+
+fn _bkfx_kind(text) { return bootloader_entry_boot_kind(_bkfx(text)); }
+
+# The four ways a BLS entry boots, and systemd-boot's rule for them: exactly one.
+fn test_bootloader_boot_kinds() {
+    println("-- bootloader entry keys and boot kind --");
+    assert_eq(bootloader_entry_boot_kind(0), BOOT_ENTRY_NONE, "bk_null");
+    assert_eq(_bkfx_kind(""), BOOT_ENTRY_NONE, "bk_empty");
+    assert_eq(_bkfx_kind("title Only a title\noptions ro\n"), BOOT_ENTRY_NONE, "bk_no_boot_key");
+
+    var lx = _bkfx("linux /k\noptions ro\n");
+    assert_eq(bootloader_entry_boot_kind(lx), BOOT_ENTRY_LINUX, "bk_linux");
+    assert_eq(bootloader_entry_efi(lx), 0, "bk_linux_no_efi");
+    var ef = _bkfx("efi /EFI/shell.efi\noptions ignored\n");
+    assert_eq(bootloader_entry_boot_kind(ef), BOOT_ENTRY_EFI, "bk_efi");
+    assert(streq(bootloader_entry_efi(ef), "/EFI/shell.efi") == 1, "bk_efi_value");
+    var uk = _bkfx("uki /EFI/Linux/a.efi\n");
+    assert_eq(bootloader_entry_boot_kind(uk), BOOT_ENTRY_UKI, "bk_uki");
+    assert(streq(bootloader_entry_uki(uk), "/EFI/Linux/a.efi") == 1, "bk_uki_value");
+    assert_eq(bootloader_entry_uki_url(uk), 0, "bk_uki_is_not_url");
+    var ur = _bkfx("uki-url http://example.com/a.efi\n");
+    assert_eq(bootloader_entry_boot_kind(ur), BOOT_ENTRY_UKI_URL, "bk_uki_url");
+    assert(streq(bootloader_entry_uki_url(ur), "http://example.com/a.efi") == 1, "bk_uki_url_value");
+    assert_eq(bootloader_entry_uki(ur), 0, "bk_url_is_not_uki");
+    assert(streq(bootloader_entry_uki_url(_bkfx("uki-url :a.efi\n")), ":a.efi") == 1, "bk_uki_url_relative");
+
+    # Two kinds, in either order: systemd-boot drops the entry, and the fields stay readable.
+    assert_eq(_bkfx_kind("linux /k\nefi /e\n"), BOOT_ENTRY_CONFLICT, "bk_linux_efi");
+    assert_eq(_bkfx_kind("efi /e\nlinux /k\n"), BOOT_ENTRY_CONFLICT, "bk_efi_linux");
+    assert_eq(_bkfx_kind("linux /k\nuki /u\n"), BOOT_ENTRY_CONFLICT, "bk_linux_uki");
+    assert_eq(_bkfx_kind("uki /u\nlinux /k\n"), BOOT_ENTRY_CONFLICT, "bk_uki_linux");
+    assert_eq(_bkfx_kind("efi /e\nuki-url u\n"), BOOT_ENTRY_CONFLICT, "bk_efi_url");
+    assert_eq(_bkfx_kind("uki-url u\nefi /e\n"), BOOT_ENTRY_CONFLICT, "bk_url_efi");
+    assert_eq(_bkfx_kind("uki /u\nuki-url u\n"), BOOT_ENTRY_CONFLICT, "bk_uki_url_both");
+    var cf = _bkfx("linux /k\nefi /e\n");
+    assert(streq(bootloader_entry_linux(cf), "/k") == 1, "bk_conflict_linux_kept");
+    assert(streq(bootloader_entry_efi(cf), "/e") == 1, "bk_conflict_efi_kept");
+
+    # The same key twice is no conflict, and the last one stands.
+    var re = _bkfx("efi /a\nefi /b\n");
+    assert_eq(bootloader_entry_boot_kind(re), BOOT_ENTRY_EFI, "bk_repeat_kind");
+    assert(streq(bootloader_entry_efi(re), "/b") == 1, "bk_repeat_last");
+    var ru = _bkfx("uki /a\nuki /b\n");
+    assert(streq(bootloader_entry_uki(ru), "/b") == 1, "bk_repeat_uki_last");
+
+    # extra repeats and joins, and is no way to boot.
+    var ex = _bkfx("extra /a.cred\nlinux /k\nextra /b.addon.efi\n");
+    assert(streq(bootloader_entry_extra(ex), "/a.cred /b.addon.efi") == 1, "bk_extra_joined");
+    assert_eq(bootloader_entry_boot_kind(ex), BOOT_ENTRY_LINUX, "bk_extra_not_a_kind");
+    assert_eq(_bkfx_kind("extra /a.cred\n"), BOOT_ENTRY_NONE, "bk_extra_alone");
+
+    # The key is the whole first word, as for every other key.
+    assert_eq(_bkfx_kind("efix /e\n"), BOOT_ENTRY_NONE, "bk_not_efi");
+    assert_eq(_bkfx_kind("ukix /e\n"), BOOT_ENTRY_NONE, "bk_not_uki");
+    assert_eq(_bkfx_kind("uki-urlx /e\n"), BOOT_ENTRY_NONE, "bk_not_url");
+    assert_eq(bootloader_entry_extra(_bkfx("extras /e\n")), 0, "bk_not_extra");
+    assert_eq(_bkfx_kind("#efi /e\n"), BOOT_ENTRY_NONE, "bk_commented");
+    assert(streq(bootloader_entry_efi(_bkfx("efi\t/e\n")), "/e") == 1, "bk_tab");
+    assert_eq(_bkfx_kind("efi\n"), BOOT_ENTRY_NONE, "bk_empty_value");
+    assert_eq(_bkfx_kind("efi   \nlinux /k\n"), BOOT_ENTRY_LINUX, "bk_empty_value_no_conflict");
+    # systemd-boot takes one matching pair of quotes off every value.
+    var q1 = _bkfx("linux /k\noptions 'init=/bin/sh'\n");
+    assert(streq(bootloader_entry_options(q1), "init=/bin/sh") == 1, "bk_quote_single");
+    var qt, qv = bootloader_validate_kernel_cmdline(bootloader_entry_options(q1));
+    assert(is_err_result(qt) == 1, "bk_quote_validates");
+    var q2 = _bkfx("linux /k\noptions \"quiet 1 splash\"\n");
+    var q2t, q2v = bootloader_validate_kernel_cmdline(bootloader_entry_options(q2));
+    assert(is_err_result(q2t) == 1, "bk_quote_bare_one");
+    assert(streq(bootloader_entry_uki(_bkfx("uki \"/EFI/a.efi\"\n")), "/EFI/a.efi") == 1, "bk_quote_path");
+    assert(streq(bootloader_entry_title(_bkfx("title 'My OS'\n")), "My OS") == 1, "bk_quote_title");
+    assert(streq(bootloader_entry_options(_bkfx("options 'a' 'b'\n")), "a' 'b") == 1, "bk_quote_outer_only");
+    assert(streq(bootloader_entry_options(_bkfx("options 'a\"\n")), "'a\"") == 1, "bk_quote_unmatched");
+    assert_eq(bootloader_entry_options(_bkfx("options ''\n")), 0, "bk_quote_empty");
+    assert_eq(bootloader_entry_options(_bkfx("options '\n")), 0, "bk_quote_lone");
+    assert_eq(_bkfx_kind("efi ''\nlinux /k\n"), BOOT_ENTRY_LINUX, "bk_quote_empty_no_conflict");
+    # A quote a bootctl line still shows does not hide a word from the validator.
+    var qb, qv2 = bootloader_validate_kernel_cmdline("'init=/bin/sh' 'rd.break'");
+    assert(is_err_result(qb) == 1, "bk_validator_single_quotes");
+
+    # Cut at 127 bytes, the name that makes this a shell was lost.
+    var longi = str_builder_new();
+    str_builder_add_cstr(longi, "init=/");
+    var li = 0;
+    while (li < 130) {
+        str_builder_putc(longi, 97);
+        li = li + 1;
+    }
+    str_builder_add_cstr(longi, "/sh");
+    var lt, lv = bootloader_validate_kernel_cmdline(str_data(str_builder_build(longi)));
+    assert(is_err_result(lt) == 1, "bk_long_token_seen");
+
+    # A CR ends a line for systemd-boot, so it ends one here (audit F-27).
+    assert(streq(bootloader_entry_efi(_bkfx("# x\refi /evil\n")), "/evil") == 1, "bk_cr");
+
+    # The same keys through bootctl, which lists what systemd-boot would drop.
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "        title: A UKI\n           id: u.conf\n          uki: /boot//EFI/u.efi\n");
+    str_builder_add_cstr(sb, "        extra: /boot//a.cred\n               not-a-continuation\n");
+    str_builder_add_cstr(sb, "        extra: /boot//b.cred\n      options: ro\n\n");
+    str_builder_add_cstr(sb, "        title: Net\n           id: n.conf\n      uki-url: http://x/y.efi\n\n");
+    str_builder_add_cstr(sb, "        title: Shell\n           id: e.conf\n          efi: /boot//shell.efi\n\n");
+    str_builder_add_cstr(sb, "           id: b.conf\n        linux: /boot//k\n          efi: /boot//e\n");
+    str_builder_add_cstr(sb, "        extra: /boot//last.cred\n\n");
+    # A Type #2 UKI under linux:, and an addon's command line behind its tree glyph.
+    str_builder_add_cstr(sb, "         type: Boot Loader Specification Type #2 (UKI, .efi)\n");
+    str_builder_add_cstr(sb, "           id: t2.efi\n        linux: /boot//EFI/Linux/t2.efi\n");
+    str_builder_add_cstr(sb, "      options: root=/dev/sda1 rw\n        extra: /boot//loader/addons/a.addon.efi\n");
+    str_builder_add_cstr(sb, "      options: \xe2\x94\x94\xe2\x94\x80init=/bin/sh\n\n");
+    str_builder_add_cstr(sb, "         type: Boot Loader Specification Type #1 (.conf)\n");
+    str_builder_add_cstr(sb, "           id: t1.conf\n        linux: /boot//k\n");
+    str_builder_add_cstr(sb, "      options: `-rd.break\n\n");
+    str_builder_add_cstr(sb, "           id: qq.conf\n        linux: /boot//k\n      options: 'init=/bin/sh'\n");
+    str_builder_add_cstr(sb, "        extra: /boot//last.cred\n");
+    var arr = alloc(8 * 8);
+    var pt, pn = bootloader_parse_bootctl_list(str_data(str_builder_build(sb)), arr, 8);
+    assert(is_ok(pt) == 1, "bkc_ok");
+    assert_eq(pn, 7, "bkc_count");
+    var bu = load64(arr);
+    assert_eq(bootloader_entry_boot_kind(bu), BOOT_ENTRY_UKI, "bkc_uki");
+    assert(streq(bootloader_entry_extra(bu), "/boot//a.cred /boot//b.cred") == 1, "bkc_extra_joined");
+    assert(streq(bootloader_entry_options(bu), "ro") == 1, "bkc_options_clean");
+    assert_eq(bootloader_entry_boot_kind(load64(arr + 8)), BOOT_ENTRY_UKI_URL, "bkc_url");
+    assert_eq(bootloader_entry_extra(load64(arr + 8)), 0, "bkc_extra_stays_in_its_entry");
+    assert_eq(bootloader_entry_boot_kind(load64(arr + 16)), BOOT_ENTRY_EFI, "bkc_efi");
+    assert_eq(bootloader_entry_boot_kind(load64(arr + 24)), BOOT_ENTRY_CONFLICT, "bkc_conflict");
+    assert(streq(bootloader_entry_extra(load64(arr + 24)), "/boot//last.cred") == 1, "bkc_extra_between");
+    var t2 = load64(arr + 32);
+    assert_eq(bootloader_entry_boot_kind(t2), BOOT_ENTRY_UKI, "bkc_type2_is_uki");
+    assert(streq(bootloader_entry_uki(t2), "/boot//EFI/Linux/t2.efi") == 1, "bkc_type2_value");
+    assert_eq(bootloader_entry_linux(t2), 0, "bkc_type2_not_linux");
+    assert(streq(bootloader_entry_options(t2), "root=/dev/sda1 rw init=/bin/sh") == 1, "bkc_addon_glyph_off");
+    var t1 = load64(arr + 40);
+    assert_eq(bootloader_entry_boot_kind(t1), BOOT_ENTRY_LINUX, "bkc_type1_stays_linux");
+    assert(streq(bootloader_entry_options(t1), "rd.break") == 1, "bkc_addon_ascii_glyph_off");
+    assert(streq(bootloader_entry_options(load64(arr + 48)), "init=/bin/sh") == 1, "bkc_options_unquoted");
+    assert(streq(bootloader_entry_extra(load64(arr + 48)), "/boot//last.cred") == 1, "bkc_extra_at_end");
+    return 0;
+}
+
+# bootctl and systemd-boot disagree about what is an entry, so a listing cannot stop at
+# bootctl's word: one clean entry printed must not hide the file beside it.
+fn test_bootloader_merge() {
+    println("-- bootloader: bootctl and the files it leaves out --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-bm-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "bm_fx_mkdir");
+    _bootloader_root = root;
+    var dirs = vec_new();
+    vec_push(dirs, "/boot");
+    vec_push(dirs, "/boot/loader");
+    vec_push(dirs, "/boot/loader/entries");
+    vec_push(dirs, "/efi");
+    vec_push(dirs, "/efi/loader");
+    vec_push(dirs, "/efi/loader/entries");
+    var di = 0;
+    while (di < vec_len(dirs)) {
+        assert_eq(xmkdir(_bootloader_path(vec_get(dirs, di)), 0x1C0), 0, "bm_fx_dir");
+        di = di + 1;
+    }
+    var stub = _blfx_path(root, "bootctl");
+    var sfd = file_create_exclusive(stub, 0x1ED);  # mode 0755
+    var body = "#!/bin/sh\necho '           id: decoy.conf'\necho '        linux: /boot//k'\n";
+    sys_write(sfd, body, strlen(body));
+    sys_close(sfd);
+    _bootloader_bootctl = stub;
+
+    var decoy = _bootloader_path("/boot/loader/entries/decoy.conf");
+    var spaced = _bootloader_path("/boot/loader/entries/a b.conf");
+    var prof = _bootloader_path("/boot/loader/entries/prof.conf");
+    var del = _bootloader_path("/boot/loader/entries/del\x7f.conf");
+    var twin = _bootloader_path("/efi/loader/entries/decoy.conf");
+    file_write_all(decoy, "linux /k\n", 9);
+    var arr = alloc(16 * 8);
+    var c_t, c_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_ok(c_t) == 1, "bm_clean_ok");
+    assert_eq(c_v, 1, "bm_reported_file_once");
+
+    # systemd-boot boots both of these, and bootctl shows neither.
+    var ev = "linux /k\noptions init=/bin/sh\n";
+    file_write_all(spaced, ev, strlen(ev));
+    file_write_all(prof, "linux /k\nprofile x\n", 19);
+    file_write_all(del, "linux /k\n", 9);
+    var h_t, h_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_ok(h_t) == 1, "bm_hidden_ok");
+    assert_eq(h_v, 4, "bm_hidden_listed");
+    var hidden = _blfx_find(arr, h_v, "a b.conf");
+    assert(hidden != 0, "bm_spaced_found");
+    assert(streq(bootloader_entry_options(hidden), "init=/bin/sh") == 1, "bm_spaced_options");
+    assert(_blfx_find(arr, h_v, "prof.conf") != 0, "bm_profile_found");
+    assert(_blfx_find(arr, h_v, "del\x7f.conf") != 0, "bm_del_found");
+    # bootctl's own entry stays first, and what it printed stands.
+    assert(streq(bootloader_entry_id(load64(arr)), "decoy.conf") == 1, "bm_bootctl_first");
+
+    # bootctl drops a path it will not take and prints the entry anyway. The file knows.
+    var dropped = "#!/bin/sh\necho '           id: decoy.conf'\necho '      options: quiet'\n";
+    xunlink(stub);
+    var dfd = file_create_exclusive(stub, 0x1ED);  # mode 0755
+    sys_write(dfd, dropped, strlen(dropped));
+    sys_close(dfd);
+    file_write_all(decoy, "linux /EFI/../k\noptions quiet\n", 30);
+    var dk_t, dk_v = bootloader_list_boot_entries(arr, 16);
+    assert_eq(dk_v, 4, "bm_dropped_path_one_entry");
+    var dk = _blfx_find(arr, dk_v, "decoy.conf");
+    assert_eq(bootloader_entry_boot_kind(dk), BOOT_ENTRY_LINUX, "bm_dropped_path_kind");
+    assert(streq(bootloader_entry_linux(dk), "/EFI/../k") == 1, "bm_dropped_path_value");
+    file_write_all(decoy, "linux /k\n", 9);
+
+    # One bootctl entry answers for one file, so the twin on the other partition shows.
+    file_write_all(twin, "efi /other.efi\n", 15);
+    var w_t, w_v = bootloader_list_boot_entries(arr, 16);
+    assert_eq(w_v, 5, "bm_twin_listed");
+    var saw_efi = 0;
+    var wi = 0;
+    while (wi < w_v) {
+        if (bootloader_entry_efi(load64(arr + wi * 8)) != 0) { saw_efi = 1; }
+        wi = wi + 1;
+    }
+    assert_eq(saw_efi, 1, "bm_twin_is_the_efi_one");
+
+    # A list that cannot hold them all is an Err, not a short list.
+    var o_t, o_v = bootloader_list_boot_entries(arr, 4);
+    assert(is_err_result(o_t) == 1, "bm_overflow_err");
+    # The same when the files fit and bootctl's entry on top of them does not.
+    xunlink(decoy);
+    xunlink(twin);
+    var f_t, f_v = bootloader_list_boot_entries(arr, 3);
+    assert(is_err_result(f_t) == 1, "bm_overflow_in_merge_err");
+    file_write_all(decoy, "linux /k\n", 9);
+    file_write_all(twin, "efi /other.efi\n", 15);
+    var z_t, z_v = bootloader_list_boot_entries(arr, 0);
+    assert(is_ok(z_t) == 1, "bm_zero_max_ok");
+    assert_eq(z_v, 0, "bm_zero_max_none");
+
+    # No directory to read: bootctl's answer stands.
+    _bootloader_root = "/nonexistent-agnodrm-root";
+    var n_t, n_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_ok(n_t) == 1, "bm_no_dirs_ok");
+    assert_eq(n_v, 1, "bm_no_dirs_bootctl_stands");
+    _bootloader_root = root;
+
+    xunlink(decoy);
+    xunlink(spaced);
+    xunlink(prof);
+    xunlink(del);
+    xunlink(twin);
+    xunlink(stub);
+    di = vec_len(dirs) - 1;
+    while (di >= 0) {
+        xrmdir(_bootloader_path(vec_get(dirs, di)));
+        di = di - 1;
+    }
+    _bootloader_root = 0;
+    _bootloader_bootctl = 0;
+    xrmdir(root);
+    return 0;
+}
 
 fn test_bootctl_parse() {
     println("-- bootloader bootctl list --");
@@ -1144,7 +1413,7 @@ fn test_core_hardening() {
     assert_eq(result_print_err(ot, ov), 0, "err_print_ok_zero");
 
     # F-58: a read keeps going past a short one, and a negative cap is no cap.
-    var rp = "/tmp/agnodrm-rd.tmp";
+    var rp = test_scratch("/tmp/agnodrm-rd.tmp");
     file_write_all(rp, "0123456789", 10);
     var rfd = sys_open(rp, O_RDONLY, 0);
     assert(str_eq(agnodrm_read_fd_to_str(rfd, 4), str_from("0123")) == 1, "util_read_cap");
@@ -1196,7 +1465,7 @@ fn test_core_hardening() {
     var before = _open_fd_count();
     var o1_t, o1_v = drm_open("/dev/null");
     assert(is_err_result(o1_t) == 1, "drm_open_chardev_refused");
-    var nf = "/tmp/agnodrm-notdrm.tmp";
+    var nf = test_scratch("/tmp/agnodrm-notdrm.tmp");
     file_write_all(nf, "x", 1);
     var o2_t, o2_v = drm_open(nf);
     assert(is_err_result(o2_t) == 1, "drm_open_file_refused");
@@ -2081,6 +2350,13 @@ fn test_update_lifecycle() {
     var h2_t, h2_v = update_apply(cfg, man);
     assert(is_ok(h2_t) == 1, "lc_hold_settled_ok");
     assert_eq(file_exists(fw_log), 0, "lc_hold_settled_no_write");
+    # A list past the capture can lose the very entry a hold compares BootNext against.
+    var fw_long = "#!/bin/sh\ni=0\nwhile [ $i -lt 9000 ]; do printf 'Boot1000* padding padding\\n'; i=$((i+1)); done\n";
+    _updfx_tool(root, "/usr/bin/efibootmgr", fw_long);
+    xunlink(sf);
+    var hl_t, hl_v = update_apply(cfg, man);
+    assert(is_err_result(hl_t) == 1, "lc_hold_long_list_refused");
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_set, "echo \"$*\" >> \"$0.log\"\nexit 0\n"));
     # Cannot clear what is aimed the wrong way: no write, and the record stays.
     var fw_stuck = netns_concat2(fw_if_top, "BootNext: 0003\\nBoot0004* AGNOS-A\\tHD(2)\\n");
     fw_stuck = netns_concat2(fw_stuck, "Boot0003* AGNOS-B\\tHD(1)\\n");
@@ -2842,6 +3118,85 @@ fn test_journald_io() {
     store8(rbuf + got, 0);
     assert(streq(rbuf, "PRIORITY=4\nMESSAGE=hello\nSYSLOG_IDENTIFIER=agnodrm-test\n") == 1, "jr_send_bytes");
 
+    # Past one datagram: a sealed memfd holding the same bytes, and an empty datagram.
+    var bign = 4194304;
+    var bigm = alloc(bign + 1);
+    memset(bigm, 97, bign);
+    store8(bigm + bign, 0);
+    var fds_before = _open_fd_count();
+    var bs_t, bs_v = journald_send(bigm, JOURNAL_WARNING, "agnodrm-test");
+    assert(is_ok(bs_t) == 1, "jm_send_ok");
+    assert_eq(_open_fd_count(), fds_before, "jm_no_fd_left");
+    var jctl = alloc(64);
+    # One byte of iov: qemu-user's recvmsg returns 0 without receiving when there is none.
+    var jiov = alloc(16);
+    store64(jiov, rbuf);
+    store64(jiov + 8, 1);
+    var jmsg = alloc(56);
+    memset(jmsg, 0, 56);
+    store64(jmsg + 16, jiov);
+    store64(jmsg + 24, 1);
+    store64(jmsg + 32, jctl);
+    store64(jmsg + 40, 64);
+    assert_eq(sys_recvmsg(rx, jmsg, 0), 0, "jm_datagram_empty");
+    assert_eq(load64(jmsg + 40), 24, "jm_control_len");
+    assert_eq(load64(jctl), 20, "jm_cmsg_len");
+    assert_eq(load32(jctl + 8), 1, "jm_sol_socket");
+    assert_eq(load32(jctl + 12), 1, "jm_scm_rights");
+    var mfd = load32(jctl + 16);
+    assert(mfd >= 0, "jm_fd_passed");
+    assert_eq(sys_fcntl(mfd, 1034, 0) & 15, 15, "jm_all_four_seals");   # F_GET_SEALS
+    assert(sys_write(mfd, "x", 1) < 0, "jm_write_refused");
+    assert(sys_ftruncate(mfd, 1) < 0, "jm_shrink_refused");
+    var want = _journald_layout(0, bigm, JOURNAL_WARNING, "agnodrm-test", 0, 0);
+    var wantb = alloc(want);
+    _journald_layout(wantb, bigm, JOURNAL_WARNING, "agnodrm-test", 0, 0);
+    assert_eq(sys_lseek(mfd, 0, 2), want, "jm_size");   # SEEK_END; the stdlib does not name it
+    sys_lseek(mfd, 0, 0);                               # SEEK_SET: journald maps, it does not read
+    var gotb = alloc(want);
+    var gotn = 0;
+    var gotr = 1;
+    while (gotr > 0) {
+        gotr = sys_read(mfd, gotb + gotn, want - gotn);
+        if (gotr > 0) { gotn = gotn + gotr; }
+    }
+    assert_eq(gotn, want, "jm_read_all");
+    assert_eq(memeq(gotb, wantb, want), 1, "jm_same_bytes");
+    sys_close(mfd);
+    # A newline keeps its own form in a memfd too: the bytes are the same protocol.
+    var nlm = alloc(bign + 1);
+    memset(nlm, 98, bign);
+    store8(nlm + bign, 0);
+    store8(nlm + 100, 10);
+    var nl_t, nl_v = journald_send(nlm, JOURNAL_WARNING, "agnodrm-test");
+    assert(is_ok(nl_t) == 1, "jm_newline_ok");
+    store64(jmsg + 40, 64);
+    assert_eq(sys_recvmsg(rx, jmsg, 0), 0, "jm_newline_empty");
+    mfd = load32(jctl + 16);
+    assert_eq(sys_lseek(mfd, 0, 0), 0, "jm_newline_seek");
+    assert_eq(sys_read(mfd, gotb, 32), 32, "jm_newline_read");
+    assert_eq(memeq(gotb, "PRIORITY=4\nMESSAGE\n", 19), 1, "jm_newline_binary_form");
+    assert_eq(load64(gotb + 19), bign, "jm_newline_length");
+    sys_close(mfd);
+    # What retries as a memfd, and what does not. The kernel will not produce the last
+    # two on demand.
+    assert_eq(_journald_too_big(0 - EMSGSIZE), 1, "jm_big_msgsize");
+    assert_eq(_journald_too_big(0 - ENOBUFS), 1, "jm_big_enobufs");
+    assert_eq(_journald_too_big(0 - EAGAIN), 1, "jm_big_eagain");
+    assert_eq(_journald_too_big(0 - ENOENT), 0, "jm_big_not_enoent");
+    assert_eq(_journald_too_big(0 - EACCES), 0, "jm_big_not_eacces");
+    assert_eq(_journald_too_big(0), 0, "jm_big_not_ok");
+    assert_eq(_journald_too_big(100), 0, "jm_big_not_sent");
+    # Only a size failure takes this path: a socket nobody listens on stays an Err.
+    var live_socket = _journald_socket;
+    _journald_socket = _blfx_path(root, "gone");
+    _journald_sa = 0;
+    var gn_t, gn_v = journald_send(bigm, JOURNAL_WARNING, "agnodrm-test");
+    assert(is_err_result(gn_t) == 1, "jm_no_socket_err");
+    assert_eq(drm_syserr_errno(gn_v), ENOENT, "jm_no_socket_errno");
+    _journald_socket = live_socket;
+    _journald_sa = 0;
+
     var fk = vec_new();
     var fv = vec_new();
     vec_push(fk, "CODE_FILE");
@@ -2934,6 +3289,18 @@ fn test_journald_io() {
     assert(is_err_result(dq_t) == 1, "jq_deadline_silent");
     assert_eq(drm_syserr_errno(dq_v), ETIMEDOUT, "jq_deadline_errno");
     assert_eq(proc_timeout_ms(), dl_before, "jq_deadline_put_back");
+    # A caller's own tighter deadline stands, and a looser one does not widen ours.
+    _journald_deadline_ms = 30000;
+    proc_set_timeout_ms(100);
+    var dt_t, dt_v = journald_query(journald_filter_new());
+    assert_eq(drm_syserr_errno(dt_v), ETIMEDOUT, "jq_deadline_caller_tighter");
+    assert_eq(proc_timeout_ms(), 100, "jq_deadline_caller_put_back");
+    _journald_deadline_ms = 100;
+    proc_set_timeout_ms(30000);
+    var dw_t, dw_v = journald_query(journald_filter_new());
+    assert_eq(drm_syserr_errno(dw_v), ETIMEDOUT, "jq_deadline_caller_looser");
+    assert_eq(proc_timeout_ms(), 30000, "jq_deadline_looser_put_back");
+    proc_set_timeout_ms(dl_before);
     # What it printed before it stopped is not the answer.
     _updfx_tool(root, "/jc", "#!/bin/sh\necho '{\"MESSAGE\":\"partial\"}'\nwhile :; do :; done\n");
     var dp_t, dp_v = journald_query(journald_filter_new());
@@ -3267,13 +3634,14 @@ fn test_fuse_ops() {
     var r_t, r_v = fuse_mount("u@h:/", mp, "sshfs", 0);
     assert(is_err_result(r_t) == 1, "fo_relative_helper");
     # Both of these exist, so only the checks themselves can refuse them.
-    var rel = "./agnodrm-rel-helper";
-    _updfx_tool(".", "/agnodrm-rel-helper", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
+    var relname = test_scratch("agnodrm-rel-helper");
+    var rel = netns_concat3("./", relname, "");
+    _updfx_tool(".", netns_concat3("/", relname, ""), "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
     var rh_t, rh_v = fuse_mount("u@h:/", mp, rel, 0);
     assert(is_err_result(rh_t) == 1, "fo_relative_helper_exists");
-    assert_eq(file_exists("./agnodrm-rel-helper.log"), 0, "fo_relative_helper_never_ran");
+    assert_eq(file_exists(netns_concat3("./", relname, ".log")), 0, "fo_relative_helper_never_ran");
     xunlink(rel);
-    var dash = "-agnodrm-mp";
+    var dash = test_scratch("-agnodrm-mp");
     assert_eq(xmkdir(dash, 0x1C0), 0, "fo_dash_fx");
     var dm_t, dm_v = fuse_mount("u@h:/", dash, tool, 0);
     assert(is_err_result(dm_t) == 1, "fo_mountpoint_dash_exists");
@@ -3503,6 +3871,8 @@ fn main() {
     test_bootloader();
     bootloader_danger_reset();
     test_bootloader_entries();
+    test_bootloader_boot_kinds();
+    test_bootloader_merge();
     test_bootctl_parse();
     test_fd_hygiene();
     test_tmp_exclusive();

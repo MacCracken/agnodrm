@@ -1,5 +1,5 @@
 # bench_all.bcyr — batch-amortized benchmarks
-# 22 benchmarks in 7 groups (error, bootloader, update, udev, fuse, string, parsers).
+# 23 benchmarks in 7 groups (error, bootloader, update, udev, fuse, string, parsers).
 # Every row times BA_WINDOWS windows of BA_OPS inline ops each, through the
 # stdlib's bench_batch_start / bench_batch_stop, so the book (raw total,
 # iterations, windows, and the per-op min/max in picoseconds that 6.6.5 added)
@@ -387,6 +387,24 @@ fn bench_parsers() {
         bench_batch_start(b);
         var k = 0;
         while (k < BA_HEAVY_OPS) { journald_parse_json(line); k = k + 1; }
+        bench_batch_stop(b, BA_HEAVY_OPS);
+        ri = ri + 1;
+    }
+    bench_report(b);
+
+    var esb = str_builder_new();
+    str_builder_add_cstr(esb, "title Arch Linux\nversion 6.9.1-arch1\nlinux /vmlinuz-linux\n");
+    str_builder_add_cstr(esb, "initrd /intel-ucode.img\ninitrd /initramfs-linux.img\n");
+    str_builder_add_cstr(esb, "options root=PARTUUID=0a1b2c3d rw quiet\n");
+    var entry_text = ba_aligned_cstr(str_data(str_builder_build(esb)));
+    var entry_len = strlen(entry_text);
+    var entry_out = bootloader_entry_new();
+    b = do_bench("parse_bls_entry");
+    ri = 0;
+    while (ri < BA_HEAVY_WINDOWS) {
+        bench_batch_start(b);
+        var k = 0;
+        while (k < BA_HEAVY_OPS) { _bootloader_parse_entry_text(entry_out, entry_text, entry_len); k = k + 1; }
         bench_batch_stop(b, BA_HEAVY_OPS);
         ri = ri + 1;
     }

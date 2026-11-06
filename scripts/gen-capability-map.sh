@@ -86,7 +86,7 @@ format_list() {
 # --- generate ------------------------------------------------------------
 {
 cat <<EOF
-# Agnosys Capability Map
+# Agnodrm Capability Map
 
 > Per-module kernel-surface capability — the syscalls, sys_* wrappers,
 > subprocess binaries, and hard-coded filesystem paths each module can

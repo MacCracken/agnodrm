@@ -7,6 +7,108 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-11-05
+
+**Every way an entry boots, journal messages of any size, and a closeout.** `bootloader_entry` reads `efi`, `uki`, `uki-url`
+and `extra`, and `bootloader_entry_boot_kind` applies systemd-boot's rule. `journald_send` takes a message of any size, through
+a sealed memfd. The closeout pass ran here, as at 1.7.0, and its independent reviews found **3 HIGH and 8 MEDIUM**, in new and
+older code, all repaired: see [`docs/audit/2026-11-05-audit.md`](docs/audit/2026-11-05-audit.md). The API grows from 321 to 330
+fns, all additive. Floor 6.6.10, pin 6.7.18, both unchanged.
+
+⚠ **Behaviour changes.** No workspace repo calls any of these.
+
+- `bootloader_list_boot_entries` adds every entry file `bootctl` did not report, so a list can be longer than before, or an
+  `Err` where it would now overflow `max_entries`.
+- Entry values lose one matching pair of quotes, so `title 'My OS'` reads `My OS`.
+- From `bootctl`, a Type #2 UKI is in `uki`, not `linux`.
+- `bootloader_validate_kernel_cmdline` reads `'` as a quote, and sees a token past 127 bytes.
+- `update_apply` and a rollback refuse when `efibootmgr` prints over 64 KiB.
+
+### Security
+
+- **Fixed — audit F-61 (HIGH): a quote hid an option from the validator.** systemd-boot takes one matching pair of quotes off
+  every value, and the parser did not, so `options 'init=/bin/sh'` passed and booted that option.
+- **Fixed — audit F-62 (HIGH): one clean entry from `bootctl` hid every other file.** bootctl leaves out what systemd-boot boots:
+  a file named `a b.conf`, or one with a `profile` line it cannot parse. `bootloader_list_boot_entries` stopped at bootctl's
+  word. It now reads the entry directories too, and each bootctl entry answers for one file, so a same-named file on the other
+  partition still shows. A bootctl entry with no boot key takes its file's (F-73).
+- **Fixed — F-64 (MEDIUM):** an addon's command line reaches `options` behind a tree glyph, which hid the word after it.
+- **Fixed — F-67 (MEDIUM):** a Type #2 UKI read as `BOOT_ENTRY_LINUX`.
+- **Fixed — F-68 (MEDIUM):** a DEL in a file name hid the entry. vfat allows it, and systemd-boot reads it.
+- **Fixed — F-69 (MEDIUM):** the validator cut a token at 127 bytes, so `init=/<130 bytes>/sh` lost the name that makes it a
+  shell.
+- **Fixed — F-70 (MEDIUM):** 1.7.3's deadline widened a caller's tighter `proc_set_timeout_ms`. The tighter one now stands.
+- **Fixed — F-72 (LOW):** a cut `efibootmgr` list could lose the entry a hold compares `BootNext` against.
+- `SECURITY.md` described the former agnosys library, down to "supported versions: 0.98.x". It is rewritten from the code, with
+  a Known Limits section.
+
+### Added
+
+- **`efi`, `uki`, `uki-url` and `extra` on `bootloader_entry`,** from entry files and from `bootctl`.
+- **`bootloader_entry_boot_kind`:** `BOOT_ENTRY_LINUX`, `EFI`, `UKI`, `UKI_URL`, `CONFLICT` or `NONE`. systemd-boot refuses an
+  entry naming two of these, though bootctl lists it, and for a UKI, `options` replaces the image's own command line unless
+  Secure Boot is on and it has one. Only for `BOOT_ENTRY_LINUX` is `options` known to be the whole command line, and the
+  validator's result should be read that way.
+- **The journal's sealed-memfd path.** A message that does not fit a datagram goes as a sealed memfd with the same bytes, as
+  `sd_journal_sendv` does. Checked against a real `systemd-journald` in a private namespace, from both arches. It tries
+  `MFD_NOEXEC_SEAL` first, for `vm.memfd_noexec=2`, and falls back on a kernel before 6.3.
+- **`docs/architecture/002-platform-matrix.md`,** taken from the agnos arms.
+- A `parse_bls_entry` bench row, and `efi:`, `uki:`, `extra:` and quotes in the BLS fuzz harness's tokens.
+
+### Changed
+
+- **`bench-history.sh` records the median of pinned rounds:** 5 by default, on the last CPU this process may use. Rows from here
+  on are not single runs.
+- **CI and release run the aarch64 lane for real:** smoke, tests and fuzz under qemu in both.
+- **CI gained the prose and capability-map gates,** checks the `.deps` sidecars, and scans `src/` for `exec_cmd` and raw
+  `syscall(`, so "CI runs the same gates" is true.
+
+### Fixed
+
+- **Tests ran one at a time or not at all.** Four fixtures used fixed paths, so parallel runs failed, and a mutation run could
+  read that failure as a caught mutant. Each path now carries the pid (F-76).
+- `bench-history.sh` failed with no message on a bad CPU, took `nproc - 1` as a CPU this process may use, and took the low middle
+  of an even count (F-75).
+
+### Documentation
+
+- **`README.md` and `docs/architecture/overview.md` described the 20-module library,** with bundles that do not exist and a
+  quickstart that could not compile. Both are rewritten from the code, the README gains a Limits section, and its quickstart was
+  built and run as a real consumer.
+- **`CLAUDE.md`:** `sys_system`, which a rule forbade and a closeout grepped for, does not exist, so that scan proved nothing. The
+  rules now name `exec_cmd`. Every `var buf[N]` was called static, which at the floor and up holds only past a fn's frame budget.
+- **Roadmap:** the 1.8.0 items are done, and the 1.10.x plan is corrected. The stdlib has a `sigil` leaf with `sha256` and
+  `ed25519_verify`, so "no sha256" and "no non-stdlib dep" were both wrong. The allocator-lock item is closed: it has been a
+  no-op since cyrius 6.3.17. `memeq_16` is closed as not real: both compilers read 28 ns in a pinned A/B.
+
+### Corrections
+
+- **1.7.3's notes on the `journald_query` deadline were wrong (F-71).** They say the call fails if journalctl prints nothing for
+  60 s "and then does not exit within another 60". Past the first 60 s the result is already `ETIMEDOUT`, even if it would have
+  finished a moment later, and the stdlib's second period only delays the kill.
+- The 1.8.0 code's own first comment on `boot_kind` was wrong on three counts before any release: F-63, F-65 and F-66 in the
+  audit.
+
+### Performance
+
+- Alternating the 1.7.3 and 1.8.0 bench binaries for 7 rounds, pinned to one core, 20 of 22 rows are within their ranges.
+  `validate_cmdline_safe` 607 → 622 ns (+2.5%) is the new long-token check. `journald_parse_json` 1524 → 1588 ns (+4.2%) has no
+  change to its code, so it is placement: the file gained code around it. `parse_bls_entry` is new, at about 1.7 µs.
+
+### Closeout
+
+834 unreachable fns, 198,307 B, eliminated by DCE. The security re-scan, with the right names this time, finds no `exec_cmd`, no
+raw `syscall(` and no large static buffer in `src/`. There are no consumers to check. stiva calls nothing here, and still builds
+on this bundle while its leftover dep remains.
+A consumer of the full bundle builds on x86_64, aarch64 and agnos on 6.6.10, 6.6.20, 6.7.9 and 6.7.18, each with its own stdlib.
+
+**Verified:** 1,747 assertions and 7,729 in the power-cut walk, also under the poison allocator, on those toolchains, and under
+`qemu-aarch64`. 57 of 59 mutants of the new code are caught.
+
+**Not verified:** real `bootctl`, `efibootmgr` or firmware, which the BLS work reads from systemd's source and never ran against.
+`MFD_NOEXEC_SEAL` and its fallback, the two surviving mutants, since they need `vm.memfd_noexec=2` or a kernel before 6.3. The
+new CI and release steps were replayed by hand, not run on GitHub, and Ubuntu's qemu and dash were not run.
+
 ## [1.7.3] — 2026-11-05
 
 **Quick items off the roadmap, and a plan for what is left.** The power-cut walk and the `sha256sum` fix ship here, with a

@@ -3,164 +3,112 @@
 ## Layout
 
 ```
-agnosys/
-├── src/           20 modules + main entry point
-│   ├── main.cyr   self-test entry, includes core modules
-│   ├── error.cyr  SysError types, errno mapping, Result helpers
-│   ├── syscall.cyr  getpid/uid/hostname/sysinfo wrappers
-│   ├── logging.cyr  AGNOSYS_LOG env var log level
-│   ├── security.cyr  Landlock, seccomp BPF, namespace creation
-│   ├── mac.cyr    SELinux/AppArmor detection, contexts
-│   ├── audit.cyr  kernel audit netlink socket, rules
-│   ├── pam.cyr    PAM service inspection, passwd parsing
-│   ├── journald.cyr  systemd journal send/query
-│   ├── luks.cyr   LUKS2 encrypted volume management
-│   ├── dmverity.cyr  dm-verity integrity verification
-│   ├── ima.cyr    IMA measurements, policy rules
-│   ├── tpm.cyr    TPM2 device, PCR reading
-│   ├── certpin.cyr  certificate pin validation, SPKI
-│   ├── secureboot.cyr  Secure Boot EFI variables
+agnodrm/
+├── src/           9 modules + main entry point
+│   ├── main.cyr   self-test entry, includes the core modules
+│   ├── error.cyr  error kinds, errno mapping, Result helpers
+│   ├── util.cyr   subprocess capture, exclusive temp files, read/write, scratch memory
 │   ├── udev.cyr   device enumeration via udevadm
-│   ├── drm.cyr    DRM device enumeration, ioctl
-│   ├── netns.cyr  network namespace create/destroy, veth
-│   ├── bootloader.cyr  systemd-boot/GRUB detection
-│   ├── update.cyr  atomic file ops, version compare
+│   ├── drm.cyr    DRM device enumeration, version and capability ioctls
+│   ├── journald.cyr  systemd journal send/query
+│   ├── netns.cyr  network namespace create/destroy, veth, nftables
+│   ├── bootloader.cyr  systemd-boot/GRUB detection, BLS entries, cmdline validation
+│   ├── update.cyr  atomic file ops, version compare, A/B slot flow
 │   └── fuse.cyr   FUSE mount parsing, mount/unmount
-├── lib/           vendored Cyrius stdlib — gitignored as of 1.1.12;
-│                  populated by `cyrius deps` from the cyrius.cyml
-│                  `[deps] stdlib` list (18 modules at v5.10.19).
-│                  Matches yukti/patra convention.
+├── lib/           vendored Cyrius stdlib, gitignored; populated by `cyrius deps` from the
+│                  `[deps] stdlib` list in cyrius.cyml
 ├── dist/          bundled distributions (`cyrius distlib [profile]` output)
-│   ├── agnosys.cyr           all 20 modules concatenated (full bundle, ~329 KB)
-│   ├── agnosys-core.cyr      error + syscall + logging + arch peers (~23 KB)
-│   ├── agnosys-security.cyr  security + mac + audit + pam (~76 KB)
-│   ├── agnosys-storage.cyr   luks + dmverity + fuse (~49 KB)
-│   ├── agnosys-trust.cyr     tpm + ima + secureboot + certpin (~70 KB)
-│   └── agnosys-system.cyr    journald + bootloader + udev + drm + netns + update (~111 KB)
+│   ├── agnodrm.cyr       all nine modules concatenated
+│   ├── agnodrm-core.cyr  error + util + udev + drm
+│   └── *.deps            the stdlib leaves each bundle needs, read by `cyrius deps`
 ├── tests/
-│   ├── tcyr/      integration tests (.tcyr, discovered by `cyrius test`)
+│   ├── tcyr/      test_integration, and test_powercut for the A/B flows
 │   └── bcyr/      benchmarks (.bcyr)
 ├── fuzz/          parser fuzz harnesses (.fcyr)
-├── scripts/       version-bump.sh, bench-history.sh, audit.sh,
-│                  check-api-surface.sh, gen-capability-map.sh,
-│                  gen-api-surface-prose.sh
+├── scripts/       audit.sh, version-bump.sh, bench-history.sh, check-api-surface.sh,
+│                  gen-api-probe.sh, gen-api-surface-prose.sh, gen-capability-map.sh
 └── build/         compiled binaries (gitignored)
 ```
 
 ## Include Model
 
-Cyrius uses a flat include model. Each `.cyr` file is a module. Programs include
-the stdlib files they need from `lib/`, then either individual `src/` modules,
-the full bundled `dist/agnosys.cyr`, or one of the slim profile bundles:
+Cyrius uses a flat include model, and each `.cyr` file is a module. A consumer takes one of two bundles through
+`[deps.agnodrm]`; see the README. Inside this repo, tests include what they need from `lib/` and `src/` directly:
 
 ```
-# Per-module (feature-gated)
 include "lib/alloc.cyr"
 include "lib/syscalls.cyr"
 include "src/error.cyr"
-include "src/security.cyr"
-
-# Full bundle (single include, all 20 modules)
-include "dist/agnosys.cyr"
-
-# Profile bundle (V1.2.0+) — slim subset for a specific domain
-include "dist/agnosys-core.cyr"      # core: error + syscall + logging
-include "dist/agnosys-security.cyr"  # security + mac + audit + pam
+include "src/udev.cyr"
 ```
 
-Cyrius provides **include-once semantics** — a file included multiple times is
-only processed once. Each `src/` module includes its own dependencies, so
-modules can be syntax-checked independently with `cyrius check`. Bundles
-(full + 5 profiles) are regenerated via `cyrius distlib [profile]`, which
-reads the `[lib]` / `[lib.<profile>]` `modules` list from `cyrius.cyml` and
-concatenates in declared order (strips `include` directives so the output
-is self-contained).
+Cyrius provides **include-once semantics**, so a file included twice is processed once. Modules include most of their
+dependencies, and `cyrius check` accepts each alone. `cyrius distlib [profile]` reads the `[lib]` or
+`[lib.core]` `modules` list from `cyrius.cyml`, concatenates in declared order and strips the `src/` includes, so a bundle
+needs only the stdlib leaves in its `.deps`.
 
 ## Data Flow
 
 ```
                    ┌─────────────────────────────────────────┐
-                   │              Consumer Programs          │
-                   │  (kavach, nein, sigil, yukti, etc.)      │
+                   │           Consumer Programs              │
                    └──────────────┬──────────────────────────┘
-                                  │ include "src/module.cyr"
+                                  │ dist/agnodrm-core.cyr or dist/agnodrm.cyr
                    ┌──────────────▼──────────────────────────┐
-                   │           src/ modules (20)              │
-                   │  error → syscall → security, mac, ...   │
+                   │             src/ modules (9)             │
+                   │  error → util → udev, drm, journald, ... │
                    └──────────────┬──────────────────────────┘
-                                  │ include "lib/*.cyr"
+                                  │ stdlib, and argv-exec of host tools
                    ┌──────────────▼──────────────────────────┐
-                   │         lib/ stdlib (vendored)           │
-                   │  alloc, vec, str, tagged, syscalls, ...  │
+                   │    lib/ stdlib      udevadm, journalctl, │
+                   │                     ip, nft, bootctl ... │
                    └──────────────┬──────────────────────────┘
-                                  │ syscall()
+                                  │ sys_* helpers
                    ┌──────────────▼──────────────────────────┐
-                   │          Linux Kernel (x86_64)           │
+                   │    Linux x86_64 / aarch64, or agnos      │
                    └─────────────────────────────────────────┘
 ```
 
+The per-module surface, down to each syscall wrapper, subprocess and path, is in
+[`../development/capability-map.md`](../development/capability-map.md), generated from the source.
+
 ## Module Dependency Graph
 
-Core modules that other modules depend on:
-- **error.cyr** — all modules use error types and Result convention
-- **lib/tagged.cyr** — Ok/Err tagged unions
-- **lib/syscalls.cyr** → **lib/syscalls_linux.cyr** — raw syscall numbers and wrappers
+Every module depends on **error.cyr** and most on **util.cyr**. Beyond those:
 
-Module clusters by kernel subsystem:
-
-| Cluster | Modules | Kernel Interface |
-|---------|---------|-----------------|
-| Process | syscall, logging | getpid, sysinfo, uname |
-| Security | security, mac, audit, pam | landlock, seccomp, netlink, /etc/pam.d |
-| Storage | luks, dmverity, fuse, update | dm-crypt, dm-verity, /dev/fuse, rename |
-| Integrity | ima, tpm, certpin, secureboot | /sys/kernel/security/ima, /dev/tpm0, EFI vars |
-| Device | udev, drm | sysfs, ioctl |
-| Network | netns, journald | setns/unshare, /run/systemd/journal/socket |
-| Boot | bootloader | /boot/loader, /boot/grub |
+| Group | Modules | Kernel or system interface |
+|-------|---------|----------------------------|
+| Core, device | udev, drm | udevadm, `/dev/dri` ioctls |
+| Deferred, logging | journald | `/run/systemd/journal/socket`, journalctl |
+| Deferred, network | netns | ip, nft |
+| Deferred, boot | bootloader, update | `/boot`, `/efi`, bootctl, efibootmgr, dd |
+| Deferred, storage | fuse | `/proc/mounts`, fusermount |
 
 ## Error Convention
 
-Two error encodings, chosen by call-site:
+Two error encodings, chosen by call site:
 
-- **Packed (hot path)**: `syserr_pack(kind, errno)` — `kind << 16 | errno`, zero-alloc, 6ns
-- **Heap (diagnostic)**: `syserr_new(kind, errno, message)` — heap-allocated struct, 20ns
+- **Packed (hot path)**: `drm_syserr_pack(kind, errno)` — `kind << 16 | errno`, zero-alloc
+- **Heap (diagnostic)**: `drm_syserr_new(kind, errno, message)` — a heap struct with a message
 
-All functions return `Result` via `lib/tagged.cyr`:
+A Result is a register pair, so a call that can fail reads:
+
 ```
-Ok(value)                              # success
-Err(syserr_pack(ERR_PERMISSION_DENIED, EPERM))  # fast error
-Err(syserr_new(ERR_IO, errno, "read failed"))    # diagnostic error
+var res_t, res_v = some_function();
+if (is_err_result(res_t) == 1) { return Err(res_v); }
 ```
 
-Propagation pattern:
-```
-var res = some_function();
-if (is_err_result(res) == 1) { return res; }
-var value = payload(res);
-```
+Never `return res_t;` or `return res_v;`: the payload alone reaches the caller as a tag, so an `Err` reads as success.
 
 ## Memory Model
 
-- **Stack buffers** for syscall wrappers — caller owns the memory
-- **Heap via `alloc()`** (brk-based) for dynamic data
-- **`alloc_reset()`** for arena-style bulk deallocation in test harnesses
-- No garbage collection, no reference counting
-- Strings: null-terminated C strings or fat pointers via `lib/str.cyr`
+- **`alloc()`** is a bump allocator and never frees, so it holds results the caller keeps.
+- **`_agnodrm_scratch_new` / `_agnodrm_scratch_free`** take scratch from `mmap` and give it back, on Linux. A working buffer goes here.
+- **`var buf[N]` inside a fn** is static data, not stack, so it is good for one call's work and never for a returned value.
+- No garbage collection and no reference counting.
+- Strings are null-terminated C strings at boundaries, and fat `Str` pointers through `lib/str.cyr` inside.
 
-## Consumer Map
+## Consumers
 
-| Consumer | Modules | Purpose |
-|----------|---------|---------|
-| yukti | udev | Device management |
-| kavach | security | Sandbox policy engine |
-| nein | netns | Network namespace management |
-| stiva | luks, dmverity | Encrypted container runtime |
-| sigil | tpm, ima, secureboot, certpin | Trust chain verification |
-| soorat | drm | Display/rendering |
-| libro | audit | Audit log collection |
-| argonaut | journald, bootloader | System journal + boot |
-| shakti | pam | Authentication |
-| aegis | mac | Mandatory access control |
-| ark | fuse, update | Filesystem + updates |
-| daimon | security, certpin | Agent sandboxing |
-| hoosh | certpin | LLM inference pinning |
+Who each module is meant for is in the [roadmap](../development/roadmap.md#consumer-map-durable), and who actually pulls the
+bundle is in [`state.md`](../development/state.md).

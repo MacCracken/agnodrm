@@ -184,6 +184,34 @@ jobs:
             echo "  $name: ok"
           done
 
+      # As in ci.yml. The aarch64 prebuilt ships from this job, so it is run here too, as the
+      # smoke test. ulimit: a crash under qemu writes a core into the cwd. Log to a file,
+      # never `| tee`.
+      - name: Test and fuzz on aarch64 under qemu
+        run: |
+          if [ ! -x "$HOME/.cyrius/bin/cycc_aarch64" ]; then
+            echo "::warning::cycc_aarch64 not shipped with Cyrius $CYRIUS_VERSION — skipping aarch64 tests"
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user
+          ulimit -c 0
+          qemu-aarch64 build/agnodrm-aarch64 > /tmp/smoke-aarch64.log 2>&1 || {
+            cat /tmp/smoke-aarch64.log; echo "ERROR: aarch64 smoke failed"; exit 1; }
+          grep -q "agnodrm ready" /tmp/smoke-aarch64.log
+          for f in tests/tcyr/*.tcyr fuzz/*.fcyr; do
+            [ -f "$f" ] || continue
+            name=$(basename "${f%.*}")
+            echo "=== $name ==="
+            log="/tmp/ci_$name-aarch64.build.log"
+            CYRIUS_DCE=1 cyrius build --aarch64 "$f" "/tmp/ci_$name-aarch64" > "$log" 2>&1 || {
+              cat "$log"; echo "ERROR: aarch64 build failed: $name"; exit 1; }
+            cat "$log"
+            scripts/audit.sh --check-build-log "aarch64 $name" "$log"
+            timeout 120 qemu-aarch64 "/tmp/ci_$name-aarch64"
+            rm -f "/tmp/ci_$name-aarch64"
+          done
+
       - name: Regenerate dist bundles
         # Post-decomposition (2026-06-19): full bundle + the single
         # `core` profile. The old domain profiles were removed.

@@ -33,9 +33,8 @@ Every open item is here, so there is one list to keep honest. **S** fits in a si
 
 Two facts from the 1.7.3 review set that order:
 
-- **Nothing calls this library yet.** stiva is the only repo with a `[deps.agnodrm]`, and its sources name none of the 321
-  public fns. It lists the dep for LUKS and dm-verity, which left for sigil at 1.4.4, so the dep is a leftover. ai-hwaccel,
-  mabda, soorat and nein are the intended consumers, and none is wired.
+- **Nothing calls this library yet.** No repo in the workspace calls any of the 329 public fns. ai-hwaccel, mabda, soorat
+  and nein are the intended consumers, and none is wired.
 - **The A/B flow has no boot stack.** No repo outside this one reads `next-slot`, emits `agnos.slot=`, creates the
   `AGNOS-A` / `AGNOS-B` boot entries or calls `efibootmgr`, and `update_apply` refuses without `agnos.slot=`. The flow is
   tested against a model of a design, not against anything that boots.
@@ -54,29 +53,33 @@ Two facts from the 1.7.3 review set that order:
 - [x] Closed on review: `map_get_miss` (1.7.2 pinned the seed), `defer` (the floor is past 6.6.7), and the `#ifplat`
       migration (`src/` has no arch gates left).
 
-### 1.8.x — Finish what is local
+### 1.8.0 — Finish what is local ✅
 
-Work this repo can do and prove alone. All additive; no consumer has to move.
+Work this repo could do and prove alone. All additive; no consumer has to move.
 
-- [ ] **The 1.7.x closeout pass.** CLAUDE.md requires it before `1.8.0`. It ships as the last 1.7.x patch. **S**
-- [ ] **BLS `efi`, `uki`, `uki-url` and `extra` keys** on `bootloader_entry`, so a validator can see every way an entry
-      boots. **M**
-- [ ] **The journal's sealed-memfd path** for messages over about 212 KB, which return `EMSGSIZE` today. **M**
-- [ ] **Clear the rename residue.** CLAUDE.md (17 mentions), the README (28), `docs/architecture/overview.md` (12) and
-      CONTRIBUTING's title still describe agnosys: the Goal section, `dist/agnosys.cyr`, `AGNOSYS_LOG`, a module list that
-      left at 1.4.4. **S**
-- [ ] **Platform matrix.** `docs/architecture/002-platform-matrix.md`: what each module does on x86_64, aarch64 and
-      agnos. **S**
-- [ ] **Bring `consumer-integration.yml` back.** Paused with `if: false` since 2026-06-19. It still builds five bundle
-      profiles that no longer exist and names kybernet and libro, neither of which depends on agnodrm. Reconceive it
-      once a real consumer exists; stiva alone would test a dep it does not use. **M**
-- [ ] **Run the fuzz harnesses on aarch64 in CI, and the tests in `release.yml`.** 1.7.3 runs the tests in `ci.yml` only,
-      and the aarch64 fuzz binaries are built and never run. **S**
-- [ ] **Make a bench row mean something.** One unpinned run can read +50% with no code change, as 1.7.3's first did, and
-      only an alternating, pinned A/B cleared it. `bench-history.sh` should pin a core and record a median. On top of that,
-      `bench_all.bcyr` measures code placement: `strlen_16ch` swings 11 → 15 ns on layout alone. **M**
-- [ ] **Find what the 6.7.x compiler changed for `memeq_16`** (+1.9 ns on identical source, not placement). Worth an hour
-      and no more. **S**
+- [x] **The 1.7.x closeout pass.** Run here rather than as a last 1.7.x patch, as 1.7.0 did.
+- [x] **BLS `efi`, `uki`, `uki-url` and `extra` keys** on `bootloader_entry`, and `bootloader_entry_boot_kind`, which applies
+      systemd-boot's rule, so a validator can tell when `options` is not the command line.
+- [x] **The journal's sealed-memfd path.** Checked against a real `systemd-journald` in a private namespace.
+- [x] **Clear the rename residue.** The README, `overview.md` and `SECURITY.md` described the 20-module library, so they were
+      rewritten rather than renamed.
+- [x] **Platform matrix:** [`002-platform-matrix.md`](../architecture/002-platform-matrix.md).
+- [x] **Fuzz on aarch64 in CI, and tests and fuzz in `release.yml`.** CI also gained the prose and capability-map gates.
+- [x] **`bench-history.sh` pins a core and records a median.**
+- [x] **`memeq_16`.** Closed: not real. The source is identical, and 6.6.20 and 6.7.18 both read 28 ns in a pinned A/B.
+- [x] **Allocator lock cost.** Closed: not real since cyrius 6.3.17, where the lock is a no-op until a thread starts.
+- [x] **The closeout's reviews.** 3 HIGH and 8 MEDIUM, in new and older code, all repaired: audit F-61 to F-77.
+
+### 1.8.x — What is left locally
+
+- [ ] **Read `bootctl list --json`.** The text form is display output: a blank line in a UKI's `.uname` splits a block, and a
+      newline in an addon's command line prints as if it were a label. The JSON carries `type`, `addons` and `cmdline`. **M**
+- [ ] **Fuzz the parsers with no harness:** `bootloader_parse_loader_conf`, `_update_efi_bootnum`, `_update_efi_bootnext`,
+      `_fuse_parse_mounts`, `_fuse_type_ok`. **S**
+- [ ] **Deadlines on the other tools.** Only `journald_query` has one, so a hung `udevadm`, `bootctl`, `ip` or `dd` blocks its
+      caller forever. `dd` needs a long one. **S**
+- [ ] **`bench_all.bcyr` measures code placement.** `strlen_16ch` swings 11 → 15 ns on layout alone, and a median of pinned
+      rounds does not cure that. **M**
 
 ### 1.9.x — Give the A/B flow a boot stack
 
@@ -90,6 +93,8 @@ Cross-repo, and the order matters: nothing past the first item can land until it
 - [ ] **Prove a reboot.** With the kernel's `boot_id` in the state file, a rollback could finish on a host whose
       `efibootmgr` fails. It refuses there today, which is safe to wait out. A new state-file field: walk the write-order
       table and add rows to `test_powercut`. **M**
+- [ ] **Read the slot back after `dd`.** `update_apply` trusts `dd`'s exit status, and a slot that reads wrong after the write
+      would still go on to a switch. **M**
 - [ ] **Run it for real, once.** Real `bootctl`, `efibootmgr`, a block device, a booted systemd-boot and a real power
       cut. None of them has ever touched this code. **L**
 
@@ -98,14 +103,17 @@ Cross-repo, and the order matters: nothing past the first item can land until it
 `update_apply` compares a sha256 against an unsigned manifest, so it catches a corrupt image and not a forged one. Nothing
 here is worth doing until 1.9.x can boot the result.
 
-- [ ] **Decide how a signature gets checked,** as an ADR. The library takes no non-stdlib runtime dependency, so it is
-      sigil as a tool, or a verifier the caller supplies. **L**
+- [ ] **Decide how a signature gets checked,** as an ADR. The stdlib's `sigil` leaf has `ed25519_verify` and `sha256`, down to
+      the floor, but it is 1.37 MB against a 60 KB bundle. The other choices are sigil as a tool, or a verifier the caller
+      supplies. **L**
 - [ ] **Authenticate updates,** with the signature check that decides. **M**
-- [ ] **Network manifest fetch** in `update_check`. Local paths and `file://` only today. `lib/http.cyr` exists now, so
-      what blocks this is authenticity: fetching an unsigned manifest is strictly worse than refusing. Never before the
-      signature check. **M**
-- [ ] **Hash in process.** `update_apply` runs `sha256sum` because the stdlib has no sha256 leaf (6.7.18 has `sha1` only).
-      Drop the subprocess when one lands. **S**
+- [ ] **Read a manifest's file list.** `update_check` reads only `version`, so its manifest has no files and `update_apply`
+      refuses it, and the hash that gets checked is whatever `update_file_new` was given. **M**
+- [ ] **Refuse an older image.** `min_version` is carried and not enforced, so an old image with a valid hash installs. **S**
+- [ ] **Network manifest fetch** in `update_check`. Local paths and `file://` only today. `lib/http.cyr` exists now, so what
+      blocks this is authenticity: fetching an unsigned manifest is strictly worse than refusing. Never before the signature
+      check. **M**
+- [ ] **Hash in process.** `update_apply` runs `sha256sum`. The ADR above decides whether the `sigil` leaf replaces it. **S**
 
 ### 1.x.x — Waiting on someone else
 
@@ -113,11 +121,11 @@ No date. Each moves up the moment its blocker clears.
 
 - [ ] **Wire a real consumer.** ai-hwaccel, mabda, soorat or nein, on their side. The roadmap above assumes one arrives;
       see the V2.0 decision below if none does.
+- [ ] **Bring `consumer-integration.yml` back.** Paused with `if: false` since 2026-06-19. It builds five bundle profiles, four
+      of which no longer exist, and names kybernet and libro, neither of which depends on agnodrm. Reconceive it once a real
+      consumer exists.
 - [ ] **`state.md` release hook** (was V1.4.0). Auto-bump version, sizes and counts. The hook lives in agnosticos tooling.
       Its CI half shipped at 1.7.3.
-- [ ] **Allocator lock cost** (was V1.4.x). `alloc()` takes a process-wide lock this single-threaded library does not
-      need: `ok_create` +321%, `from_errno` +210% when measured at 1.4.1, on cold paths only. No opt-out exists at 6.7.18.
-      Ask upstream for one first; move to `lib/freelist.cyr` only if a consumer feels the cost.
 - [ ] **`#derive(Serialize)` for cstring fields.** Re-verified at 6.7.18: it prints the heap address. `update_state` and
       `drm_verinfo` keep their hand-rolled serializers. See
       [`issues/2026-05-09-cyrius-derive-serialize-cstring.md`](issues/2026-05-09-cyrius-derive-serialize-cstring.md).
@@ -153,6 +161,9 @@ CHANGELOG with a migration note, and the snapshot bumps at the 2.0.0 tag. Remova
 - [ ] **`update_get_current_slot` still guesses.** Its callers should be able to tell a guess from an answer.
 - [ ] **Inert fields:** `enable_nat`, the netns DNS fields, `min_version`, `max_retries`, `backup_dir`. Nothing reads
       them. Implement them or remove them.
+- [ ] **Lists that can be cut.** `bootloader` refuses a list it cannot complete, while the udev, DRM, FUSE and journald lists
+      skip what they cannot parse and stop at the caller's capacity. They should say so.
+- [ ] **Prefix the last three:** `is_syscall_err`, `result_print_err` and `wrap_syscall`, which collide with sigil's.
 - [ ] **Sweep `src/util.cyr`** for consolidation that would be API-breaking, and fold it in the same major.
 
 Obsolete, for the record: `agnosys_checked_syscall` left with `src/syscall.cyr` at 1.4.4, and the unused `label` parameter
@@ -707,7 +718,9 @@ single-threaded agnosys this is pure overhead — 1.4.1 measured `ok_create` +32
 zero-alloc `syserr_pack` hot path unchanged). Confined to cold/diagnostic heap
 routes today, but worth removing. Options, in preference order:
 
-Both options moved to the [Forward plan](#forward-plan), under 1.x.x. At 6.7.18 the stdlib has no such define.
+Closed at 1.8.0. Since cyrius 6.3.17, `_alloc_lock_acquire` is a no-op until a thread starts, so the cost measured here had
+already gone. Results are register pairs and `from_errno` packs, so the two worst rows no longer allocate at all: `ok_create`
+reads 2 ns and `from_errno_eperm` 9 ns, against 59 and 65 ns at 1.4.1.
 
 #### V1.5.x — `update` module deferred capabilities (documented 2026-08-24 at 1.5.3)
 
@@ -821,8 +834,6 @@ are in the decomposition plan.
 | nein | netns |
 | argonaut | journald, bootloader |
 | ark | fuse, update |
-
-stiva declares `[deps.agnodrm]` for LUKS and dm-verity, which moved to sigil, and calls nothing here.
 
 ## Moving the cyrius pin to 6.6.6 ✅ (done at 1.6.1, 2026-09-22)
 

@@ -15,6 +15,12 @@ Pattern lifted from the agnostik ledger ([`agnostik/docs/doc-health.md`](https:/
 
 ---
 
+## 2026-11-05 — rewritten from the code (1.8.0)
+
+The 2026-06-19 audit below renamed these docs and left their content. `README.md`, `SECURITY.md` and
+`docs/architecture/overview.md` still described the 20-module library, so they were rewritten from the code, and checked claim by
+claim against it by an independent reader. `docs/architecture/002-platform-matrix.md` is new. Heritage mentions of agnosys stay.
+
 ## 2026-06-19 — agnosys → agnodrm rename audit (1.4.4)
 
 The decomposition renamed the repo + removed 15 modules. Doc disposition:

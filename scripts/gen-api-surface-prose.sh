@@ -82,7 +82,7 @@ extract_doc() {
 # --- header (preserved from the curated 1.0 baseline form) ---
 {
 cat <<'EOF'
-# Agnosys 1.0 API Surface
+# Agnodrm 1.0 API Surface
 
 > Frozen at **1.0.0** (2026-04-17). The 1.0 baseline (556 fns) is the stable contract: removal or signature change of any 1.0-era fn requires a 2.0 bump. Post-1.0 additions (V1.1.x → V1.2.x) are listed inline below; all are additive.
 >

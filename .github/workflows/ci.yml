@@ -83,6 +83,12 @@ jobs:
             exit 1
           fi
 
+      # Generated docs: audit.sh gates 2 and 3, so `scripts/audit.sh` and CI agree.
+      - name: API prose and capability map
+        run: |
+          scripts/gen-api-surface-prose.sh --check
+          scripts/gen-capability-map.sh --check
+
       - name: Capacity gate
         run: cyrius capacity --check src/main.cyr
 
@@ -179,7 +185,7 @@ jobs:
             cyrius distlib "$profile"
           done
           fail=0
-          for bundle in dist/agnodrm.cyr dist/agnodrm-core.cyr; do
+          for bundle in dist/agnodrm.cyr dist/agnodrm.deps dist/agnodrm-core.cyr dist/agnodrm-core.deps; do
             if ! git diff --quiet "$bundle"; then
               echo "ERROR: $bundle is stale. Run 'cyrius distlib [<profile>]' and commit the result."
               git --no-pager diff "$bundle" | head -40
@@ -187,7 +193,7 @@ jobs:
             fi
           done
           [ $fail -eq 0 ] || exit 1
-          echo "all 2 dist bundles match src/"
+          echo "both dist bundles and their sidecars match src/"
 
       - name: Build (DCE)
         # cyrius exits 0 on three warn-only classes, so every build log in
@@ -249,11 +255,11 @@ jobs:
           done
           echo "agnodrm-aarch64: $(wc -c < build/agnodrm-aarch64) bytes"
 
-      - name: Test on aarch64 under qemu
+      - name: Test and fuzz on aarch64 under qemu
         # The step above proves the code compiles, and aarch64 has shipped bugs an x86_64 run
         # cannot show: 1.6.1's O_DIRECT, 1.6.2's st_mode offset. ulimit: a crash under qemu
         # writes a core into the cwd, which is how four came to be committed. Log to a file,
-        # never `| tee`.
+        # never `| tee`. The fuzz binaries are the ones the step above built.
         run: |
           if [ ! -x "$HOME/.cyrius/bin/cycc_aarch64" ]; then
             echo "::warning::cycc_aarch64 not shipped with Cyrius $CYRIUS_VERSION — skipping aarch64 tests"
@@ -262,6 +268,9 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq qemu-user
           ulimit -c 0
+          qemu-aarch64 build/agnodrm-aarch64 > /tmp/smoke-aarch64.log 2>&1 || {
+            cat /tmp/smoke-aarch64.log; echo "ERROR: aarch64 smoke failed"; exit 1; }
+          grep -q "agnodrm ready" /tmp/smoke-aarch64.log
           for t in tests/tcyr/*.tcyr; do
             [ -f "$t" ] || continue
             name=$(basename "$t" .tcyr)
@@ -273,6 +282,12 @@ jobs:
             scripts/audit.sh --check-build-log "aarch64 test $name" "$log"
             qemu-aarch64 "/tmp/ci_$name-aarch64"
             rm -f "/tmp/ci_$name-aarch64"
+          done
+          for f in fuzz/*.fcyr; do
+            [ -f "$f" ] || continue
+            name=$(basename "$f" .fcyr)
+            echo "=== fuzz $name ==="
+            timeout 120 qemu-aarch64 "build/${name}-aarch64"
           done
 
       - name: Cross-build agnos
@@ -385,8 +400,9 @@ jobs:
               FAIL=1
             fi
           }
-          # Raw execve(59) outside the security module's seccomp surface
-          scan "raw execve"     'syscall( *59'
+          # A shell, and raw syscalls: CLAUDE.md forbids both in src/
+          scan "shell exec"     'exec_cmd('
+          scan "raw syscall"    '[^_a-z]syscall('
           # Direct shadow file access
           scan "shadow access"  '"/etc/shadow"'
           # Writes to system paths that agnodrm shouldn't touch
