@@ -24,6 +24,7 @@ include "lib/fs.cyr"
 # `return drm_err_*(...)` as a dropped tag. `cyrius distlib` strips src/
 # includes, so the bundle is unaffected.
 include "src/error.cyr"
+include "src/util.cyr"
 
 # ================================================================
 # Bootloader type constants
@@ -228,6 +229,17 @@ fn bootloader_extract_value(line, linelen, key_end_pos): i64 {
     return val;
 }
 
+# 1 for "@saved" in any case, the one @ name systemd-boot takes as a default.
+fn _bootloader_is_saved(v): i64 {
+    var saved = "@saved";
+    var i = 0;
+    while (i < 6) {
+        if ((load8(v + i) | 32) != (load8(saved + i) | 32)) { return 0; }
+        i = i + 1;
+    }
+    return load8(v + 6) == 0;
+}
+
 # Parse loader.conf file contents.
 # Returns { timeout, default_id } as a 16-byte struct.
 fn bootloader_parse_loader_conf(text): i64 {
@@ -271,7 +283,7 @@ fn bootloader_parse_loader_conf(text): i64 {
 
         var kp = _bootloader_entry_key(text + linestart, linelen, "timeout");
         if (kp > 0) {
-            var val = bootloader_extract_value(text + linestart, linelen, kp);
+            var val = _bootloader_entry_value(text + linestart, linelen, kp);
             if (val != 0) {
                 # Seconds, or a word such as menu-force that has no number to give:
                 # that leaves the default, rather than reading its digits, if any.
@@ -292,7 +304,14 @@ fn bootloader_parse_loader_conf(text): i64 {
 
         kp = _bootloader_entry_key(text + linestart, linelen, "default");
         if (kp > 0) {
-            var val = bootloader_extract_value(text + linestart, linelen, kp);
+            var val = _bootloader_entry_value(text + linestart, linelen, kp);
+            # A value of only quotes clears the default, as it does for systemd-boot, and a
+            # line with no value at all is not one it reads. Only @saved of the @ names counts.
+            if (val == 0) {
+                if (bootloader_extract_value(text + linestart, linelen, kp) != 0) { store64(result + 8, 0); }
+            } elif (load8(val) == 64) {
+                if (_bootloader_is_saved(val) != 1) { val = 0; }
+            }
             if (val != 0) {
                 # Strip .conf suffix if present
                 var vl = strlen(val);
@@ -361,16 +380,139 @@ fn _bootloader_scan_boot_dirs(result_arr, max_entries, count): i64 {
     return count;
 }
 
-# Give a bootctl entry showing no boot key the keys of its file. bootctl drops a path it
-# will not take, such as one holding "..", and prints the entry without it, while
-# systemd-boot hands that path to the firmware. Returns 0.
-fn _bootloader_fill_boot_keys(e, f): i64 {
-    if (bootloader_entry_boot_kind(e) != BOOT_ENTRY_NONE) { return 0; }
+# `a` and `b` joined with a space, or one of them if the two agree or the other is missing.
+fn _bootloader_both(a, b): i64 {
+    if (a == 0) { return b; }
+    if (b == 0) { return a; }
+    if (streq(a, b) == 1) { return a; }
+    return str_data(str_builder_build(_bootloader_sb_append(_bootloader_sb_append(0, a), b)));
+}
+
+# Give a bootctl entry what its file says, since the file is what systemd-boot reads. bootctl
+# drops a path it will not take, such as one holding "..", and prints what is left, so a
+# later `linux` line or `initrd` line goes unseen. It joins options lines before it would
+# unquote them, if it did, so `options "quiet 1"` reads as one quoted word. So the boot keys
+# come from the file. `options` and `extra` hold what both say, which adds what an addon
+# contributes and hides nothing: where the two agree, that is one copy. Returns 0.
+fn _bootloader_take_file(e, f): i64 {
     bootloader_entry_set_linux(e, bootloader_entry_linux(f));
     bootloader_entry_set_efi(e, bootloader_entry_efi(f));
     bootloader_entry_set_uki(e, bootloader_entry_uki(f));
     bootloader_entry_set_uki_url(e, bootloader_entry_uki_url(f));
+    bootloader_entry_set_initrd(e, bootloader_entry_initrd(f));
+    bootloader_entry_set_options(e, _bootloader_both(bootloader_entry_options(f), bootloader_entry_options(e)));
+    bootloader_entry_set_extra(e, _bootloader_both(bootloader_entry_extra(f), bootloader_entry_extra(e)));
     return 0;
+}
+
+# 1 for a name systemd-boot reads as a Type #2 entry in /EFI/Linux: an .efi in any case,
+# not hidden, and not auto-*.
+fn _bootloader_uki_name_ok(name): i64 {
+    var n = strlen(name);
+    if (n <= 4) { return 0; }
+    if (load8(name) == 46) { return 0; }
+    if (load8(name + n - 4) != 46) { return 0; }
+    if ((load8(name + n - 3) | 32) != 101) { return 0; }
+    if ((load8(name + n - 2) | 32) != 102) { return 0; }
+    if ((load8(name + n - 1) | 32) != 105) { return 0; }
+    if (n >= 5) {
+        if ((load8(name) | 32) == 97) {
+            if ((load8(name + 1) | 32) == 117) {
+                if ((load8(name + 2) | 32) == 116) {
+                    if ((load8(name + 3) | 32) == 111) {
+                        if (load8(name + 4) == 45) { return 0; }
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+# Account for one /EFI/Linux directory's UKIs in result_arr. Each entry already there
+# answers for one file, marked in `claimed`, so a second file of the same name on the other
+# partition still shows. One with no boot key learns it is a UKI, since a blank line in
+# .uname can split that key from the block in bootctl's text. Any other file is added, as a
+# UKI with no options, because a validator must see it: bootctl refuses a name holding a
+# space, and fails outright on a long loader.conf line, while systemd-boot boots both.
+# This library does not read a UKI, so its command line stays unknown, as
+# bootloader_entry_boot_kind says. bootctl names a counted UKI, or a profile of one, other
+# than its file, which comes back under both and errs toward showing it. Returns the new
+# count, or a BOOTLOADER_SCAN_* refusal.
+fn _bootloader_add_ukis(dir, result_arr, max_entries, count, claimed): i64 {
+    var dstr = str_from(dir);
+    var names = vec_new();
+    var listed = dir_list_checked(dstr, names);
+    if (listed < 0) {
+        if (listed == 0 - ENOENT) { return count; }
+        if (listed == 0 - ENOTDIR) { return count; }
+        return BOOTLOADER_SCAN_DIR_FAILED;
+    }
+    var total = count;
+    var ni = 0;
+    while (ni < vec_len(names)) {
+        var nstr = vec_get(names, ni);
+        var name = str_cstr(nstr);
+        ni = ni + 1;
+        if (_bootloader_uki_name_ok(name) != 1) { continue; }
+        var path = str_data(path_join(dstr, nstr));
+        var reg = _bootloader_is_regular(path);
+        if (reg < 0) { return BOOTLOADER_SCAN_UNREADABLE; }
+        if (reg == 0) { continue; }
+        var ei = 0;
+        var known = 0;
+        while (ei < total) {
+            var e = load64(result_arr + ei * 8);
+            if (load8(claimed + ei) == 0) {
+                if (streq(bootloader_entry_id(e), name) == 1) {
+                    known = 1;
+                    store8(claimed + ei, 1);
+                    if (bootloader_entry_boot_kind(e) == BOOT_ENTRY_NONE) { bootloader_entry_set_uki(e, path); }
+                    break;
+                }
+            }
+            ei = ei + 1;
+        }
+        if (known == 1) { continue; }
+        if (max_entries == 0) { continue; }
+        if (total >= max_entries) { return BOOTLOADER_SCAN_TOO_MANY; }
+        var u = bootloader_entry_new();
+        bootloader_entry_set_id(u, name);
+        bootloader_entry_set_uki(u, path);
+        store64(result_arr + total * 8, u);
+        store8(claimed + total, 1);
+        total = total + 1;
+    }
+    return total;
+}
+
+# Account for the UKIs under every root an ESP or XBOOTLDR is mounted on. Returns the new
+# count, or a BOOTLOADER_SCAN_* refusal.
+fn _bootloader_scan_ukis(result_arr, max_entries, count): i64 {
+    var bytes = max_entries + 1;
+    var claimed = _agnodrm_scratch_new(bytes);
+    if (claimed == 0) { return BOOTLOADER_SCAN_TOO_MANY; }
+    memset(claimed, 0, bytes);
+    var roots = vec_new();
+    vec_push(roots, "/boot/EFI/Linux");
+    vec_push(roots, "/efi/EFI/Linux");
+    vec_push(roots, "/boot/efi/EFI/Linux");
+    var di = 0;
+    while (di < vec_len(roots)) {
+        var dir = _bootloader_path(vec_get(roots, di));
+        var seen = 0;
+        var pi = 0;
+        while (pi < di) {
+            seen = seen | _bootloader_same_dir(dir, _bootloader_path(vec_get(roots, pi)));
+            pi = pi + 1;
+        }
+        di = di + 1;
+        if (seen == 1) { continue; }
+        count = _bootloader_add_ukis(dir, result_arr, max_entries, count, claimed);
+        if (count < 0) { break; }
+    }
+    _agnodrm_scratch_free(claimed, bytes);
+    return count;
 }
 
 # Add to result_arr, which holds `count` entries from bootctl, every entry file bootctl did
@@ -398,7 +540,7 @@ fn _bootloader_merge_files(result_arr, max_entries, count): i64 {
                 var reported = load64(result_arr + bi * 8);
                 if (streq(bootloader_entry_id(reported), bootloader_entry_id(f)) == 1) {
                     store8(claimed + bi, 1);
-                    _bootloader_fill_boot_keys(reported, f);
+                    _bootloader_take_file(reported, f);
                     hit = 1;
                     break;
                 }
@@ -416,16 +558,18 @@ fn _bootloader_merge_files(result_arr, max_entries, count): i64 {
         fi = fi + 1;
     }
     _agnodrm_scratch_free(files, bytes);
-    if (n == BOOTLOADER_SCAN_NO_DIR) { return count; }
+    if (n == BOOTLOADER_SCAN_NO_DIR) { return _bootloader_scan_ukis(result_arr, max_entries, count); }
     if (n < 0) { return n; }
-    return total;
+    return _bootloader_scan_ukis(result_arr, max_entries, total);
 }
 
 # List boot entries: what `bootctl list` reports, and every BLS Type #1 entry file it did
 # not, since the two disagree about what is an entry (see _bootloader_merge_files).
 # result_arr: caller-allocated array of max_entries BootEntry pointers.
-# When bootctl is missing, fails, or prints nothing, the entry files are the whole list.
-# is_default is never set by either path (see _bootloader_scan_entries_dir).
+# Every UKI in /EFI/Linux is accounted for the same way. When bootctl is missing, fails, or
+# prints nothing, the files are the whole list.
+# is_default is set only from bootctl's JSON; see _bootloader_scan_entries_dir for why neither
+# the files nor bootctl's text can say.
 # Returns Result: Ok(count) — 0 when a source was read and held no entries —
 # Err(not_supported) when bootctl produced nothing AND no entries directory
 # could be read, so "no source" no longer reads as "no entries", or Err when the
@@ -438,19 +582,28 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     if (_agnodrm_out_ok(result_arr, max_entries) != 1) {
         return drm_err_invalid_argument("result array is null or max_entries is negative");
     }
-    # Use bootctl list (systemd-boot) as it provides structured output.
-    # argv vec: element 0 is the ABSOLUTE command path (execve does no PATH
-    # lookup). Mirrors udev_list_devices / journald_query.
+    # Ask bootctl for JSON, and for text from one too old to know --json. argv vec: element 0
+    # is the ABSOLUTE command path (execve does no PATH lookup). A bootctl that hit the
+    # deadline gets no second one: it hung, and it was not the flag it choked on.
     var args = vec_new();
     vec_push(args, "/usr/bin/bootctl");
     vec_push(args, "list");
-
+    vec_push(args, "--json=short");
     if (_bootloader_bootctl != 0) { vec_set(args, 0, _bootloader_bootctl); }
 
-    var cap = 65536;
+    var cap = BOOTLOADER_BOOTCTL_MAX;
     var buf = _agnodrm_scratch_new(cap + 1);
     if (buf == 0) { return drm_err_io(ENOMEM, "no memory for bootctl output"); }
-    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "bootctl list failed");
+    var failed = "bootctl list failed";
+    var res_t, res_v = _agnodrm_capture_within(args, buf, cap, failed, AGNODRM_TOOL_DEADLINE_MS);
+    if (is_err_result(res_t) == 1) {
+        if (drm_syserr_errno(res_v) != ETIMEDOUT) {
+            vec_pop(args);
+            var plain_t, plain_v = _agnodrm_capture_within(args, buf, cap, failed, AGNODRM_TOOL_DEADLINE_MS);
+            res_t = plain_t;
+            res_v = plain_v;
+        }
+    }
     if (is_ok(res_t) == 1) {
         var nbytes = res_v;
         # A full buffer means the output was cut: the last entry would lose its
@@ -458,11 +611,21 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
         # entries would vanish. Refuse rather than return a truncated list.
         if (nbytes >= cap) {
             _agnodrm_scratch_free(buf, cap + 1);
-            return drm_err_io(0, "bootctl list output exceeds 64 KiB; not parsing a truncated list");
+            return drm_err_io(0, "bootctl list output is too large; not parsing a truncated list");
         }
         if (nbytes > 0) {
             store8(buf + nbytes, 0);
-            var p_t, p_v = bootloader_parse_bootctl_list(buf, result_arr, max_entries);
+            var p_t = 0;
+            var p_v = 0;
+            if (load8(buf + _agnodrm_json_ws(buf, nbytes, 0)) == 91) {
+                var pj_t, pj_v = bootloader_parse_bootctl_json(buf, result_arr, max_entries);
+                p_t = pj_t;
+                p_v = pj_v;
+            } else {
+                var pt_t, pt_v = bootloader_parse_bootctl_list(buf, result_arr, max_entries);
+                p_t = pt_t;
+                p_v = pt_v;
+            }
             _agnodrm_scratch_free(buf, cap + 1);
             if (is_err_result(p_t) == 1) { return Err(p_v); }
             var merged = _bootloader_merge_files(result_arr, max_entries, p_v);
@@ -475,7 +638,11 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     # Fallback (roadmap V1.6.x): read the loader entries directly, from all of them.
     # Through 1.7.1 the first directory won, so an empty /boot hid every entry on /efi.
     var count = _bootloader_scan_boot_dirs(result_arr, max_entries, 0);
-    if (count >= 0) { return Ok(count); }
+    if (count >= 0) {
+        count = _bootloader_scan_ukis(result_arr, max_entries, count);
+        if (count >= 0) { return Ok(count); }
+        return _bootloader_scan_err(count);
+    }
     if (count == BOOTLOADER_SCAN_NO_DIR) {
         var why = "bootctl list printed nothing and no loader/entries dir under /boot, /efi or /boot/efi is readable";
         return drm_err_not_supported(why);
@@ -518,6 +685,7 @@ var BOOTLOADER_SCAN_TOO_LARGE = 0 - 5000;
 var BOOTLOADER_SCAN_TOO_MANY = 0 - 5001;
 var BOOTLOADER_SCAN_UNREADABLE = 0 - 5002;
 var BOOTLOADER_SCAN_NO_DIR = 0 - 5003;
+var BOOTLOADER_BOOTCTL_MAX = 1048576;       # JSON runs larger than the text it replaces
 var BOOTLOADER_SCAN_DIR_FAILED = 0 - 5004;
 
 fn _bootloader_scan_err(n): i64 {
@@ -952,11 +1120,15 @@ fn _bootloader_tree_glyph(v): i64 {
     return 0;
 }
 
-# An "options:" value as systemd-boot would pass it: no glyph, one pair of quotes off.
-fn _bootloader_bootctl_option(line, linelen, kp): i64 {
+# An "options:" value as it boots: no glyph, and one pair of quotes off, which systemd-boot
+# does to a Type #1 file's lines. A Type #2 entry's line is the UKI's own, and nothing
+# unquotes that.
+fn _bootloader_bootctl_option(line, linelen, kp, type2): i64 {
     var v = bootloader_extract_value(line, linelen, kp);
     if (v == 0) { return 0; }
-    return _bootloader_unquote(v + _bootloader_tree_glyph(v));
+    var text = v + _bootloader_tree_glyph(v);
+    if (type2 == 1) { return text; }
+    return _bootloader_unquote(text);
 }
 
 # What a block can only be sure of once it ends: its extras, and that a Type #2 entry's
@@ -971,7 +1143,8 @@ fn _bootloader_bootctl_finish(e, sb_extra, type2): i64 {
     return 0;
 }
 
-# Parse `bootctl list` output. Each entry is a block of right-aligned
+# Parse `bootctl list` text, for a bootctl too old to print JSON. Prefer
+# bootloader_parse_bootctl_json. Each entry is a block of right-aligned
 # "key: value" lines, blocks separated by a blank line:
 #
 #         type: Boot Loader Specification Type #1 (.conf)
@@ -1091,7 +1264,7 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
         }
         kp = bootloader_line_starts_with(line, linelen, "options:");
         if (kp > 0) {
-            sb_options = _bootloader_sb_append(sb_options, _bootloader_bootctl_option(line, linelen, kp));
+            sb_options = _bootloader_sb_append(sb_options, _bootloader_bootctl_option(line, linelen, kp, type2));
             cont = 2;
             continue;
         }
@@ -1133,6 +1306,162 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
     count = _bootloader_bootctl_flush(current, sb_initrd, sb_options, result_arr, max_entries, count);
     if (count < 0) { return drm_err_invalid_argument("more boot entries than max_entries"); }
 
+    return Ok(count);
+}
+
+# The strings of the JSON array at `i`, joined with one space, or 0 for anything else, which
+# for "addons" is usually a null.
+fn _bootloader_json_join(obj, n, i): i64 {
+    if (i < 0) { return 0; }
+    if (load8(obj + i) != 91) { return 0; }
+    var end = _agnodrm_json_skip_value(obj, n, i);
+    if (end < 0) { return 0; }
+    var sb = 0;
+    var j = _agnodrm_json_ws(obj, n, i + 1);
+    while (j < end - 1) {
+        sb = _bootloader_sb_append(sb, _agnodrm_json_cstr(obj, n, j));
+        j = _agnodrm_json_skip_value(obj, n, j);
+        if (j < 0) { break; }
+        j = _agnodrm_json_ws(obj, n, j);
+        if (j >= end - 1) { break; }
+        if (load8(obj + j) != 44) { break; }
+        j = _agnodrm_json_ws(obj, n, j + 1);
+    }
+    if (sb == 0) { return 0; }
+    return str_data(str_builder_build(sb));
+}
+
+# 1 if the object holds an escaped NUL. No C string from bootctl can, and a field that held
+# one would read as absent, so `cmdline` would fall back to `options` and hide what follows.
+fn _bootloader_json_has_nul(obj, n): i64 {
+    var i = 0;
+    while (i + 5 < n) {
+        if (load8(obj + i) == 92) {
+            if (memeq(obj + i + 1, "u0000", 5) == 1) { return 1; }
+            i = i + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# A UKI's command line as sd-stub hands it on: control characters and blanks are spaces, and
+# none at either end. `v` is changed in place. Returns `v`, or 0 if nothing is left.
+fn _bootloader_mangle_cmdline(v): i64 {
+    if (v == 0) { return 0; }
+    var n = strlen(v);
+    var i = 0;
+    while (i < n) {
+        var c = load8(v + i);
+        if (c < 32 || c == 127) { store8(v + i, 32); }
+        i = i + 1;
+    }
+    while (n > 0) {
+        if (load8(v + n - 1) != 32) { break; }
+        n = n - 1;
+    }
+    store8(v + n, 0);
+    i = 0;
+    while (i < n) {
+        if (load8(v + i) != 32) { break; }
+        i = i + 1;
+    }
+    if (i == n) { return 0; }
+    return v + i;
+}
+
+# The string value of `key` in the object, or 0.
+fn _bootloader_json_str(obj, n, key): i64 {
+    return _agnodrm_json_cstr(obj, n, _agnodrm_json_field(obj, n, key));
+}
+
+# One entry from the JSON object at `obj`, or 0 if it is not an object, has no id, or holds
+# an escaped NUL.
+#
+# `cmdline` is `options` plus what addons add, so it is what the kernel is handed, and it wins
+# when present. For a Type #1 entry it carries the quotes systemd-boot takes off a file's
+# value, so they come off here too, as far as a joined line allows: the file itself is read
+# as well, see _bootloader_take_file. A Type #2 entry's line is the UKI's own, which sd-stub
+# mangles and nothing unquotes, and its path comes as "linux", which moves to uki, as in the
+# text form. `extras` lists an entry's extras by path, and `addons` the addons among them as
+# objects. isDefault is bootctl's own answer, where the text form has only a mark a title
+# can imitate.
+fn _bootloader_json_entry(obj, n): i64 {
+    if (_bootloader_json_has_nul(obj, n) == 1) { return 0; }
+    var id = _bootloader_json_str(obj, n, "id");
+    if (id == 0) { return 0; }
+    var e = bootloader_entry_new();
+    bootloader_entry_set_id(e, id);
+    bootloader_entry_set_title(e, _bootloader_json_str(obj, n, "title"));
+    if (bootloader_entry_title(e) == 0) {
+        bootloader_entry_set_title(e, _bootloader_json_str(obj, n, "showTitle"));
+    }
+    bootloader_entry_set_version(e, _bootloader_json_str(obj, n, "version"));
+    bootloader_entry_set_linux(e, _bootloader_json_str(obj, n, "linux"));
+    bootloader_entry_set_efi(e, _bootloader_json_str(obj, n, "efi"));
+    bootloader_entry_set_uki(e, _bootloader_json_str(obj, n, "uki"));
+    bootloader_entry_set_uki_url(e, _bootloader_json_str(obj, n, "ukiUrl"));
+    bootloader_entry_set_initrd(e, _bootloader_json_join(obj, n, _agnodrm_json_field(obj, n, "initrd")));
+    bootloader_entry_set_extra(e, _bootloader_json_join(obj, n, _agnodrm_json_field(obj, n, "extras")));
+    var line = _bootloader_json_str(obj, n, "cmdline");
+    if (line == 0) { line = _bootloader_json_str(obj, n, "options"); }
+    var ty = _bootloader_json_str(obj, n, "type");
+    var uki = 0;
+    if (ty != 0) { uki = streq(ty, "type2"); }
+    if (uki == 1) {
+        bootloader_entry_set_options(e, _bootloader_mangle_cmdline(line));
+        _bootloader_bootctl_finish(e, 0, 1);
+    } else {
+        bootloader_entry_set_options(e, _bootloader_unquote(line));
+    }
+    var dflt = _agnodrm_json_field(obj, n, "isDefault");
+    if (dflt >= 0) {
+        if (_agnodrm_json_is(obj, n, dflt, "true") == 1) { bootloader_entry_set_is_default(e, 1); }
+    }
+    return e;
+}
+
+# Parse `bootctl list --json=short` output: an array of objects, one per entry. Prefer this to
+# bootloader_parse_bootctl_list, whose input is display text a value can reshape. A blank line
+# in a UKI's .uname, or a newline in an addon's command line, is one escaped character here.
+# Fields are the entry's own, so linux has no "<root>//" prefix and no display marks, and
+# Automatic entries come back too, with an id, a title and no boot key.
+#
+# Returns Result: Ok(count), or Err if the text is not one whole array of objects each with
+# an id, or there are more entries than max_entries: an entry a caller cannot see is one it
+# cannot validate. max_entries 0 asks for nothing and is no overflow.
+fn bootloader_parse_bootctl_json(text, result_arr, max_entries): i64 {
+    if (text == 0) { return drm_err_invalid_argument("bootctl json is null"); }
+    if (_agnodrm_out_ok(result_arr, max_entries) != 1) {
+        return drm_err_invalid_argument("result array is null or max_entries is negative");
+    }
+    var n = strlen(text);
+    var i = _agnodrm_json_ws(text, n, 0);
+    if (i >= n) { return drm_err_invalid_argument("bootctl json is empty"); }
+    if (load8(text + i) != 91) { return drm_err_invalid_argument("bootctl json is not an array"); }
+    var end = _agnodrm_json_skip_value(text, n, i);
+    if (end < 0) { return drm_err_invalid_argument("bootctl json is not one whole array"); }
+    if (_agnodrm_json_ws(text, n, end) != n) {
+        return drm_err_invalid_argument("bootctl json is not one whole array");
+    }
+    var count = 0;
+    i = _agnodrm_json_ws(text, n, i + 1);
+    while (i < end - 1) {
+        var after = _agnodrm_json_skip_value(text, n, i);
+        if (after < 0) { return drm_err_invalid_argument("bootctl json entry is cut short"); }
+        var e = _bootloader_json_entry(text + i, after - i);
+        if (e == 0) { return drm_err_invalid_argument("bootctl json entry cannot be read"); }
+        if (max_entries != 0) {
+            if (count >= max_entries) { return drm_err_invalid_argument("more boot entries than max_entries"); }
+            store64(result_arr + count * 8, e);
+            count = count + 1;
+        }
+        i = _agnodrm_json_ws(text, n, after);
+        if (i >= end - 1) { break; }
+        if (load8(text + i) != 44) { return drm_err_invalid_argument("bootctl json has no comma between entries"); }
+        i = _agnodrm_json_ws(text, n, i + 1);
+        if (i >= end - 1) { return drm_err_invalid_argument("bootctl json ends in a comma"); }
+    }
     return Ok(count);
 }
 

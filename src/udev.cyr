@@ -363,7 +363,7 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
     }
     # argv vec: element 0 is the ABSOLUTE command path — execve(2) does no
     # PATH lookup, so a bare "udevadm" never runs. Each arg is its own vec
-    # entry; agnodrm_run_capture runs it with no /bin/sh and no metacharacter
+    # entry; _agnodrm_capture_within runs it with no /bin/sh and no metacharacter
     # split. Mirrors netns_run_ip / journald_query.
     var args = vec_new();
     vec_push(args, "/usr/bin/udevadm");
@@ -375,7 +375,8 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
     while (cap <= UDEV_DB_MAX) {
         var buf = _agnodrm_scratch_new(cap);
         if (buf == 0) { return drm_err_io(ENOMEM, "no memory for the udev device database"); }
-        var res_t, res_v = agnodrm_run_capture(args, buf, cap, "udevadm info --export-db failed");
+        var failed = "udevadm info --export-db failed";
+        var res_t, res_v = _agnodrm_capture_within(args, buf, cap, failed, AGNODRM_TOOL_DEADLINE_MS);
         if (is_err_result(res_t) == 1) {
             _agnodrm_scratch_free(buf, cap);
             return Err(res_v);
@@ -440,7 +441,7 @@ fn udev_get_device_info(syspath): i64 {
     var cap = UDEV_INFO_MAX;
     var buf = _agnodrm_scratch_new(cap);
     if (buf == 0) { return drm_err_io(ENOMEM, "no memory for udevadm info"); }
-    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "udevadm info --path failed");
+    var res_t, res_v = _agnodrm_capture_within(args, buf, cap, "udevadm info --path failed", AGNODRM_TOOL_DEADLINE_MS);
     if (is_err_result(res_t) == 1) {
         _agnodrm_scratch_free(buf, cap);
         return Err(res_v);

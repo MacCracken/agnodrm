@@ -70,16 +70,24 @@ Work this repo could do and prove alone. All additive; no consumer has to move.
 - [x] **Allocator lock cost.** Closed: not real since cyrius 6.3.17, where the lock is a no-op until a thread starts.
 - [x] **The closeout's reviews.** 3 HIGH and 8 MEDIUM, in new and older code, all repaired: audit F-61 to F-77.
 
-### 1.8.x — What is left locally
+### 1.8.1 — The rest of what is local ✅
 
-- [ ] **Read `bootctl list --json`.** The text form is display output: a blank line in a UKI's `.uname` splits a block, and a
-      newline in an addon's command line prints as if it were a label. The JSON carries `type`, `addons` and `cmdline`. **M**
-- [ ] **Fuzz the parsers with no harness:** `bootloader_parse_loader_conf`, `_update_efi_bootnum`, `_update_efi_bootnext`,
-      `_fuse_parse_mounts`, `_fuse_type_ok`. **S**
-- [ ] **Deadlines on the other tools.** Only `journald_query` has one, so a hung `udevadm`, `bootctl`, `ip` or `dd` blocks its
-      caller forever. `dd` needs a long one. **S**
-- [ ] **`bench_all.bcyr` measures code placement.** `strlen_16ch` swings 11 → 15 ns on layout alone, and a median of pinned
-      rounds does not cure that. **M**
+- [x] **`bootctl list --json`.** `bootloader_list_boot_entries` asks for it first, and takes text only from a bootctl that
+      cannot give it. Checked against a real `bootctl` 262, read-only, and over private trees holding addons, extras, a UKI
+      named with a space and a line bootctl drops. `is_default` is set from it, the one place that is safe.
+- [x] **Review of the above.** 4 HIGH, 3 MEDIUM, 5 LOW, one accepted: [`2026-11-06-audit.md`](../audit/2026-11-06-audit.md). A file's
+      boot keys now win over bootctl's, and every UKI in `/EFI/Linux` is accounted for.
+- [x] **Fuzz the parsers that had no harness:** `bootloader_parse_loader_conf`, `_update_efi_bootnum`, `_update_efi_bootnext`,
+      `_fuse_parse_mounts`, `_fuse_type_ok`.
+- [x] **Deadlines on the other tools.** Everything the library runs now has one but `fuse_mount`'s helper, which needs its
+      terminal. `agnodrm_run_capture` and `agnodrm_run_checked` stay unbounded, since a caller's own tool may be slow for good
+      reason.
+- [x] **`bench-history.sh` measures across code layouts.** Over three code-only changes, `strlen_16ch` moved 36% in one layout
+      and 0% across five. Rows moving over 5% fall from 4 to 3 of 23, and the worst from 50% to 14%. That is better, not cured,
+      so a small move in one row is still not a finding.
+- [x] **`JSON` helpers shared.** The third reader was the point to move `update`'s and `journald`'s into `util`.
+
+Nothing local is left in 1.8.x. What comes next needs a decision, or another repo.
 
 ### 1.9.x — Give the A/B flow a boot stack
 

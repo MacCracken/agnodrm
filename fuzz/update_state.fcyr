@@ -59,7 +59,7 @@ while (it < 40000) {
     var buf = fz_guarded(len);
     memcpy(buf, doc, len);
     fz_mutate(buf, len, jalpha, jalen);
-    var off = _update_json_field(buf, len, "boot_count");
+    var off = _agnodrm_json_field(buf, len, "boot_count");
     if (off < 0 - 2) { sys_exit(30); }
     if (off > len) { sys_exit(31); }
     var t, v = _update_parse_state(buf, len);

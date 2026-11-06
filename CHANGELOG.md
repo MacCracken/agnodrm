@@ -7,6 +7,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.1] — 2026-11-06
+
+**The rest of what is local.** `bootloader_list_boot_entries` reads `bootctl list --json`, the five parsers with no harness are
+fuzzed, and every tool the library runs has a deadline but one. An independent review then found **4 HIGH, 3 MEDIUM and 5 LOW**,
+one of the HIGH in the new JSON reader and three in older code: see [`docs/audit/2026-11-06-audit.md`](docs/audit/2026-11-06-audit.md).
+All are repaired but one, accepted. The API grows from 330 to 331 fns, additive. Floor 6.6.10, pin 6.7.18, both unchanged.
+
+⚠ **Behaviour changes.** No workspace repo calls any of these.
+
+- `bootloader_list_boot_entries` asks for `bootctl list --json=short` first. Its entries have no `<root>//` prefix and no display
+  marks, and Automatic entries come back too, with no boot key.
+- A file's `linux`, `efi`, `uki`, `uki-url` and `initrd` replace bootctl's, and its `options` and `extra` are added to them.
+- Every `.efi` under `/EFI/Linux` is accounted for, so a list can be longer than before, or an `Err` where it would now overflow
+  `max_entries`. One bootctl did not report has no `options`, and the validator refuses that.
+- `is_default` is now set, from the JSON's `isDefault`.
+- `bootloader_parse_loader_conf` takes quotes off a value, ignores `@` names other than `@saved`, and clears on `default ''`.
+- `udevadm`, `bootctl`, `ip`, `fusermount`, `efibootmgr` and `argonaut` fail with `ETIMEDOUT` after 60 s, `sha256sum` after 30
+  minutes, and `dd` after an hour. A deadline runs a tool in its own session, with no terminal. `fuse_mount` keeps its helper's
+  terminal and has none.
+
+### Security
+
+- **Fixed — audit F-79 (HIGH): a line bootctl drops hid what boots.** bootctl leaves out a path it will not take and prints the
+  rest, so after `linux /ok` and `linux /x/../evil` a validator saw `/ok`, and systemd-boot takes the last. The file now wins.
+- **Fixed — F-80 (HIGH): a UKI bootctl leaves out was invisible.** A name holding a space, or every UKI when bootctl fails outright.
+  systemd-boot boots both. `/EFI/Linux` is now read under each of the three roots.
+- **Fixed — F-81 (HIGH): joined `options` lines hid a quoted word.** bootctl joins them, so `options "quiet 1"` and `options rw`
+  no longer unquote, and the validator missed the bare `1`.
+- **Fixed — F-88 (LOW):** `loader.conf`: `default @evil` read as a name, and `default ''` did not clear one. Values lose one pair of quotes, as
+  an entry's do.
+- **Fixed — F-85 (LOW):** a healthy list read as cut once it was JSON. The cap is 1 MiB.
+- **Fixed — F-89 (LOW):** the JSON walker took `[}` as a matched pair, and a trailing comma passed.
+- New in this cycle, fixed before any release: **F-78 (HIGH)** the JSON reader looked for paths in `addons`, which holds objects,
+  so every addon, credential and sysext was missing. **F-82 (MEDIUM)** a UKI's line lost its quotes. **F-86 (LOW)** its control
+  characters stayed. **F-87 (LOW)** a deadline took `fuse_mount`'s terminal. **F-90 (LOW)** a listed UKI hid a same-named one on the
+  other partition.
+
+### Added
+
+- **`bootloader_parse_bootctl_json`.** It takes `cmdline` over `options` for what addons add, `extras` for paths, and `isDefault`
+  as bootctl's own answer. Text that is not one whole array of objects is an `Err`, and so is an entry with an escaped NUL.
+- **Fuzz harnesses for `bootloader_parse_loader_conf`, `_update_efi_bootnum`, `_update_efi_bootnext`, `_fuse_parse_mounts` and
+  `_fuse_type_ok`.** Ten harnesses now, and those that can carry a model of what the parser should return.
+
+### Changed
+
+- **Deadlines on the rest of the tools:** `_agnodrm_capture_within` and `_agnodrm_exec_within`, with `AGNODRM_TOOL_DEADLINE_MS`,
+  and longer ones for hashing and writing an image. `agnodrm_run_capture` and `agnodrm_run_checked` stay unbounded, since a
+  caller's tool may be slow for good reason. A tighter `proc_set_timeout_ms` stands.
+- **JSON helpers moved to `util`,** at the third reader. `update`'s and `journald`'s are gone.
+- **`bench-history.sh` measures across code layouts.** See Performance.
+
+### Performance
+
+- **`bench-history.sh` measures across five code layouts,** each a padding function ahead of every include. Over three code-only
+  changes, `strlen_16ch` moved 36% in one layout and 0% across five. Rows moving over 5% fall from 4 to 3 of 23, and the worst
+  from 50% to 14%. That is better, not cured, so a small move in one row is still not a finding. The padding in this change's
+  first cut moved nothing, since a plain build puts the stdlib ahead of the source (F-84), and its numbers are not these.
+- 1.8.0 to 1.8.1, all 23 rows: nothing slower beyond noise. `update_parse_state` 3219 → 3280 ns (+1.9%) and `udev_parse_block` 1621
+  → 1649 ns (+1.7%) are the two that rose. `memeq_16` 31 → 29 ns (-6.5%) and `compare_versions` 75 → 71 ns (-5.3%) are the only
+  moves past 5%. The 1.8.1 row is the first across layouts, so these compare two methods, and read none of them as a win.
+
+**Verified:** 1,916 assertions and 7,729 in the power-cut walk, under the poison allocator, on 6.6.10, 6.6.20 and 6.7.9 with
+their own stdlibs, and under `qemu-aarch64` (1,917 there). All ten harnesses on both arches. A consumer of the full bundle builds
+for x86_64, aarch64 and agnos on 6.6.10, 6.6.20, 6.7.9 and 6.7.18. 148 of 150 unit mutants and 24 of 28 fuzz mutants are caught,
+with each survivor accounted for in the audit. The review's reproducers were run again on `bootctl` 262 over private trees, and the
+list was read from this host, read-only. No test ran a real host tool.
+
+**Not verified:** `efibootmgr` or firmware, or a booted UKI. Any `bootctl` other than 262, so the JSON shape of older ones is unread, and
+the text fallback ran only by hiding `--json` from 262. A real multi-profile or counted UKI, which was read from source. `MFD_NOEXEC_SEAL`
+and its fallback, the two surviving unit mutants. CI and release were replayed by hand, not run on GitHub.
+
 ## [1.8.0] — 2026-11-05
 
 **Every way an entry boots, journal messages of any size, and a closeout.** `bootloader_entry` reads `efi`, `uki`, `uki-url`

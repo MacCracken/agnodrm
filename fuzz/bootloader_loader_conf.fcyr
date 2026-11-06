@@ -1,0 +1,270 @@
+# Fuzz: bootloader_parse_loader_conf, on mutated input that ends against unmapped memory, so
+# a read past the end faults. The result must match a model written from systemd-boot's
+# line_get_key_value and not from the parser: lines end at LF or CR, one matching pair of
+# quotes comes off a value, the last value of a key stands, a value of only quotes clears a
+# default, an @ name other than @saved is ignored, and a timeout that is not a number leaves
+# the default. Past nine digits a timeout also leaves it: that is this library's limit, not
+# systemd-boot's, and nothing depends on a wait of 30 years.
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/fs.cyr"
+include "lib/hashmap.cyr"
+include "lib/process.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/bootloader.cyr"
+
+alloc_init();
+
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+
+fn fz_fail(code): i64 { sys_exit(code); return 0; }
+
+# The last byte of a mapped page with nothing mapped after it.
+fn fz_guard_end(): i64 {
+    var p = _agnodrm_scratch_new(16384);
+    _agnodrm_scratch_free(p + 12288, 4096);
+    return p + 12288;
+}
+
+fn fz_blank(c): i64 {
+    if (c == 32) { return 1; }
+    return c == 9;
+}
+
+var fz_want_timeout = 5;
+var fz_want_default = 0;
+
+# Copy text[a..b) to a fresh cstring.
+fn fz_copy(text, a, b): i64 {
+    var out = alloc(b - a + 1);
+    memcpy(out, text + a, b - a);
+    store8(out + b - a, 0);
+    return out;
+}
+
+fn fz_all_digits(v, n): i64 {
+    var i = 0;
+    while (i < n) {
+        var c = load8(v + i);
+        if (c < 48) { return 0; }
+        if (c > 57) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn fz_is_saved(d): i64 {
+    if (strlen(d) != 6) { return 0; }
+    var want = "@saved";
+    var i = 1;
+    while (i < 6) {
+        if ((load8(d + i) | 32) != load8(want + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+# Read one line text[a..b) the way systemd-boot does.
+fn fz_model_line(text, a, b): i64 {
+    while (a < b) {
+        if (fz_blank(load8(text + a)) != 1) { break; }
+        a = a + 1;
+    }
+    while (b > a) {
+        if (fz_blank(load8(text + b - 1)) != 1) { break; }
+        b = b - 1;
+    }
+    if (a == b) { return 0; }
+    if (load8(text + a) == 35) { return 0; }
+    var k = a;
+    while (k < b) {
+        if (fz_blank(load8(text + k)) == 1) { break; }
+        k = k + 1;
+    }
+    if (k == b) { return 0; }
+    var key = fz_copy(text, a, k);
+    var v = k;
+    while (v < b) {
+        if (fz_blank(load8(text + v)) != 1) { break; }
+        v = v + 1;
+    }
+    var q = load8(text + v);
+    var cleared = 0;
+    if (q == 34 || q == 39) {
+        if (load8(text + b - 1) == q) {
+            if (b - v < 3) { cleared = 1; }
+            v = v + 1;
+            b = b - 1;
+        }
+    }
+    var n = b - v;
+    if (cleared == 1) {
+        if (streq(key, "default") == 1) { fz_want_default = 0; }
+        return 0;
+    }
+    if (n <= 0) { return 0; }
+    if (streq(key, "timeout") == 1) {
+        if (n <= 9) {
+            if (fz_all_digits(text + v, n) == 1) {
+                var t = 0;
+                var i = 0;
+                while (i < n) {
+                    t = t * 10 + load8(text + v + i) - 48;
+                    i = i + 1;
+                }
+                fz_want_timeout = t;
+            }
+        }
+        return 0;
+    }
+    if (streq(key, "default") == 1) {
+        var d = fz_copy(text, v, b);
+        if (load8(d) == 64) {
+            if (fz_is_saved(d) != 1) { return 0; }
+        }
+        if (n > 5) {
+            if (streq(d + n - 5, ".conf") == 1) { store8(d + n - 5, 0); }
+        }
+        fz_want_default = d;
+    }
+    return 0;
+}
+
+fn fz_model(text, len): i64 {
+    fz_want_timeout = 5;
+    fz_want_default = 0;
+    var a = 0;
+    var i = 0;
+    while (i <= len) {
+        var end = i == len;
+        if (end == 0) {
+            var c = load8(text + i);
+            if (c == 10 || c == 13) { end = 1; }
+        }
+        if (end == 1) {
+            if (i > a) { fz_model_line(text, a, i); }
+            a = i + 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn fz_check(text, len, code): i64 {
+    var res = bootloader_parse_loader_conf(text);
+    fz_model(text, len);
+    if (load64(res) != fz_want_timeout) { fz_fail(code); }
+    var got = load64(res + 8);
+    if (got == 0) {
+        if (fz_want_default != 0) { fz_fail(code + 1); }
+        return 0;
+    }
+    if (fz_want_default == 0) { fz_fail(code + 2); }
+    if (streq(got, fz_want_default) != 1) { fz_fail(code + 3); }
+    return 0;
+}
+
+fn fz_literal(text, code): i64 { return fz_check(text, strlen(text), code); }
+
+# --- what systemd-boot does with each of these ---
+var r1 = bootloader_parse_loader_conf("timeout 3\ndefault arch.conf\n");
+if (load64(r1) != 3) { fz_fail(10); }
+if (streq(load64(r1 + 8), "arch") != 1) { fz_fail(11); }
+var r2 = bootloader_parse_loader_conf("default \"quoted.conf\"\ntimeout '7'\n");
+if (load64(r2) != 7) { fz_fail(12); }
+if (streq(load64(r2 + 8), "quoted") != 1) { fz_fail(13); }
+var r3 = bootloader_parse_loader_conf("timeout menu-force\n");
+if (load64(r3) != 5) { fz_fail(14); }
+var r4 = bootloader_parse_loader_conf("# timeout 9\rtimeout 8\n");
+if (load64(r4) != 8) { fz_fail(15); }
+var r5 = bootloader_parse_loader_conf("timeoutx 9\ndefaults x\n");
+if (load64(r5) != 5) { fz_fail(16); }
+if (load64(r5 + 8) != 0) { fz_fail(17); }
+if (load64(bootloader_parse_loader_conf(0)) != 5) { fz_fail(18); }
+
+fz_literal("", 20);
+fz_literal("\n\r\n", 24);
+fz_literal("timeout\n", 28);
+fz_literal("timeout   \n", 32);
+fz_literal("default ''\n", 36);
+fz_literal("default a.conf\ndefault ''\n", 70);
+fz_literal("default a.conf\ndefault @evil\n", 74);
+fz_literal("default a.conf\ndefault @SAVED\n", 78);
+var r6 = bootloader_parse_loader_conf("default a.conf\ndefault @evil\n");
+if (streq(load64(r6 + 8), "a") != 1) { fz_fail(19); }
+fz_literal("default '\n", 40);
+fz_literal("default .conf\n", 44);
+fz_literal("default a.conf.conf\n", 48);
+fz_literal("timeout 0000000001\n", 52);
+fz_literal("timeout 999999999\n", 56);
+fz_literal("timeout 5\ntimeout x\n", 60);
+fz_literal("  timeout\t4  \n", 64);
+
+# --- token soup and raw bytes, ending against the guard page ---
+var toks = vec_new();
+vec_push(toks, "timeout");
+vec_push(toks, "default");
+vec_push(toks, "editor");
+vec_push(toks, "console-mode");
+vec_push(toks, " ");
+vec_push(toks, "\t");
+vec_push(toks, "\n");
+vec_push(toks, "\r");
+vec_push(toks, "\r\n");
+vec_push(toks, "#");
+vec_push(toks, "'");
+vec_push(toks, "\"");
+vec_push(toks, "12");
+vec_push(toks, "menu-force");
+vec_push(toks, "arch.conf");
+vec_push(toks, ".conf");
+vec_push(toks, "@saved");
+vec_push(toks, "@evil");
+var ntok = vec_len(toks);
+
+var guard = fz_guard_end();
+var scratch = alloc(4096);
+var it = 0;
+while (it < 30000) {
+    var want = fz_rand() % 400;
+    var pos = 0;
+    while (pos < want) {
+        var pick = fz_rand() % (ntok + 2);
+        if (pick >= ntok) {
+            var b = fz_rand() % 255 + 1;           # raw, and never NUL: this is a C string
+            store8(scratch + pos, b);
+            pos = pos + 1;
+        } else {
+            var tk = vec_get(toks, pick);
+            var tl = strlen(tk);
+            memcpy(scratch + pos, tk, tl);
+            pos = pos + tl;
+        }
+    }
+    var text = guard - pos - 1;
+    memcpy(text, scratch, pos);
+    store8(text + pos, 0);
+    fz_check(text, pos, 100);
+    it = it + 1;
+}
+
+sys_write(1, "bootloader_loader_conf: ok\n", 27);
+sys_exit(0);

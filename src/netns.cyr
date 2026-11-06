@@ -406,7 +406,8 @@ fn netns_run_ip(args): i64 {
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (_netns_ip_path != 0) { vec_set(args, 0, _netns_ip_path); }
-    var rc = exec_vec(args);
+    var rc = _agnodrm_exec_within(args, AGNODRM_TOOL_DEADLINE_MS);
+    if (rc == (0 - 2)) { return drm_err_io(ETIMEDOUT, "ip command ran past its deadline"); }
     if (rc != 0) { return drm_err_io(0, "ip command failed"); }
     return Ok(0);
     #endif

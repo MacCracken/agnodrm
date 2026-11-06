@@ -138,7 +138,22 @@ deferred Linux-eccentric group (`journald`, `netns`, `bootloader`, `update`,
     can block the read. Doing that needs write access to the entries directory, i.e. root on `$BOOT`.
 - **`bootloader_list_boot_entries` reads the entry files as well as `bootctl`.** bootctl leaves out what systemd-boot boots: a name it calls invalid, or a line it cannot parse. Every file it did not report is added, and a bootctl entry with no boot key takes its file's. On a host where neither `/boot`, `/efi` nor `/boot/efi` holds the entries, bootctl's word stands.
 - **`bootctl list` output is parsed as display text.**
-  - It is not a clean channel. A blank line in a UKI's `.uname` section splits a block, and a newline in an addon's command line prints at column 0, where it can read as a label. `bootctl list --json` has neither problem: see the roadmap.
+  - It is not a clean channel. A blank line in a UKI's `.uname` section splits a block, and a newline in an addon's command line
+    prints at column 0, where it can read as a label. So `bootloader_list_boot_entries` asks for `--json=short` first, where both
+    are one escaped character, and reads text only from a bootctl too old to know the flag.
+  - The JSON's `cmdline` wins over `options`, since it holds what addons add, and an entry with an escaped NUL is refused, since
+    past one a C string would hide the rest. `isDefault` is believed there, and never from the text. Paths come from `extras`.
+    `addons` holds objects for the addons among them, and is `null` on a host with none, which is why it took a built tree to
+    see the shape. Any change here should start from real output of such a tree.
+  - A file's boot keys win over bootctl's. bootctl drops a path it will not take and prints the rest, so after `linux /ok` and
+    `linux /x/../evil` it shows `/ok`, and systemd-boot takes the last. It also joins `options` lines, which hides what a quote
+    pair would have shown. `options` and `extra` hold what both say, because only bootctl knows what an addon adds, so an
+    option can read twice over. That errs toward a validator seeing more than boots.
+  - A Type #2 line keeps its quotes, since nothing takes them off a UKI's line, and is mangled as sd-stub does: control characters
+    become spaces, and both ends are trimmed. Quoting a word there hides nothing from the kernel, so the validator reads it as is.
+  - Every `.efi` under `/EFI/Linux` on the three roots is accounted for, read as systemd-boot reads it, since bootctl refuses a
+    name holding a space and can fail outright. One it did not report comes back with no `options`. Each entry answers for one
+    file, so the same name on the other partition still shows, and a counted UKI or a profile can show under two names.
   - From this path `BOOT_ENTRY_NONE` says only that bootctl showed no boot key. Automatic entries and "Reported by Boot Loader" entries look like that, and can boot.
   - Titles keep bootctl's marks, and linux / initrd keep its `<root>//` prefix and
     "(No such file or directory)" notes.

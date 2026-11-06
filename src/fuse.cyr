@@ -307,7 +307,10 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
         }
     }
 
-    return agnodrm_run_checked(args, "fuse mount command failed");
+    # No deadline: one puts the child in its own session, away from the terminal, and sshfs
+    # may need that for a password, or stay in the foreground on purpose. A process deadline
+    # the caller set still applies.
+    return _agnodrm_checked_within(args, "fuse mount command failed", 0);
     #endif
 }
 
@@ -341,7 +344,7 @@ fn _fuse_run_unmount(mountpoint, flag, errmsg): i64 {
     vec_push(args, "--");
     vec_push(args, mountpoint);
 
-    return agnodrm_run_checked(args, errmsg);
+    return _agnodrm_checked_within(args, errmsg, AGNODRM_TOOL_DEADLINE_MS);
     #endif
 }
 

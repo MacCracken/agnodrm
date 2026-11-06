@@ -51,6 +51,10 @@ enum UpdateLimits {
     UPDATE_COPY_CHUNK = 1048576;
     UPDATE_BOOTS_MAX = 1000000000000000000;  # 18 digits, what the reader takes
     UPDATE_VER_FIELD_DIGITS = 6;     # 20 bits; three of them fit a positive i64
+    # sha256sum prints nothing until it has read the whole image, and dd prints nothing at
+    # all, so these are long: a slot is gigabytes, and a slow disk is not a hung one.
+    UPDATE_HASH_DEADLINE_MS = 1800000;
+    UPDATE_WRITE_DEADLINE_MS = 3600000;
     UPDATE_VER_FIELD_BITS = 20;
     UPDATE_VER_FIELD_MASK = 0xFFFFF;
 }
@@ -656,114 +660,12 @@ fn update_get_current_slot(): i64 {
 # "rollback_available":true stays a version (audit F-31). Bare substring scans read
 # "current_slot":0 as slot 2 and "rollback_available":null as true (audit F-53).
 
-fn _update_json_ws(p, n, i): i64 {
-    while (i < n) {
-        var c = load8(p + i);
-        if (c != 32) { if (c != 9) { if (c != 10) { if (c != 13) { break; } } } }
-        i = i + 1;
-    }
-    return i;
-}
-
-# The index just past the string opening at `i`, or -1.
-fn _update_json_skip_str(p, n, i): i64 {
-    i = i + 1;
-    while (i < n) {
-        var c = load8(p + i);
-        if (c == 34) { return i + 1; }
-        if (c < 32) { return 0 - 1; }
-        if (c == 92) { i = i + 1; }
-        i = i + 1;
-    }
-    return 0 - 1;
-}
-
-# The index just past the value starting at `i`, or -1.
-fn _update_json_skip_value(p, n, i): i64 {
-    if (i >= n) { return 0 - 1; }
-    var c = load8(p + i);
-    if (c == 34) { return _update_json_skip_str(p, n, i); }
-    if (c == 123 || c == 91) {
-        var depth = 0;
-        while (i < n) {
-            c = load8(p + i);
-            if (c == 34) {
-                i = _update_json_skip_str(p, n, i);
-                if (i < 0) { return 0 - 1; }
-                continue;
-            }
-            if (c == 123 || c == 91) { depth = depth + 1; }
-            if (c == 125 || c == 93) {
-                depth = depth - 1;
-                if (depth == 0) { return i + 1; }
-            }
-            i = i + 1;
-        }
-        return 0 - 1;
-    }
-    var start = i;
-    while (i < n) {
-        c = load8(p + i);
-        if (c == 44 || c == 125 || c == 93) { break; }
-        if (c == 32 || c == 9 || c == 10 || c == 13) { break; }
-        i = i + 1;
-    }
-    if (i == start) { return 0 - 1; }
-    return i;
-}
-
-# The offset of top-level `key`'s value in the JSON object at `p`, -1 if it has none, or
-# -2 if the text is not one whole object. Always walks to the end, so a file cut short
-# is caught even when the key comes first. The first of a repeated key wins.
-fn _update_json_field(p, n, key): i64 {
-    var found = 0 - 1;
-    var klen = strlen(key);
-    var i = _update_json_ws(p, n, 0);
-    if (i >= n) { return 0 - 2; }
-    if (load8(p + i) != 123) { return 0 - 2; }
-    i = _update_json_ws(p, n, i + 1);
-    if (i < n) {
-        if (load8(p + i) == 125) {
-            if (_update_json_ws(p, n, i + 1) != n) { return 0 - 2; }
-            return found;
-        }
-    }
-    while (i < n) {
-        if (load8(p + i) != 34) { return 0 - 2; }
-        var kstart = i + 1;
-        var kend = _update_json_skip_str(p, n, i);
-        if (kend < 0) { return 0 - 2; }
-        i = _update_json_ws(p, n, kend);
-        if (i >= n) { return 0 - 2; }
-        if (load8(p + i) != 58) { return 0 - 2; }
-        i = _update_json_ws(p, n, i + 1);
-        var vstart = i;
-        i = _update_json_skip_value(p, n, i);
-        if (i < 0) { return 0 - 2; }
-        if (found < 0) {
-            if (kend - kstart - 1 == klen) {
-                if (memeq(p + kstart, key, klen) == 1) { found = vstart; }
-            }
-        }
-        i = _update_json_ws(p, n, i);
-        if (i >= n) { return 0 - 2; }
-        var sep = load8(p + i);
-        if (sep == 125) {
-            if (_update_json_ws(p, n, i + 1) != n) { return 0 - 2; }
-            return found;
-        }
-        if (sep != 44) { return 0 - 2; }
-        i = _update_json_ws(p, n, i + 1);
-    }
-    return 0 - 2;
-}
-
 # A heap copy of the string value at `i`, or 0 if there is no string there. One holding
 # an escape counts as none: nothing here writes one, and a version never needs one.
 fn _update_json_str(p, n, i): i64 {
     if (i >= n) { return 0; }
     if (load8(p + i) != 34) { return 0; }
-    var end = _update_json_skip_str(p, n, i);
+    var end = _agnodrm_json_skip_str(p, n, i);
     if (end < 0) { return 0; }
     var len = end - i - 2;
     var out = alloc(len + 1);
@@ -771,15 +673,6 @@ fn _update_json_str(p, n, i): i64 {
     store8(out + len, 0);
     if (memchr(out, 92, len) >= 0) { return 0; }
     return out;
-}
-
-# 1 if the value at `i` is exactly the bare word `word`.
-fn _update_json_is(p, n, i, word): i64 {
-    var end = _update_json_skip_value(p, n, i);
-    if (end < 0) { return 0; }
-    var wlen = strlen(word);
-    if (end - i != wlen) { return 0; }
-    return memeq(p + i, word, wlen);
 }
 
 # 1 if a version string can be saved: bounded, and nothing that JSON would need escaped.
@@ -860,49 +753,49 @@ fn update_save_state(state, path): i64 {
 # may be absent, and each must hold its own type. Returns Result: Ok(state_ptr) or Err.
 fn _update_parse_state(buf, n): i64 {
     var why = "update state file is corrupt";
-    var si = _update_json_field(buf, n, "current_slot");
+    var si = _agnodrm_json_field(buf, n, "current_slot");
     if (si < 0) { return drm_err_invalid_argument(why); }
     var slot = 0;
-    if (_update_json_is(buf, n, si, "1") == 1) { slot = SLOT_A; }
-    if (_update_json_is(buf, n, si, "2") == 1) { slot = SLOT_B; }
+    if (_agnodrm_json_is(buf, n, si, "1") == 1) { slot = SLOT_A; }
+    if (_agnodrm_json_is(buf, n, si, "2") == 1) { slot = SLOT_B; }
     if (slot == 0) { return drm_err_invalid_argument(why); }
 
     var version = "";
-    var vi = _update_json_field(buf, n, "current_version");
+    var vi = _agnodrm_json_field(buf, n, "current_version");
     if (vi >= 0) {
         version = _update_json_str(buf, n, vi);
         if (version == 0) { return drm_err_invalid_argument(why); }
     }
     var state = update_state_new(slot, version);
 
-    var pi = _update_json_field(buf, n, "pending_update");
+    var pi = _agnodrm_json_field(buf, n, "pending_update");
     if (pi >= 0) {
-        if (_update_json_is(buf, n, pi, "null") != 1) {
+        if (_agnodrm_json_is(buf, n, pi, "null") != 1) {
             var pv = _update_json_str(buf, n, pi);
             if (pv == 0) { return drm_err_invalid_argument(why); }
             if (load8(pv) != 0) { update_state_set_pending(state, pv); }
         }
     }
 
-    var oi = _update_json_field(buf, n, "previous_version");
+    var oi = _agnodrm_json_field(buf, n, "previous_version");
     if (oi >= 0) {
         var ov = _update_json_str(buf, n, oi);
         if (ov == 0) { return drm_err_invalid_argument(why); }
         update_state_set_previous(state, ov);
     }
 
-    var ri = _update_json_field(buf, n, "rollback_available");
+    var ri = _agnodrm_json_field(buf, n, "rollback_available");
     if (ri >= 0) {
-        if (_update_json_is(buf, n, ri, "true") == 1) {
+        if (_agnodrm_json_is(buf, n, ri, "true") == 1) {
             update_state_set_rollback(state, 1);
-        } elif (_update_json_is(buf, n, ri, "false") != 1) {
+        } elif (_agnodrm_json_is(buf, n, ri, "false") != 1) {
             return drm_err_invalid_argument(why);
         }
     }
 
-    var bi = _update_json_field(buf, n, "boot_count");
+    var bi = _agnodrm_json_field(buf, n, "boot_count");
     if (bi >= 0) {
-        var bend = _update_json_skip_value(buf, n, bi);
+        var bend = _agnodrm_json_skip_value(buf, n, bi);
         if (bend - bi > 18) { return drm_err_invalid_argument(why); }
         var bc = 0;
         while (bi < bend) {
@@ -1081,7 +974,7 @@ fn update_check(config, current_version): i64 {
     # is not one whole object, and a key or value elsewhere named "version" is not it.
     var manifest_version = 0;
     var vidx = 0 - 2;
-    if (total < cap) { vidx = _update_json_field(buf, total, "version"); }
+    if (total < cap) { vidx = _agnodrm_json_field(buf, total, "version"); }
     if (vidx >= 0) { manifest_version = _update_json_str(buf, total, vidx); }
     _agnodrm_scratch_free(buf, cap);
     if (vidx == 0 - 2) {
@@ -1120,7 +1013,8 @@ fn _update_verify_image(image, expected): i64 {
     vec_push(args, image);
     var cap = 128;
     var buf = alloc(cap);
-    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "sha256sum of the update image failed");
+    var failed = "sha256sum of the update image failed";
+    var res_t, res_v = _agnodrm_capture_within(args, buf, cap, failed, UPDATE_HASH_DEADLINE_MS);
     if (is_err_result(res_t) == 1) { return Err(res_v); }
     if (res_v < 64) { return drm_err_unknown("sha256sum printed no digest"); }
     var i = 0;
@@ -1294,7 +1188,8 @@ fn update_apply(config, manifest): i64 {
     if (is_err_result(pre_t) == 1) { return Err(pre_v); }
 
     # Write via dd. Element 0 is the ABSOLUTE path — execve does no PATH
-    # lookup. agnodrm_run_checked checks dd's exit code.
+    # lookup. _agnodrm_checked_within checks dd's exit code, and a deadline kill reads the
+    # same: the record was cleared first, so a slot left half-written is known to be one.
     var args = vec_new();
     vec_push(args, "/usr/bin/dd");
 
@@ -1313,7 +1208,7 @@ fn update_apply(config, manifest): i64 {
     vec_push(args, "bs=4M");
     vec_push(args, "conv=fsync");
 
-    var dd_res_t, dd_res_v = agnodrm_run_checked(args, "dd image write failed");
+    var dd_res_t, dd_res_v = _agnodrm_checked_within(args, "dd image write failed", UPDATE_WRITE_DEADLINE_MS);
     if (is_err_result(dd_res_t) == 1) { return Err(dd_res_v); }
     #ifdef AGNODRM_POWERCUT
     _update_cut();
@@ -1431,7 +1326,7 @@ fn _update_set_bootnext(slot, hold, strict): i64 {
         if (strict == 1) { return drm_err_io(ENOMEM, "no memory for the EFI boot list"); }
         return Ok(0);
     }
-    var list_t, list_v = agnodrm_run_capture(list_args, buf, cap, "efibootmgr failed");
+    var list_t, list_v = _agnodrm_capture_within(list_args, buf, cap, "efibootmgr failed", AGNODRM_TOOL_DEADLINE_MS);
     if (is_ok(list_t) == 1) {
         # A cut list can lose the entry a hold compares BootNext against.
         if (list_v >= cap) {
@@ -1465,7 +1360,7 @@ fn _update_set_bootnext(slot, hold, strict): i64 {
         vec_push(args, efibootmgr);
         vec_push(args, "--bootnext");
         vec_push(args, num);
-        if (exec_vec(args) == 0) {  # execve needs the abs path above
+        if (_agnodrm_exec_within(args, AGNODRM_TOOL_DEADLINE_MS) == 0) {  # execve needs the abs path above
             #ifdef AGNODRM_POWERCUT
             _update_cut();
             #endif
@@ -1479,7 +1374,7 @@ fn _update_set_bootnext(slot, hold, strict): i64 {
         var clear_args = vec_new();
         vec_push(clear_args, efibootmgr);
         vec_push(clear_args, "--delete-bootnext");
-        if (exec_vec(clear_args) != 0) {
+        if (_agnodrm_exec_within(clear_args, AGNODRM_TOOL_DEADLINE_MS) != 0) {
             if (strict == 1) { return drm_err_unknown("cannot clear the firmware's BootNext"); }
         }
         #ifdef AGNODRM_POWERCUT
@@ -1675,7 +1570,7 @@ fn update_rollback(config): i64 {
     vec_push(stop_args, _update_path("/usr/bin/argonaut"));
     vec_push(stop_args, "stop");
     vec_push(stop_args, "daimon");
-    exec_vec(stop_args);  # best effort — ignore failure (execve needs the abs path above)
+    _agnodrm_exec_within(stop_args, AGNODRM_TOOL_DEADLINE_MS);  # best effort (execve needs the abs path above)
 
     return Ok(0);
     #endif

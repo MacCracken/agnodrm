@@ -411,5 +411,59 @@ while (it < 500) {
     it = it + 1;
 }
 
+# --- bootctl --json, on mutated documents that end against unmapped memory ---
+# Invariants: no crash, and on Ok every entry has an id and a kind that agrees with its fields.
+var jg_map = _agnodrm_scratch_new(16384);
+_agnodrm_scratch_free(jg_map + 12288, 4096);
+var jg_end = jg_map + 12288;
+var jdoc_sb = str_builder_new();
+str_builder_add_cstr(jdoc_sb, "[{\"type\":\"type1\",\"id\":\"a.conf\",\"title\":\"T\",\"options\":\"root=x rw\"");
+str_builder_add_cstr(jdoc_sb, ",\"linux\":");
+str_builder_add_cstr(jdoc_sb, "\"/k\",");
+str_builder_add_cstr(jdoc_sb, "\"initrd\":[\"/a\",\"/b\"],\"isDefault\":true,\"addons\":null,\"cmdline\":\"root");
+str_builder_add_cstr(jdoc_sb, "=x \\\"y\\\"");
+str_builder_add_cstr(jdoc_sb, "\"},");
+str_builder_add_cstr(jdoc_sb, "{\"type\":\"type2\",\"id\":\"u.efi\",\"linux\":\"/u\",\"addons\":[{\"globalAddon");
+str_builder_add_cstr(jdoc_sb, "\":\"/g\",\"");
+str_builder_add_cstr(jdoc_sb, "options\":\"o\"}],");
+str_builder_add_cstr(jdoc_sb, "\"extras\":[\"/g\",\"/c\"],\"efi\":\"/e\",\"uki\":\"/v\"}]");
+var jdoc = str_data(str_builder_build(jdoc_sb));
+var jdoclen = strlen(jdoc);
+var jalpha = "{}[]\",:\\ 0u1tfn";
+var jalen = strlen(jalpha);
+var jarr = alloc(16 * 8);
+var ji = 0;
+var joks = 0;
+while (ji < 20000) {
+    # Mostly whole documents: a cut one stops at the first check, and proves nothing past it.
+    var jl = jdoclen;
+    if (fz_next() % 4 == 0) { jl = fz_next() % (jdoclen + 1); }
+    var jb = jg_end - jl - 1;
+    memcpy(jb, jdoc, jl);
+    var jm = fz_next() % 6;
+    var jmi = 0;
+    while (jmi < jm) {
+        if (jl > 0) { store8(jb + fz_next() % jl, load8(jalpha + fz_next() % jalen)); }
+        jmi = jmi + 1;
+    }
+    store8(jb + jl, 0);
+    var jt, jn = bootloader_parse_bootctl_json(jb, jarr, 16);
+    if (is_ok(jt) == 1) {
+        joks = joks + 1;
+        if (jn < 0) { fz_fail(410); }
+        if (jn > 16) { fz_fail(411); }
+        var jk = 0;
+        while (jk < jn) {
+            var je = load64(jarr + jk * 8);
+            if (bootloader_entry_id(je) == 0) { fz_fail(412); }
+            fz_boot_keys_check(je, 4096, 2, 413);
+            jk = jk + 1;
+        }
+    }
+    ji = ji + 1;
+}
+# A harness that never reaches the good path tests only the refusals.
+if (joks < 1000) { fz_fail(414); }
+
 sys_write(1, "bootloader_entries: ok\n", 23);
 sys_exit(0);

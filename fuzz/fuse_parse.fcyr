@@ -124,5 +124,116 @@ while (x < 500) {
     x = x + 1;
 }
 
+# --- _fuse_type_ok against a model of the names the kernel gives a FUSE mount ---
+fn fz_type_model(t): i64 {
+    if (streq(t, "fuse") == 1) { return 1; }
+    if (streq(t, "fuseblk") == 1) { return 1; }
+    if (strstr(t, "fuse.") == 0) { return 1; }
+    return strstr(t, "fuseblk.") == 0;
+}
+
+var types = vec_new();
+vec_push(types, "");
+vec_push(types, "fuse");
+vec_push(types, "fuseblk");
+vec_push(types, "fuse.");
+vec_push(types, "fuse.sshfs");
+vec_push(types, "fuseblk.ntfs");
+vec_push(types, "fusectl");
+vec_push(types, "ext4");
+vec_push(types, "xfuse");
+vec_push(types, "fuseblkx");
+var ti = 0;
+while (ti < vec_len(types)) {
+    var ty = vec_get(types, ti);
+    if (_fuse_type_ok(ty) != fz_type_model(ty)) { sys_exit(80); }
+    ti = ti + 1;
+}
+
+# --- _fuse_parse_mounts on mutated tables that end against unmapped memory ---
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+
+var guard_map = _agnodrm_scratch_new(16384);
+_agnodrm_scratch_free(guard_map + 12288, 4096);
+var guard = guard_map + 12288;
+
+# Every record is a real line's fields: nothing with a raw line end in it, and a filter that only
+# ever narrows the list to mounts whose type passes.
+fn fz_check_table(text, len): i64 {
+    var all = _fuse_parse_mounts(text, len, 0);
+    var only = _fuse_parse_mounts(text, len, 1);
+    if (vec_len(only) > vec_len(all)) { sys_exit(81); }
+    var lines = 1;
+    var i = 0;
+    while (i < len) {
+        if (load8(text + i) == 10) { lines = lines + 1; }
+        i = i + 1;
+    }
+    if (vec_len(all) > lines) { sys_exit(82); }
+    # \012 is the kernel's spelling of a line end in a path, and decodes to one.
+    var has_nl_escape = 0;
+    i = 0;
+    while (i + 3 < len) {
+        if (load8(text + i) == 92) {
+            if (load8(text + i + 1) == 48) {
+                if (load8(text + i + 2) == 49) {
+                    if (load8(text + i + 3) == 50) { has_nl_escape = 1; }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < vec_len(all)) {
+        var r = vec_get(all, i);
+        # Only the first field can be absent: a line that opens with a space has no device.
+        if (fuse_mount_mountpoint(r) == 0) { sys_exit(85); }
+        if (fuse_mount_fstype(r) == 0) { sys_exit(85); }
+        if (has_nl_escape == 0) {
+            if (fuse_mount_device(r) != 0) {
+                if (strchr(fuse_mount_device(r), 10) >= 0) { sys_exit(84); }
+            }
+            if (strchr(fuse_mount_mountpoint(r), 10) >= 0) { sys_exit(84); }
+            if (strchr(fuse_mount_fstype(r), 10) >= 0) { sys_exit(84); }
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while (i < vec_len(only)) {
+        var m = vec_get(only, i);
+        if (fz_type_model(fuse_mount_fstype(m)) != 1) { sys_exit(83); }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fz_check_table(guard, 0);
+var seed_table = "sshfs#a /mnt/a fuse.sshfs rw 0 0\nproc /proc proc rw 0 0\n/dev/sda1 /m\\040x fuseblk rw 0 0\n";
+var seed_len = strlen(seed_table);
+var alpha = " \t\n\\01234fuse.#/";
+var alen = strlen(alpha);
+var it = 0;
+while (it < 30000) {
+    var tl = fz_rand() % (seed_len + 1);
+    var tb = guard - tl;
+    memcpy(tb, seed_table, tl);
+    var muts = fz_rand() % 6;
+    var mi = 0;
+    while (mi < muts) {
+        if (tl > 0) { store8(tb + fz_rand() % tl, load8(alpha + fz_rand() % alen)); }
+        mi = mi + 1;
+    }
+    fz_check_table(tb, tl);
+    it = it + 1;
+}
+
 sys_write(1, "fuse_parse: ok\n", 15);
 sys_exit(0);

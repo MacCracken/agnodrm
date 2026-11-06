@@ -126,11 +126,10 @@ fn journald_filter_new(): i64 {
 }
 
 # ================================================================
-# Test seams, 0 outside tests/tcyr: a stub to run in place of /usr/bin/journalctl, a socket
-# to send to in place of the host's journal, and a deadline a test can wait out.
+# Test seams, 0 outside tests/tcyr: a stub to run in place of /usr/bin/journalctl, and a
+# socket to send to in place of the host's journal.
 var _journald_tool = 0;
 var _journald_socket = 0;
-var _journald_deadline_ms = 0;
 
 # Build journalctl argv vec
 # ================================================================
@@ -459,82 +458,6 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
 # Parse a single JSON line from journalctl --output=json
 # ================================================================
 
-# The value of a hex digit, or -1.
-fn _journald_hex(c): i64 {
-    if (c >= 48 && c <= 57) { return c - 48; }
-    if (c >= 97 && c <= 102) { return c - 87; }
-    if (c >= 65 && c <= 70) { return c - 55; }
-    return 0 - 1;
-}
-
-# The four hex digits at `p` as a number, or -1.
-fn _journald_hex4(p): i64 {
-    var v = 0;
-    var i = 0;
-    while (i < 4) {
-        var d = _journald_hex(load8(p + i));
-        if (d < 0) { return 0 - 1; }
-        v = v * 16 + d;
-        i = i + 1;
-    }
-    return v;
-}
-
-# Store code point `v` (at most 0xFFFF) at out + o as UTF-8. Returns the new offset.
-fn _journald_put_utf8(out, o, v): i64 {
-    if (v < 0x80) {
-        store8(out + o, v);
-        return o + 1;
-    }
-    if (v < 0x800) {
-        store8(out + o, 0xC0 | (v >> 6));
-        store8(out + o + 1, 0x80 | (v & 63));
-        return o + 2;
-    }
-    store8(out + o, 0xE0 | (v >> 12));
-    store8(out + o + 1, 0x80 | ((v >> 6) & 63));
-    store8(out + o + 2, 0x80 | (v & 63));
-    return o + 3;
-}
-
-# A heap Str of the JSON string body at `p`, `n` bytes, escapes decoded. Always a copy:
-# the capture buffer it came from is gone once the query returns.
-fn _journald_unescape(p, n): i64 {
-    var out = alloc(n + 1);
-    var o = 0;
-    var i = 0;
-    while (i < n) {
-        var c = load8(p + i);
-        i = i + 1;
-        if (c != 92) {
-            store8(out + o, c);
-            o = o + 1;
-            continue;
-        }
-        if (i >= n) { break; }
-        c = load8(p + i);
-        i = i + 1;
-        if (c == 117) {             # \u and four hex digits
-            var v = 0 - 1;
-            if (i + 4 <= n) { v = _journald_hex4(p + i); }
-            if (v >= 0) {
-                i = i + 4;
-                o = _journald_put_utf8(out, o, v);
-                continue;
-            }
-        }
-        if (c == 110) { c = 10; }   # \n
-        elif (c == 116) { c = 9; }  # \t
-        elif (c == 114) { c = 13; } # \r
-        elif (c == 98) { c = 8; }   # \b
-        elif (c == 102) { c = 12; } # \f
-        store8(out + o, c);
-        o = o + 1;
-    }
-    store8(out + o, 0);
-    return str_new(out, o);
-}
-
 # The end of the JSON string opening at `start`, the index of its closing quote, or
 # `jlen` if it has none. A line ending in a lone backslash stops at jlen, not past it.
 fn _journald_string_end(jd, jlen, start): i64 {
@@ -565,7 +488,7 @@ fn _journald_array_value(jd, jlen, pos): i64 {
     var first = load8(jd + i);
     if (first == 34) {
         var end = _journald_string_end(jd, jlen, i);
-        return _journald_unescape(jd + i + 1, end - i - 1);
+        return _agnodrm_json_unescape(jd + i + 1, end - i - 1);
     }
     if (first < 48 || first > 57) { return 0; }
     var out = alloc(jlen - i + 1);
@@ -623,7 +546,7 @@ fn journald_json_get_str(json, key): i64 {
                     if (vpos < jlen) {
                         if (load8(jd + vpos) == 34) {
                             var vend = _journald_string_end(jd, jlen, vpos);
-                            return _journald_unescape(jd + vpos + 1, vend - vpos - 1);
+                            return _agnodrm_json_unescape(jd + vpos + 1, vend - vpos - 1);
                         }
                         if (load8(jd + vpos) == 91) {  # '['
                             return _journald_array_value(jd, jlen, vpos);
@@ -750,19 +673,13 @@ fn journald_query(filter): i64 {
     # A full buffer proves nothing: the reader closed the pipe, so journalctl with more
     # to say dies of SIGPIPE. That capture is thrown away and run again.
     var status = alloc(16);
-    var deadline = JOURNAL_QUERY_DEADLINE_MS;
-    if (_journald_deadline_ms != 0) { deadline = _journald_deadline_ms; }
-    var outer = proc_timeout_ms();
-    if (outer > 0) {
-        if (outer < deadline) { deadline = outer; }
-    }
     var cap = JOURNAL_QUERY_CHUNK;
     while (cap <= JOURNAL_QUERY_MAX) {
         var buf = _agnodrm_scratch_new(cap);
         if (buf == 0) { return drm_err_io(ENOMEM, "no memory for journalctl output"); }
-        proc_set_timeout_ms(deadline);
+        var outer = _agnodrm_deadline_begin(JOURNAL_QUERY_DEADLINE_MS);
         var nbytes = exec_capture_status(args, buf, cap, status);
-        proc_set_timeout_ms(outer);
+        _agnodrm_deadline_end(outer);
         if (load64(status) == (0 - 2)) {  # exec_capture_status's mark for a deadline kill
             _agnodrm_scratch_free(buf, cap);
             return drm_err_io(ETIMEDOUT, "journalctl ran past its deadline");

@@ -115,7 +115,7 @@ dist staleness → lockfile
 | Capacity (<85% all tables) | `cyrius capacity --check src/main.cyr` |
 | Fmt drift | `cyrfmt <file>` output must match the committed file (**not** `cyrius fmt` — it rewrites in place and prints nothing) |
 | Tests | `cyrius test` |
-| Fuzz (8 harnesses) | `fuzz/*.fcyr` under `timeout 10` |
+| Fuzz (10 harnesses) | `fuzz/*.fcyr` under `timeout 10` |
 | Benchmarks (23 across 7 groups) | `tests/bcyr/bench_all.bcyr` |
 | Dist staleness | `cyrius distlib` and `cyrius distlib core` regenerate the committed bundles exactly |
 | Lockfile | `cyrius deps --locked`, first and last: other gates re-vendor `lib/` |

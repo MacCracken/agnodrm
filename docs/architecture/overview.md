@@ -104,7 +104,7 @@ Never `return res_t;` or `return res_v;`: the payload alone reaches the caller a
 
 - **`alloc()`** is a bump allocator and never frees, so it holds results the caller keeps.
 - **`_agnodrm_scratch_new` / `_agnodrm_scratch_free`** take scratch from `mmap` and give it back, on Linux. A working buffer goes here.
-- **`var buf[N]` inside a fn** is static data, not stack, so it is good for one call's work and never for a returned value.
+- **`var buf[N]` inside a fn** is per-call stack storage until it passes the fn's frame budget, when it goes static with a compiler warning. Either way it is good for one call's work and never for a returned value.
 - No garbage collection and no reference counting.
 - Strings are null-terminated C strings at boundaries, and fat `Str` pointers through `lib/str.cyr` inside.
 

@@ -205,6 +205,16 @@ fn _blfx_write_sized(dir, name, len, files) {
     return file_write_all(_blfx_path(dir, name), b, len);
 }
 
+fn _blfx_count(arr, n, id) {
+    var c = 0;
+    var i = 0;
+    while (i < n) {
+        if (streq(bootloader_entry_id(load64(arr + i * 8)), id) == 1) { c = c + 1; }
+        i = i + 1;
+    }
+    return c;
+}
+
 fn _blfx_find(arr, n, id) {
     var i = 0;
     while (i < n) {
@@ -655,12 +665,14 @@ fn test_bootloader_boot_kinds() {
     str_builder_add_cstr(sb, "         type: Boot Loader Specification Type #1 (.conf)\n");
     str_builder_add_cstr(sb, "           id: t1.conf\n        linux: /boot//k\n");
     str_builder_add_cstr(sb, "      options: `-rd.break\n\n");
-    str_builder_add_cstr(sb, "           id: qq.conf\n        linux: /boot//k\n      options: 'init=/bin/sh'\n");
+    str_builder_add_cstr(sb, "           id: qq.conf\n        linux: /boot//k\n      options: 'init=/bin/sh'\n\n");
+    str_builder_add_cstr(sb, "         type: Boot Loader Specification Type #2 (UKI, .efi)\n");
+    str_builder_add_cstr(sb, "           id: q2.efi\n        linux: /boot//EFI/Linux/q2.efi\n      options: 'a' 'b'\n");
     str_builder_add_cstr(sb, "        extra: /boot//last.cred\n");
-    var arr = alloc(8 * 8);
-    var pt, pn = bootloader_parse_bootctl_list(str_data(str_builder_build(sb)), arr, 8);
+    var arr = alloc(9 * 8);
+    var pt, pn = bootloader_parse_bootctl_list(str_data(str_builder_build(sb)), arr, 9);
     assert(is_ok(pt) == 1, "bkc_ok");
-    assert_eq(pn, 7, "bkc_count");
+    assert_eq(pn, 8, "bkc_count");
     var bu = load64(arr);
     assert_eq(bootloader_entry_boot_kind(bu), BOOT_ENTRY_UKI, "bkc_uki");
     assert(streq(bootloader_entry_extra(bu), "/boot//a.cred /boot//b.cred") == 1, "bkc_extra_joined");
@@ -679,12 +691,357 @@ fn test_bootloader_boot_kinds() {
     assert_eq(bootloader_entry_boot_kind(t1), BOOT_ENTRY_LINUX, "bkc_type1_stays_linux");
     assert(streq(bootloader_entry_options(t1), "rd.break") == 1, "bkc_addon_ascii_glyph_off");
     assert(streq(bootloader_entry_options(load64(arr + 48)), "init=/bin/sh") == 1, "bkc_options_unquoted");
-    assert(streq(bootloader_entry_extra(load64(arr + 48)), "/boot//last.cred") == 1, "bkc_extra_at_end");
+    assert(streq(bootloader_entry_options(load64(arr + 56)), "'a' 'b'") == 1, "bkc_uki_line_keeps_quotes");
+    assert(streq(bootloader_entry_extra(load64(arr + 56)), "/boot//last.cred") == 1, "bkc_extra_at_end");
+    return 0;
+}
+
+fn _bjfx(text, arr, max) {
+    var t, v = bootloader_parse_bootctl_json(text, arr, max);
+    if (is_err_result(t) == 1) { return 0 - 1; }
+    return v;
+}
+
+fn _bjfx_opts(json, arr) {
+    if (_bjfx(json, arr, 4) != 1) { return 0; }
+    return bootloader_entry_options(load64(arr));
+}
+
+# bootctl's JSON, in the shape systemd 262 prints, and what falls back to the text form.
+fn test_bootctl_json() {
+    println("-- bootloader bootctl --json --");
+    var arr = alloc(8 * 8);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "[{\"type\":\"type1\",\"source\":\"esp\",\"id\":\"arch.conf\",\"path\":\"/boot/lo");
+    str_builder_add_cstr(sb, "ader/entries");
+    str_builder_add_cstr(sb, "/arch.conf\",");
+    str_builder_add_cstr(sb, "\"root\":\"/boot\",\"title\":\"Arch Linux\",\"showTitle\":\"Arch Linux\",\"versi");
+    str_builder_add_cstr(sb, "on\":\"6.9\"");
+    str_builder_add_cstr(sb, ",");
+    str_builder_add_cstr(sb, "\"options\":\"root=/dev/sda1 rw\",\"linux\":\"/vmlinuz-linux\",");
+    str_builder_add_cstr(sb, "\"initrd\":[\"/intel-ucode.img\",\"/initramfs-linux.img\"],\"isReported\":true,");
+    str_builder_add_cstr(sb, "\"isDefault\"");
+    str_builder_add_cstr(sb, ":true,");
+    str_builder_add_cstr(sb, "\"isSelected\":true,\"addons\":null,\"cmdline\":\"root=/dev/sda1 rw\"},\n");
+    str_builder_add_cstr(sb, "{\"type\":\"auto\",\"source\":\"esp\",\"id\":\"auto-reboot-to-firmware-setup\",");
+    str_builder_add_cstr(sb, "\"title\":\"F");
+    str_builder_add_cstr(sb, "irmware\",");
+    str_builder_add_cstr(sb, "\"showTitle\":\"Firmware\",\"isReported\":true,\"isDefault\":false,\"isSelected");
+    str_builder_add_cstr(sb, "\":false,\"ad");
+    str_builder_add_cstr(sb, "dons\":null},\n");
+    # What systemd 262 printed for a UKI with a global addon, a local addon and extras.
+    str_builder_add_cstr(sb, "{\"type\":\"type2\",\"source\":\"esp\",\"id\":\"u.efi\",\"path\":\"/boot/EFI/Lin");
+    str_builder_add_cstr(sb, "ux/u.efi\",");
+    str_builder_add_cstr(sb, "\"root\":\"/boot\",\"title\":\"X Linux\",\"showTitle\":\"X Linux\",\"sortKey\":");
+    str_builder_add_cstr(sb, "\"x\",\"versi");
+    str_builder_add_cstr(sb, "on\":\"1\",");
+    str_builder_add_cstr(sb, "\"options\":\"\\\"quiet\\\" 1 \\\"rw\\\"\",\"linux\":\"/EFI/Linux/u.efi\",\"prof");
+    str_builder_add_cstr(sb, "ile\":0,\"is");
+    str_builder_add_cstr(sb, "Reported\":false,");
+    str_builder_add_cstr(sb, "\"isDefault\":true,\"addons\":[{\"globalAddon\":\"/loader/addons/global.addon.ef");
+    str_builder_add_cstr(sb, "i\",\"option");
+    str_builder_add_cstr(sb, "s\":\"rd.break\"},");
+    str_builder_add_cstr(sb, "{\"localAddon\":\"u.efi.extra.d/local.addon.efi\",\"options\":\"systemd.run=/evil\"}],");
+    str_builder_add_cstr(sb, "\"cmdline\":\"\\\"quiet\\\" 1 \\\"rw\\\" rd.break systemd.run=/evil\",");
+    str_builder_add_cstr(sb, "\"extras\":[\"/loader/addons/global.addon.efi\",\"u.efi.extra.d/sys.sysext.raw\"]}]\n");
+    var t, n = bootloader_parse_bootctl_json(str_data(str_builder_build(sb)), arr, 8);
+    assert(is_ok(t) == 1, "bj_ok");
+    assert_eq(n, 3, "bj_count");
+    var e0 = load64(arr);
+    assert(streq(bootloader_entry_id(e0), "arch.conf") == 1, "bj_id");
+    assert(streq(bootloader_entry_title(e0), "Arch Linux") == 1, "bj_title");
+    assert(streq(bootloader_entry_version(e0), "6.9") == 1, "bj_version");
+    assert(streq(bootloader_entry_linux(e0), "/vmlinuz-linux") == 1, "bj_linux_no_root_prefix");
+    assert(streq(bootloader_entry_initrd(e0), "/intel-ucode.img /initramfs-linux.img") == 1, "bj_initrd_joined");
+    assert(streq(bootloader_entry_options(e0), "root=/dev/sda1 rw") == 1, "bj_options");
+    assert_eq(bootloader_entry_is_default(e0), 1, "bj_default_from_bootctl");
+    assert_eq(bootloader_entry_extra(e0), 0, "bj_null_addons");
+    assert_eq(bootloader_entry_boot_kind(e0), BOOT_ENTRY_LINUX, "bj_kind_linux");
+    var e1 = load64(arr + 8);
+    assert_eq(bootloader_entry_boot_kind(e1), BOOT_ENTRY_NONE, "bj_auto_no_key");
+    assert_eq(bootloader_entry_is_default(e1), 0, "bj_not_default");
+    assert(streq(bootloader_entry_title(e1), "Firmware") == 1, "bj_auto_title");
+    var e2 = load64(arr + 16);
+    assert_eq(bootloader_entry_boot_kind(e2), BOOT_ENTRY_UKI, "bj_type2_is_uki");
+    assert(streq(bootloader_entry_uki(e2), "/EFI/Linux/u.efi") == 1, "bj_type2_value");
+    assert_eq(bootloader_entry_linux(e2), 0, "bj_type2_not_linux");
+    # cmdline is what the kernel gets, with what an addon adds, and a UKI's line keeps its
+    # quotes: nothing takes them off, so the 1 here stands bare.
+    var lt1 = "\"quiet\" 1 \"rw\" rd.break systemd.run=/evil";
+    assert(streq(bootloader_entry_options(e2), lt1) == 1, "bj_cmdline_wins");
+    var ut, uv = bootloader_validate_kernel_cmdline(bootloader_entry_options(e2));
+    assert(is_err_result(ut) == 1, "bj_uki_line_validates");
+    var lt2 = "/loader/addons/global.addon.efi u.efi.extra.d/sys.sysext.raw";
+    assert(streq(bootloader_entry_extra(e2), lt2) == 1, "bj_extras_joined");
+    assert(streq(bootloader_entry_title(load64(arr)), "Arch Linux") == 1, "bj_title_first");
+    assert_eq(_bjfx("[{\"id\":\"a\",\"showTitle\":\"Shown\"}]", arr, 4), 1, "bj_show_title_fx");
+    assert(streq(bootloader_entry_title(load64(arr)), "Shown") == 1, "bj_show_title_fallback");
+    # sd-stub turns a UKI's control characters into spaces, so they are not left to the validator.
+    var lt3 = "[{\"type\":\"type2\",\"id\":\"u\",\"linux\":\"/u\",\"options\":\" a\\nb\\t\\n\"}]";
+    assert(streq(_bjfx_opts(lt3, arr), "a b") == 1, "bj_uki_line_mangled");
+    var lt4 = "[{\"type\":\"type2\",\"id\":\"u\",\"linux\":\"/u\",\"options\":\" \\n \"}]";
+    assert_eq(_bjfx_opts(lt4, arr), 0, "bj_uki_line_blank");
+    var lt5 = "[{\"type\":\"type2\",\"id\":\"u\",\"linux\":\"/u\",\"options\":\"\\\"a b\\\"\"}]";
+    assert(streq(_bjfx_opts(lt5, arr), "\"a b\"") == 1, "bj_uki_line_stays_quoted");
+
+    # The other ways to boot, and two at once, which systemd-boot refuses and bootctl lists.
+    var lt6 = "[{\"id\":\"a\",\"efi\":\"/s.efi\"},{\"id\":\"b\",\"uki\":\"/u.efi\"},{\"id\":\"c\",\"ukiUrl";
+    lt6 = netns_concat2(lt6, "\":\"http://x/y\"}]");
+    assert_eq(_bjfx(lt6, arr, 8), 3, "bj_kinds_count");
+    assert_eq(bootloader_entry_boot_kind(load64(arr)), BOOT_ENTRY_EFI, "bj_efi");
+    assert(streq(bootloader_entry_efi(load64(arr)), "/s.efi") == 1, "bj_efi_value");
+    assert_eq(bootloader_entry_boot_kind(load64(arr + 8)), BOOT_ENTRY_UKI, "bj_uki");
+    assert_eq(bootloader_entry_boot_kind(load64(arr + 16)), BOOT_ENTRY_UKI_URL, "bj_uki_url");
+    assert(streq(bootloader_entry_uki_url(load64(arr + 16)), "http://x/y") == 1, "bj_uki_url_value");
+    assert_eq(_bjfx("[{\"id\":\"a\",\"linux\":\"/k\",\"efi\":\"/e\"}]", arr, 4), 1, "bj_conflict_listed");
+    assert_eq(bootloader_entry_boot_kind(load64(arr)), BOOT_ENTRY_CONFLICT, "bj_conflict");
+
+    # What display text could not carry is one escaped character here.
+    assert(streq(_bjfx_opts("[{\"id\":\"a\",\"options\":\"a\\nb\"}]", arr), "a\nb") == 1, "bj_newline");
+    var lt7 = "[{\"id\":\"a\",\"options\":\"x=\\\"y\\\" \\u0041\"}]";
+    assert(streq(_bjfx_opts(lt7, arr), "x=\"y\" A") == 1, "bj_escapes");
+    # systemd-boot takes a pair of quotes off, and bootctl shows them.
+    var lt8 = "[{\"id\":\"a\",\"options\":\"'init=/bin/sh'\"}]";
+    assert(streq(_bjfx_opts(lt8, arr), "init=/bin/sh") == 1, "bj_unquoted");
+    # An escaped NUL must not hide what follows it.
+    var lt9 = "[{\"id\":\"a\",\"cmdline\":\"quiet\\u0000 init=/bin/sh\",\"options\":\"quiet\"}]";
+    assert_eq(_bjfx(lt9, arr, 4), 0 - 1, "bj_nul_refused");
+    assert_eq(_bjfx("[{\"id\":\"a\",\"options\":\"\\\\u0000\"}]", arr, 4), 1, "bj_escaped_backslash_is_not_nul");
+
+    # Nothing is left to read past, and nothing is half a list.
+    assert_eq(_bjfx("[]", arr, 4), 0, "bj_empty_array");
+    assert_eq(_bjfx(" \n[ ]\n", arr, 4), 0, "bj_empty_array_ws");
+    assert_eq(_bjfx("", arr, 4), 0 - 1, "bj_empty_text");
+    assert_eq(_bjfx("{}", arr, 4), 0 - 1, "bj_object");
+    assert_eq(_bjfx("[", arr, 4), 0 - 1, "bj_open");
+    assert_eq(_bjfx("[{\"id\":\"a\"}", arr, 4), 0 - 1, "bj_unclosed");
+    assert_eq(_bjfx("[{\"id\":\"a\"}]x", arr, 4), 0 - 1, "bj_trailing");
+    assert_eq(_bjfx("[{\"id\":\"a\"}}", arr, 4), 0 - 1, "bj_mismatched_close");
+    assert_eq(_bjfx("[{\"id\":\"a\"},]", arr, 4), 0 - 1, "bj_trailing_comma");
+    assert_eq(_bjfx("[{\"id\":\"a\",\"x\":[}]}]", arr, 4), 0 - 1, "bj_mismatched_inner");
+    assert_eq(_bjfx("[{}]", arr, 4), 0 - 1, "bj_no_id");
+    assert_eq(_bjfx("[{\"id\":5}]", arr, 4), 0 - 1, "bj_id_not_string");
+    assert_eq(_bjfx("[1]", arr, 4), 0 - 1, "bj_not_object");
+    assert_eq(_bjfx("[{\"id\":\"a\"} {\"id\":\"b\"}]", arr, 4), 0 - 1, "bj_no_comma");
+    assert_eq(_bjfx("[{\"id\":\"a\"}x{\"id\":\"b\"}]", arr, 4), 0 - 1, "bj_bad_separator");
+    # The shared reader refuses one too: past an escaped NUL a cstring hides the rest.
+    var nj = "\"a\\u0000b\"";
+    assert_eq(_agnodrm_json_cstr(nj, strlen(nj), 0), 0, "bj_cstr_nul");
+    # Past 64 levels is refused, not walked.
+    var deep = str_builder_new();
+    var di = 0;
+    while (di < 65) {
+        str_builder_putc(deep, 91);
+        di = di + 1;
+    }
+    di = 0;
+    while (di < 65) {
+        str_builder_putc(deep, 93);
+        di = di + 1;
+    }
+    var dtxt = str_data(str_builder_build(deep));
+    assert_eq(_agnodrm_json_skip_value(dtxt, 130, 0), 0 - 1, "bj_too_deep");
+    assert_eq(_agnodrm_json_skip_value(dtxt + 1, 128, 0), 128, "bj_deep_enough");
+    var oj = "\"a\\u0041b\"";
+    assert(streq(_agnodrm_json_cstr(oj, strlen(oj), 0), "aAb") == 1, "bj_cstr_ok");
+    assert_eq(_bjfx("[{\"id\":\"a\"},{\"id\":\"b\"}]", arr, 1), 0 - 1, "bj_overflow");
+    assert_eq(_bjfx("[{\"id\":\"a\"}]", arr, 0), 0, "bj_max_zero");
+    var nt, nv = bootloader_parse_bootctl_json(0, arr, 4);
+    assert(is_err_result(nt) == 1, "bj_null");
+
+    # The listing: JSON first, text from a bootctl too old for it, and a hang tried once.
+    var rb = str_builder_new();
+    str_builder_add_cstr(rb, "/tmp/agnodrm-bj-");
+    str_builder_add_int(rb, sys_getpid());
+    var root = str_data(str_builder_build(rb));
+    assert_eq(xmkdir(root, 0x1C0), 0, "bj_fx_mkdir");
+    _bootloader_root = root;
+    var stub = _blfx_path(root, "bootctl");
+    var runs = _blfx_path(root, "runs");
+    _bootloader_bootctl = stub;
+
+    var js = "#!/bin/sh\necho '[{\"id\":\"j.conf\",\"linux\":\"/k\"}]'\n";
+    var fd = file_create_exclusive(stub, 0x1ED);  # mode 0755
+    sys_write(fd, js, strlen(js));
+    sys_close(fd);
+    var j_t, j_v = bootloader_list_boot_entries(arr, 8);
+    assert(is_ok(j_t) == 1, "bj_list_json_ok");
+    assert_eq(j_v, 1, "bj_list_json_one");
+    assert(streq(bootloader_entry_linux(load64(arr)), "/k") == 1, "bj_list_json_value");
+
+    xunlink(stub);
+    var old = netns_concat3("#!/bin/sh\necho x >> ", runs, "\nif [ \"$2\" = --json=short ]; then exit 1; fi\n");
+    old = netns_concat2(old, "echo '           id: t.conf'\necho '        linux: /boot//k'\n");
+    fd = file_create_exclusive(stub, 0x1ED);  # mode 0755
+    sys_write(fd, old, strlen(old));
+    sys_close(fd);
+    var o_t, o_v = bootloader_list_boot_entries(arr, 8);
+    assert(is_ok(o_t) == 1, "bj_list_old_bootctl_ok");
+    assert_eq(o_v, 1, "bj_list_old_bootctl_one");
+    assert(streq(bootloader_entry_id(load64(arr)), "t.conf") == 1, "bj_list_old_bootctl_text");
+    assert(_tmpx_holds(runs, "x\nx\n") == 1, "bj_list_old_bootctl_two_runs");
+
+    xunlink(stub);
+    xunlink(runs);
+    var hang = netns_concat3("#!/bin/sh\necho x >> ", runs, "\nwhile :; do :; done\n");
+    fd = file_create_exclusive(stub, 0x1ED);  # mode 0755
+    sys_write(fd, hang, strlen(hang));
+    sys_close(fd);
+    _agnodrm_deadline_ms = 50;
+    var h_t, h_v = bootloader_list_boot_entries(arr, 8);
+    _agnodrm_deadline_ms = 0;
+    assert(is_err_result(h_t) == 1, "bj_list_hang_err");
+    assert(_tmpx_holds(runs, "x\n") == 1, "bj_list_hang_one_run");
+
+    xunlink(stub);
+    xunlink(runs);
+    xrmdir(root);
+    _bootloader_root = 0;
+    _bootloader_bootctl = 0;
+    return 0;
+}
+
+# Every tool the library runs has a deadline, so none of them can hang a caller. Each stub
+# here never finishes, and the seam makes the deadline one a test can wait out.
+fn test_tool_deadlines() {
+    println("-- deadlines on the tools --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-td-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "td_fx_mkdir");
+    var hang = _blfx_path(root, "hang");
+    var fd = file_create_exclusive(hang, 0x1ED);  # mode 0755
+    var body = "#!/bin/sh\nwhile :; do :; done\n";
+    sys_write(fd, body, strlen(body));
+    sys_close(fd);
+    var quick = _blfx_path(root, "quick");
+    fd = file_create_exclusive(quick, 0x1ED);  # mode 0755
+    body = "#!/bin/sh\necho done\n";
+    sys_write(fd, body, strlen(body));
+    sys_close(fd);
+    var hargs = vec_new();
+    vec_push(hargs, hang);
+    var qargs = vec_new();
+    vec_push(qargs, quick);
+    var cap = 256;
+    var buf = alloc(cap);
+    var outer_before = proc_timeout_ms();
+
+    _agnodrm_deadline_ms = 50;
+    var c_t, c_v = _agnodrm_capture_within(hargs, buf, cap, "hung capture", 60000);
+    assert(is_err_result(c_t) == 1, "td_capture_err");
+    assert_eq(drm_syserr_errno(c_v), ETIMEDOUT, "td_capture_errno");
+    var r_t, r_v = _agnodrm_checked_within(hargs, "hung run", 60000);
+    assert(is_err_result(r_t) == 1, "td_checked_err");
+    assert_eq(drm_syserr_errno(r_v), ETIMEDOUT, "td_checked_errno");
+    assert_eq(_agnodrm_exec_within(hargs, 60000), 0 - 2, "td_exec_code");
+    assert_eq(proc_timeout_ms(), outer_before, "td_process_deadline_put_back");
+    var q_t, q_v = _agnodrm_capture_within(qargs, buf, cap, "quick", 60000);
+    assert(is_ok(q_t) == 1, "td_quick_ok");
+    assert_eq(q_v, 5, "td_quick_output");
+
+    # A tighter process deadline stands, and a looser one is not taken for ours.
+    _agnodrm_deadline_ms = 0;
+    proc_set_timeout_ms(50);
+    var t_t, t_v = _agnodrm_checked_within(hargs, "tighter", 60000);
+    assert_eq(drm_syserr_errno(t_v), ETIMEDOUT, "td_process_tighter");
+    assert_eq(proc_timeout_ms(), 50, "td_tighter_put_back");
+    proc_set_timeout_ms(30000);
+    _agnodrm_deadline_ms = 50;
+    var l_t, l_v = _agnodrm_checked_within(hargs, "looser", 60000);
+    assert_eq(drm_syserr_errno(l_v), ETIMEDOUT, "td_process_looser");
+    assert_eq(proc_timeout_ms(), 30000, "td_looser_put_back");
+    proc_set_timeout_ms(outer_before);
+
+    # The public helpers stay unbounded: a caller's tool may be slow for good reason. Only
+    # the process's own deadline reaches them, and it reads as a deadline.
+    var slow = _blfx_path(root, "slow");
+    fd = file_create_exclusive(slow, 0x1ED);  # mode 0755
+    body = "#!/bin/sh\ni=0\nwhile [ $i -lt 60000 ]; do i=$((i+1)); done\necho done\n";
+    sys_write(fd, body, strlen(body));
+    sys_close(fd);
+    var sargs = vec_new();
+    vec_push(sargs, slow);
+    _agnodrm_deadline_ms = 20;
+    var p_t, p_v = agnodrm_run_checked(sargs, "public");
+    assert(is_ok(p_t) == 1, "td_public_checked_unbounded");
+    var pc_t, pc_v = agnodrm_run_capture(sargs, buf, cap, "public");
+    assert(is_ok(pc_t) == 1, "td_public_capture_unbounded");
+    var sc_t, sc_v = _agnodrm_checked_within(sargs, "the same tool, with a deadline", 60000);
+    assert_eq(drm_syserr_errno(sc_v), ETIMEDOUT, "td_slow_tool_is_slow_enough");
+    _agnodrm_deadline_ms = 50;
+    proc_set_timeout_ms(50);
+    var o_t, o_v = agnodrm_run_checked(hargs, "public hung");
+    assert_eq(drm_syserr_errno(o_v), ETIMEDOUT, "td_public_process_deadline");
+    var oc_t, oc_v = agnodrm_run_capture(hargs, buf, cap, "public hung");
+    assert_eq(drm_syserr_errno(oc_v), ETIMEDOUT, "td_public_capture_deadline");
+    proc_set_timeout_ms(outer_before);
+
+    # Each tool, through the call that runs it.
+    _udev_tool = hang;
+    var ul_t, ul_v = udev_list_devices(0, buf, 4);
+    assert_eq(drm_syserr_errno(ul_v), ETIMEDOUT, "td_udev_list");
+    var ui_t, ui_v = udev_get_device_info("/devices/x");
+    assert_eq(drm_syserr_errno(ui_v), ETIMEDOUT, "td_udev_info");
+    _udev_tool = 0;
+    _netns_ip_path = hang;
+    var ia = vec_new();
+    vec_push(ia, "/usr/sbin/ip");
+    var ip_t, ip_v = netns_run_ip(ia);
+    assert_eq(drm_syserr_errno(ip_v), ETIMEDOUT, "td_ip");
+    _netns_ip_path = 0;
+    # A mount helper may need the terminal, which a deadline takes away, so it gets none.
+    _agnodrm_deadline_ms = 20;
+    var fm_t, fm_v = fuse_mount("u@h:/", root, slow, 0);
+    assert(is_ok(fm_t) == 1, "td_fuse_mount_unbounded");
+    _agnodrm_deadline_ms = 50;
+    _fuse_fusermount = hang;
+    var fu_t, fu_v = fuse_unmount(root);
+    assert_eq(drm_syserr_errno(fu_v), ETIMEDOUT, "td_fuse_unmount");
+    _fuse_fusermount = 0;
+    # A bootctl that hangs is a bootctl that failed: the entry files still answer.
+    _bootloader_bootctl = hang;
+    _bootloader_root = root;
+    var bc_t, bc_v = bootloader_list_boot_entries(buf, 4);
+    assert(is_err_result(bc_t) == 1, "td_bootctl_falls_through");
+    _bootloader_root = 0;
+    _bootloader_bootctl = 0;
+    _agnodrm_deadline_ms = 0;
+    assert_eq(proc_timeout_ms(), outer_before, "td_all_put_back");
+
+    xunlink(hang);
+    xunlink(quick);
+    xunlink(slow);
+    xrmdir(root);
     return 0;
 }
 
 # bootctl and systemd-boot disagree about what is an entry, so a listing cannot stop at
 # bootctl's word: one clean entry printed must not hide the file beside it.
+# Put a fresh tool at `path`, replacing the one there.
+fn _blfx_stub(path, body) {
+    xunlink(path);
+    var fd = file_create_exclusive(path, 0x1ED);  # mode 0755
+    sys_write(fd, body, strlen(body));
+    sys_close(fd);
+    return 0;
+}
+
+# A bootctl that prints one entry whose options are `len` bytes.
+fn _blfx_big_stub(path, len) {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "#!/bin/sh\necho '[{\"id\":\"big.conf\",\"linux\":\"/k\",\"options\":\"");
+    var i = 0;
+    while (i < len) {
+        str_builder_putc(sb, 97);
+        i = i + 1;
+    }
+    str_builder_add_cstr(sb, "\"}]'\n");
+    _blfx_stub(path, str_data(str_builder_build(sb)));
+    return 0;
+}
+
 fn test_bootloader_merge() {
     println("-- bootloader: bootctl and the files it leaves out --");
     var sbd = str_builder_new();
@@ -753,6 +1110,164 @@ fn test_bootloader_merge() {
     assert(streq(bootloader_entry_linux(dk), "/EFI/../k") == 1, "bm_dropped_path_value");
     file_write_all(decoy, "linux /k\n", 9);
 
+    # The file wins: bootctl drops the later lines it will not take, and systemd-boot boots them.
+    var lt10 = "#!/bin/sh\necho '[{\"id\":\"decoy.conf\",\"linux\":\"/ok\",\"initrd\":[\"/a.img\"],\"options";
+    lt10 = netns_concat2(lt10, "\":\"\\\"quiet 1\\\" rw\"}]'\n");
+    var hid = lt10;
+    _blfx_stub(stub, hid);
+    var ftxt = "linux /ok\ninitrd /a.img\ninitrd /x/../evil.img\nlinux /x/../evil\noptions \"quiet 1\"\noptions rw\n";
+    file_write_all(decoy, ftxt, strlen(ftxt));
+    var fw_t, fw_v = bootloader_list_boot_entries(arr, 16);
+    var fw = _blfx_find(arr, fw_v, "decoy.conf");
+    assert(streq(bootloader_entry_linux(fw), "/x/../evil") == 1, "bm_file_linux_wins");
+    assert(streq(bootloader_entry_initrd(fw), "/a.img /x/../evil.img") == 1, "bm_file_initrd_wins");
+    # bootctl joined two quoted lines. Read from the file, the 1 stands bare, as it boots.
+    var fq_t, fq_v = bootloader_validate_kernel_cmdline(bootloader_entry_options(fw));
+    assert(is_err_result(fq_t) == 1, "bm_file_options_validate");
+    # What only bootctl knows, an addon's text in `cmdline`, stays beside the file's.
+    var add = "#!/bin/sh\necho '[{\"id\":\"decoy.conf\",\"linux\":\"/k\",\"cmdline\":\"quiet rd.break\"}]'\n";
+    _blfx_stub(stub, add);
+    file_write_all(decoy, "linux /k\noptions quiet\n", 23);
+    var ad_t, ad_v = bootloader_list_boot_entries(arr, 16);
+    var lf11 = _blfx_find(arr, ad_v, "decoy.conf");
+    assert(streq(bootloader_entry_options(lf11), "quiet quiet rd.break") == 1, "bm_addon_text_kept");
+    # Where the two agree there is one copy.
+    var same = "#!/bin/sh\necho '[{\"id\":\"decoy.conf\",\"linux\":\"/k\",\"options\":\"quiet\"}]'\n";
+    _blfx_stub(stub, same);
+    var sm_t, sm_v = bootloader_list_boot_entries(arr, 16);
+    var lf12 = _blfx_find(arr, sm_v, "decoy.conf");
+    assert(streq(bootloader_entry_options(lf12), "quiet") == 1, "bm_agreeing_options_once");
+    # Boot keys bootctl has and the file does not are gone, since the file decides. What
+    # bootctl alone knows of options and extras stays, and each adds to the file's.
+    var lt13 = "#!/bin/sh\necho '[{\"id\":\"decoy.conf\",\"efi\":\"/e\",\"uki\":\"/u\",\"ukiUrl\":\"/v\",\"o";
+    lt13 = netns_concat2(lt13, "ptions\":\"only\",\"extras\":[\"/b.cred\"]}]'\n");
+    var keys = lt13;
+    _blfx_stub(stub, keys);
+    file_write_all(decoy, "linux /k\n", 9);
+    var ky_t, ky_v = bootloader_list_boot_entries(arr, 16);
+    var ky = _blfx_find(arr, ky_v, "decoy.conf");
+    assert_eq(bootloader_entry_boot_kind(ky), BOOT_ENTRY_LINUX, "bm_file_decides_kind");
+    assert_eq(bootloader_entry_efi(ky), 0, "bm_file_clears_efi");
+    assert_eq(bootloader_entry_uki(ky), 0, "bm_file_clears_uki");
+    assert_eq(bootloader_entry_uki_url(ky), 0, "bm_file_clears_url");
+    assert(streq(bootloader_entry_options(ky), "only") == 1, "bm_bootctl_options_kept");
+    assert(streq(bootloader_entry_extra(ky), "/b.cred") == 1, "bm_bootctl_extra_kept");
+    file_write_all(decoy, "uki-url http://x/y\nextra /a.cred\n", 33);
+    var kz_t, kz_v = bootloader_list_boot_entries(arr, 16);
+    var kz = _blfx_find(arr, kz_v, "decoy.conf");
+    assert_eq(bootloader_entry_boot_kind(kz), BOOT_ENTRY_UKI_URL, "bm_file_gives_url");
+    assert(streq(bootloader_entry_extra(kz), "/a.cred /b.cred") == 1, "bm_extras_both");
+    var fopts = "#!/bin/sh\necho '[{\"id\":\"decoy.conf\",\"linux\":\"/k\"}]'\n";
+    _blfx_stub(stub, fopts);
+    file_write_all(decoy, "efi /e\nuki /u\noptions quiet\nextra /a.cred\n", 43);
+    var kf_t, kf_v = bootloader_list_boot_entries(arr, 16);
+    var kf = _blfx_find(arr, kf_v, "decoy.conf");
+    assert_eq(bootloader_entry_boot_kind(kf), BOOT_ENTRY_CONFLICT, "bm_file_gives_both_keys");
+    assert(streq(bootloader_entry_efi(kf), "/e") == 1, "bm_file_gives_efi");
+    assert(streq(bootloader_entry_uki(kf), "/u") == 1, "bm_file_gives_uki");
+    assert(streq(bootloader_entry_options(kf), "quiet") == 1, "bm_file_options_alone");
+    assert(streq(bootloader_entry_extra(kf), "/a.cred") == 1, "bm_file_extra_alone");
+    file_write_all(decoy, "linux /k\n", 9);
+
+    # A UKI bootctl leaves out, here for a name it refuses. systemd-boot boots it.
+    assert_eq(xmkdir(_bootloader_path("/boot/EFI"), 0x1C0), 0, "bm_fx_efi");
+    assert_eq(xmkdir(_bootloader_path("/boot/EFI/Linux"), 0x1C0), 0, "bm_fx_efi_linux");
+    var ul = _bootloader_path("/boot/EFI/Linux/hidden name.efi");
+    var ur = _bootloader_path("/boot/EFI/Linux/reported.EFI");
+    var uh = _bootloader_path("/boot/EFI/Linux/.dot.efi");
+    var ua = _bootloader_path("/boot/EFI/Linux/auto-x.efi");
+    var ut = _bootloader_path("/boot/EFI/Linux/notes.txt");
+    var ud = _bootloader_path("/boot/EFI/Linux/d.efi");
+    file_write_all(ul, "MZ", 2);
+    file_write_all(ur, "MZ", 2);
+    file_write_all(uh, "MZ", 2);
+    file_write_all(ua, "MZ", 2);
+    file_write_all(ut, "MZ", 2);
+    var uz = _bootloader_path("/boot/EFI/Linux/notes.efz");
+    var ux = _bootloader_path("/boot/EFI/Linux/notesxefi");
+    file_write_all(uz, "MZ", 2);
+    file_write_all(ux, "MZ", 2);
+    assert_eq(xmkdir(ud, 0x1C0), 0, "bm_fx_efi_dir");
+    # The other two roots, and the same name again on one of them.
+    assert_eq(xmkdir(_bootloader_path("/efi/EFI"), 0x1C0), 0, "bm_fx_efi2");
+    assert_eq(xmkdir(_bootloader_path("/efi/EFI/Linux"), 0x1C0), 0, "bm_fx_efi2_linux");
+    assert_eq(xmkdir(_bootloader_path("/boot/efi"), 0x1C0), 0, "bm_fx_efi3");
+    assert_eq(xmkdir(_bootloader_path("/boot/efi/EFI"), 0x1C0), 0, "bm_fx_efi3_efi");
+    assert_eq(xmkdir(_bootloader_path("/boot/efi/EFI/Linux"), 0x1C0), 0, "bm_fx_efi3_linux");
+    var uo = _bootloader_path("/efi/EFI/Linux/other.efi");
+    var ut2 = _bootloader_path("/efi/EFI/Linux/reported.EFI");
+    var ue = _bootloader_path("/boot/efi/EFI/Linux/deep.efi");
+    var uh2 = _bootloader_path("/efi/EFI/Linux/hidden name.efi");
+    file_write_all(uh2, "MZ", 2);
+    file_write_all(uo, "MZ", 2);
+    file_write_all(ut2, "MZ", 2);
+    file_write_all(ue, "MZ", 2);
+    var lt14 = "#!/bin/sh\necho '[{\"id\":\"decoy.conf\",\"linux\":\"/k\"},{\"type\":\"type2\",\"id\":\"repo";
+    lt14 = netns_concat2(lt14, "rted.EFI\",\"linux\":\"/EFI/Linux/reported.EFI\"}]'\n");
+    var repd = lt14;
+    _blfx_stub(stub, repd);
+    var uk_t, uk_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_ok(uk_t) == 1, "bm_uki_ok");
+    assert_eq(uk_v, 10, "bm_uki_count");
+    assert_eq(_blfx_count(arr, uk_v, "reported.EFI"), 2, "bm_uki_twin_shows");
+    assert_eq(_blfx_count(arr, uk_v, "hidden name.efi"), 2, "bm_uki_unreported_twin_shows");
+    assert(_blfx_find(arr, uk_v, "other.efi") != 0, "bm_uki_on_efi");
+    assert(_blfx_find(arr, uk_v, "deep.efi") != 0, "bm_uki_on_boot_efi");
+    var lf15 = _blfx_find(arr, uk_v, "reported.EFI");
+    assert(streq(bootloader_entry_uki(lf15), "/EFI/Linux/reported.EFI") == 1, "bm_uki_bootctl_path_kept");
+    var hu = _blfx_find(arr, uk_v, "hidden name.efi");
+    assert(hu != 0, "bm_uki_listed");
+    assert_eq(bootloader_entry_boot_kind(hu), BOOT_ENTRY_UKI, "bm_uki_kind");
+    assert_eq(bootloader_entry_options(hu), 0, "bm_uki_line_unknown");
+    assert(_blfx_find(arr, uk_v, "d.efi") == 0, "bm_uki_not_a_directory");
+    assert(_blfx_find(arr, uk_v, "auto-x.efi") == 0, "bm_uki_not_auto");
+    assert(_blfx_find(arr, uk_v, ".dot.efi") == 0, "bm_uki_not_hidden");
+    assert(_blfx_find(arr, uk_v, "notes.txt") == 0, "bm_uki_not_txt");
+    assert(_blfx_find(arr, uk_v, "notes.efz") == 0, "bm_uki_not_efz");
+    assert(_blfx_find(arr, uk_v, "notesxefi") == 0, "bm_uki_needs_a_dot");
+    # A block bootctl's text split keeps its id and loses its key: the file gives it back.
+    var split = "#!/bin/sh\necho '           id: reported.EFI'\n";
+    _blfx_stub(stub, split);
+    var sp_t, sp_v = bootloader_list_boot_entries(arr, 16);
+    assert_eq(bootloader_entry_boot_kind(_blfx_find(arr, sp_v, "reported.EFI")), BOOT_ENTRY_UKI, "bm_uki_key_restored");
+    # The list as JSON runs well past what the text form ever reached, and a cut is refused.
+    _blfx_big_stub(stub, 200000);
+    var bg_t, bg_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_ok(bg_t) == 1, "bm_big_list_ok");
+    assert_eq(strlen(bootloader_entry_options(_blfx_find(arr, bg_v, "big.conf"))), 200000, "bm_big_list_whole");
+    _blfx_big_stub(stub, 1100000);
+    var cu_t, cu_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_err_result(cu_t) == 1, "bm_cut_list_refused");
+    # bootctl failing outright must not lose them.
+    var bad = "#!/bin/sh\nexit 1\n";
+    _blfx_stub(stub, bad);
+    var ba_t, ba_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_ok(ba_t) == 1, "bm_bootctl_failed_ok");
+    assert(_blfx_find(arr, ba_v, "hidden name.efi") != 0, "bm_bootctl_failed_uki_listed");
+    assert(_blfx_find(arr, ba_v, "reported.EFI") != 0, "bm_bootctl_failed_uki_two");
+    var ov_t, ov_v = bootloader_list_boot_entries(arr, ba_v - 1);
+    assert(is_err_result(ov_t) == 1, "bm_uki_overflow_err");
+    xunlink(ul);
+    xunlink(ur);
+    xunlink(uh);
+    xunlink(ua);
+    xunlink(ut);
+    xunlink(uz);
+    xunlink(ux);
+    xrmdir(ud);
+    xrmdir(_bootloader_path("/boot/EFI/Linux"));
+    xrmdir(_bootloader_path("/boot/EFI"));
+    xunlink(uh2);
+    xunlink(uo);
+    xunlink(ut2);
+    xunlink(ue);
+    xrmdir(_bootloader_path("/efi/EFI/Linux"));
+    xrmdir(_bootloader_path("/efi/EFI"));
+    xrmdir(_bootloader_path("/boot/efi/EFI/Linux"));
+    xrmdir(_bootloader_path("/boot/efi/EFI"));
+    xrmdir(_bootloader_path("/boot/efi"));
+    _blfx_stub(stub, dropped);
+
     # One bootctl entry answers for one file, so the twin on the other partition shows.
     file_write_all(twin, "efi /other.efi\n", 15);
     var w_t, w_v = bootloader_list_boot_entries(arr, 16);
@@ -784,6 +1299,26 @@ fn test_bootloader_merge() {
     var n_t, n_v = bootloader_list_boot_entries(arr, 16);
     assert(is_ok(n_t) == 1, "bm_no_dirs_ok");
     assert_eq(n_v, 1, "bm_no_dirs_bootctl_stands");
+    # With no entry directory the UKIs still count, and /efi linked onto /boot is one disk.
+    var r2 = _blfx_path(root, "nodir");
+    assert_eq(xmkdir(r2, 0x1C0), 0, "bm_fx_r2");
+    _bootloader_root = r2;
+    assert_eq(xmkdir(_bootloader_path("/boot"), 0x1C0), 0, "bm_fx_r2_boot");
+    assert_eq(xmkdir(_bootloader_path("/boot/EFI"), 0x1C0), 0, "bm_fx_r2_efi");
+    assert_eq(xmkdir(_bootloader_path("/boot/EFI/Linux"), 0x1C0), 0, "bm_fx_r2_linux");
+    assert_eq(sys_symlink("boot", _bootloader_path("/efi")), 0, "bm_fx_r2_link");
+    var only = _bootloader_path("/boot/EFI/Linux/only.efi");
+    file_write_all(only, "MZ", 2);
+    var o2_t, o2_v = bootloader_list_boot_entries(arr, 16);
+    assert(is_ok(o2_t) == 1, "bm_no_dirs_uki_ok");
+    assert_eq(o2_v, 2, "bm_no_dirs_uki_listed");
+    assert_eq(_blfx_count(arr, o2_v, "only.efi"), 1, "bm_linked_root_read_once");
+    xunlink(only);
+    xunlink(_bootloader_path("/efi"));
+    xrmdir(_bootloader_path("/boot/EFI/Linux"));
+    xrmdir(_bootloader_path("/boot/EFI"));
+    xrmdir(_bootloader_path("/boot"));
+    xrmdir(r2);
     _bootloader_root = root;
 
     xunlink(decoy);
@@ -1785,6 +2320,23 @@ fn test_bootloader_tree() {
     assert_eq(load64(lc), 5, "lcf_overlong");
     lc = bootloader_parse_loader_conf(0);
     assert_eq(load64(lc), 5, "lcf_null");
+    # Quotes come off as they do in an entry, and a value of nothing but quotes clears.
+    lc = bootloader_parse_loader_conf("timeout \"3\"\ndefault 'b.conf'\n");
+    assert_eq(load64(lc), 3, "lcf_timeout_unquoted");
+    assert(streq(load64(lc + 8), "b") == 1, "lcf_default_unquoted");
+    lc = bootloader_parse_loader_conf("default a.conf\ndefault ''\n");
+    assert_eq(load64(lc + 8), 0, "lcf_empty_quotes_clear");
+    lc = bootloader_parse_loader_conf("default a.conf\ndefault\n");
+    assert(streq(load64(lc + 8), "a") == 1, "lcf_no_value_is_no_line");
+    # Of the @ names only @saved is a default, in any case. Another is ignored, not stored.
+    lc = bootloader_parse_loader_conf("default a.conf\ndefault @evil\n");
+    assert(streq(load64(lc + 8), "a") == 1, "lcf_at_name_ignored");
+    lc = bootloader_parse_loader_conf("default @saved2\n");
+    assert_eq(load64(lc + 8), 0, "lcf_at_saved_prefix");
+    lc = bootloader_parse_loader_conf("default @sav\n");
+    assert_eq(load64(lc + 8), 0, "lcf_at_saved_cut");
+    lc = bootloader_parse_loader_conf("default a.conf\ndefault @SaVeD\n");
+    assert(streq(load64(lc + 8), "@SaVeD") == 1, "lcf_at_saved");
 
     # The bootctl path refuses what it cannot return, too.
     var two = "id: a.conf\n\nid: b.conf\n\n";
@@ -2130,8 +2682,13 @@ fn test_update_lifecycle() {
     assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_fallback_keeps_pending");
     assert(streq(update_state_version(st), "2026.1.1") == 1, "lc_fallback_not_promoted");
     # And rollback squares the state with where the host is.
+    # A hung argonaut is waited for only so long, and costs the rollback nothing: it stands.
     file_write_all(ar_log, "", 0);
+    _updfx_tool(root, "/usr/bin/argonaut", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nwhile :; do :; done\n");
+    _agnodrm_deadline_ms = 500;
     var fr_t, fr_v = update_rollback(cfg);
+    _agnodrm_deadline_ms = 0;
+    _updfx_tool(root, "/usr/bin/argonaut", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
     assert(is_ok(fr_t) == 1, "lc_fallback_rollback_ok");
     assert_eq(update_state_slot(_lcfx_load(sf)), SLOT_A, "lc_fallback_rollback_slot");
     assert(_tmpx_holds(ar_log, "stop daimon\n") == 1, "lc_rollback_stops_services");
@@ -2356,7 +2913,29 @@ fn test_update_lifecycle() {
     xunlink(sf);
     var hl_t, hl_v = update_apply(cfg, man);
     assert(is_err_result(hl_t) == 1, "lc_hold_long_list_refused");
+    # A hung efibootmgr or sha256sum is one that cannot answer, so an update stops.
+    _agnodrm_deadline_ms = 50;
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nwhile :; do :; done\n");
+    var hh_t, hh_v = update_apply(cfg, man);
+    assert(is_err_result(hh_t) == 1, "lc_hung_efibootmgr_refused");
     _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_set, "echo \"$*\" >> \"$0.log\"\nexit 0\n"));
+    _updfx_tool(root, "/usr/bin/sha256sum", "#!/bin/sh\nwhile :; do :; done\n");
+    var hs_t, hs_v = update_apply(cfg, man);
+    assert_eq(drm_syserr_errno(hs_v), ETIMEDOUT, "lc_hung_sha256sum_refused");
+    _agnodrm_deadline_ms = 0;
+    _updfx_tool(root, "/usr/bin/sha256sum", _updfx_digest_tool());
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_set, "echo \"$*\" >> \"$0.log\"\nexit 0\n"));
+    # dd has no seam, but one writing to a FIFO waits for a reader that never comes.
+    xunlink(sf);
+    xunlink(slot_b);
+    assert_eq(sys_mknodat(AT_FDCWD, slot_b, 0x1180, 0), 0, "lc_fx_slot_fifo");  # S_IFIFO, 0600
+    _agnodrm_deadline_ms = 500;
+    var hd_t, hd_v = update_apply(cfg, man);
+    assert_eq(drm_syserr_errno(hd_v), ETIMEDOUT, "lc_hung_dd_refused");
+    _agnodrm_deadline_ms = 0;
+    xunlink(slot_b);
+    file_write_all(slot_b, "OLD-B", 5);
+    xunlink(sf);
     # Cannot clear what is aimed the wrong way: no write, and the record stays.
     var fw_stuck = netns_concat2(fw_if_top, "BootNext: 0003\\nBoot0004* AGNOS-A\\tHD(2)\\n");
     fw_stuck = netns_concat2(fw_stuck, "Boot0003* AGNOS-B\\tHD(1)\\n");
@@ -2368,6 +2947,13 @@ fn test_update_lifecycle() {
     assert(is_err_result(h3_t) == 1, "lc_hold_unclearable_refused");
     assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_hold_unclearable_slot_intact");
     assert(streq(update_state_pending(_lcfx_load(sf)), "2026.2.1") == 1, "lc_hold_unclearable_record_kept");
+    # The same two writes hung: a deadline kill reads as a failed write.
+    _agnodrm_deadline_ms = 200;
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_stuck, "while :; do :; done\n"));
+    var h3h_t, h3h_v = update_apply(cfg, man);
+    assert(is_err_result(h3h_t) == 1, "lc_hold_hung_write_refused");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_hold_hung_write_slot_intact");
+    _agnodrm_deadline_ms = 0;
     # efibootmgr failing on an EFI host: where the firmware goes next is unknown.
     _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 2\n");
     var h4_t, h4_v = update_apply(cfg, man);
@@ -3283,19 +3869,19 @@ fn test_journald_io() {
 
     # A --grep that never finishes ends as an Err, and leaves the process's deadline alone.
     var dl_before = proc_timeout_ms();
-    _journald_deadline_ms = 100;
+    _agnodrm_deadline_ms = 100;
     _updfx_tool(root, "/jc", "#!/bin/sh\nwhile :; do :; done\n");
     var dq_t, dq_v = journald_query(journald_filter_new());
     assert(is_err_result(dq_t) == 1, "jq_deadline_silent");
     assert_eq(drm_syserr_errno(dq_v), ETIMEDOUT, "jq_deadline_errno");
     assert_eq(proc_timeout_ms(), dl_before, "jq_deadline_put_back");
     # A caller's own tighter deadline stands, and a looser one does not widen ours.
-    _journald_deadline_ms = 30000;
+    _agnodrm_deadline_ms = 30000;
     proc_set_timeout_ms(100);
     var dt_t, dt_v = journald_query(journald_filter_new());
     assert_eq(drm_syserr_errno(dt_v), ETIMEDOUT, "jq_deadline_caller_tighter");
     assert_eq(proc_timeout_ms(), 100, "jq_deadline_caller_put_back");
-    _journald_deadline_ms = 100;
+    _agnodrm_deadline_ms = 100;
     proc_set_timeout_ms(30000);
     var dw_t, dw_v = journald_query(journald_filter_new());
     assert_eq(drm_syserr_errno(dw_v), ETIMEDOUT, "jq_deadline_caller_looser");
@@ -3311,7 +3897,7 @@ fn test_journald_io() {
     var dk_t, dk_v = journald_query(journald_filter_new());
     assert(is_ok(dk_t) == 1, "jq_deadline_quick_ok");
     assert_eq(vec_len(dk_v), 1, "jq_deadline_quick_one");
-    _journald_deadline_ms = 0;
+    _agnodrm_deadline_ms = 0;
 
     _journald_tool = 0;
     xunlink(out);
@@ -3873,6 +4459,8 @@ fn main() {
     test_bootloader_entries();
     test_bootloader_boot_kinds();
     test_bootloader_merge();
+    test_bootctl_json();
+    test_tool_deadlines();
     test_bootctl_parse();
     test_fd_hygiene();
     test_tmp_exclusive();

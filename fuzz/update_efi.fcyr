@@ -1,0 +1,195 @@
+# Fuzz: the two readers of `efibootmgr` output, _update_efi_bootnum and _update_efi_bootnext, on
+# mutated input that ends against unmapped memory, so a read past the end faults. What they
+# find decides where a rollback points the firmware, so each must match a model of the line
+# format: Boot, four hex digits, an optional star, spaces, then exactly the label.
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/process.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/update.cyr"
+
+alloc_init();
+
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+
+fn fz_fail(code): i64 { sys_exit(code); return 0; }
+
+fn fz_guard_end(): i64 {
+    var p = _agnodrm_scratch_new(16384);
+    _agnodrm_scratch_free(p + 12288, 4096);
+    return p + 12288;
+}
+
+fn fz_hex(c): i64 {
+    if (c >= 48 && c <= 57) { return 1; }
+    if (c >= 65 && c <= 70) { return 1; }
+    if (c >= 97 && c <= 102) { return 1; }
+    return 0;
+}
+
+# 1 if text[a..b) is the entry line for `label`.
+fn fz_model_line(text, a, b, label): i64 {
+    var n = b - a;
+    if (n < 9) { return 0; }
+    if (memeq(text + a, "Boot", 4) != 1) { return 0; }
+    var i = 4;
+    while (i < 8) {
+        if (fz_hex(load8(text + a + i)) != 1) { return 0; }
+        i = i + 1;
+    }
+    if (load8(text + a + i) == 42) { i = i + 1; }
+    if (i >= n) { return 0; }
+    if (load8(text + a + i) != 32) { return 0; }
+    while (i < n) {
+        if (load8(text + a + i) != 32) { break; }
+        i = i + 1;
+    }
+    var ll = strlen(label);
+    if (i + ll > n) { return 0; }
+    if (memeq(text + a + i, label, ll) != 1) { return 0; }
+    if (i + ll == n) { return 1; }
+    return load8(text + a + i + ll) == 9;
+}
+
+# The first such line's offset, or -1.
+fn fz_model_bootnum(text, len, label): i64 {
+    var a = 0;
+    while (a < len) {
+        var b = a;
+        while (b < len) {
+            if (load8(text + b) == 10) { break; }
+            b = b + 1;
+        }
+        if (fz_model_line(text, a, b, label) == 1) { return a; }
+        a = b + 1;
+    }
+    return 0 - 1;
+}
+
+# The offset of the four bytes after the first line that opens "BootNext: " and has four
+# left to read, or -1.
+fn fz_model_bootnext(text, len): i64 {
+    var a = 0;
+    while (a < len) {
+        if (a + 14 <= len) {
+            if (memeq(text + a, "BootNext: ", 10) == 1) { return a + 10; }
+        }
+        while (a < len) {
+            if (load8(text + a) == 10) { break; }
+            a = a + 1;
+        }
+        a = a + 1;
+    }
+    return 0 - 1;
+}
+
+fn fz_check(text, len, code): i64 {
+    var m = fz_model_bootnum(text, len, "AGNOS-A");
+    var got = _update_efi_bootnum(text, "AGNOS-A");
+    if (m < 0) {
+        if (got != 0) { fz_fail(code); }
+    } else {
+        if (got == 0) { fz_fail(code + 1); }
+        if (memeq(got, text + m + 4, 4) != 1) { fz_fail(code + 2); }
+        if (load8(got + 4) != 0) { fz_fail(code + 3); }
+    }
+    var at = fz_model_bootnext(text, len);
+    var nx = _update_efi_bootnext(text);
+    if (at < 0) {
+        if (nx != 0) { fz_fail(code + 4); }
+    } else {
+        if (nx == 0) { fz_fail(code + 5); }
+        if (memeq(nx, text + at, 4) != 1) { fz_fail(code + 5); }
+    }
+    return 0;
+}
+
+fn fz_literal(text, code): i64 { return fz_check(text, strlen(text), code); }
+
+# --- the shapes efibootmgr prints ---
+var t1 = "BootNext: 0003\nBootCurrent: 0001\nBoot0001* AGNOS-A\tHD(1)\nBoot0003* AGNOS-B\tHD(2)\n";
+if (streq(_update_efi_bootnum(t1, "AGNOS-A"), "0001") != 1) { fz_fail(10); }
+if (streq(_update_efi_bootnum(t1, "AGNOS-B"), "0003") != 1) { fz_fail(11); }
+if (streq(_update_efi_bootnext(t1), "0003") != 1) { fz_fail(12); }
+if (_update_efi_bootnum(t1, "AGNOS") != 0) { fz_fail(13); }
+if (_update_efi_bootnum("Boot0001* AGNOS-A rescue\tHD(1)\n", "AGNOS-A") != 0) { fz_fail(14); }
+if (_update_efi_bootnum("Boot0001  AGNOS-A\n", "AGNOS-A") == 0) { fz_fail(15); }
+if (_update_efi_bootnum("BootXYZW* AGNOS-A\n", "AGNOS-A") != 0) { fz_fail(16); }
+if (_update_efi_bootnext("BootCurrent: 0001\n") != 0) { fz_fail(17); }
+
+fz_literal("", 20);
+fz_literal("\n\n\n", 26);
+fz_literal("Boot", 32);
+fz_literal("Boot0001", 38);
+fz_literal("Boot0001*", 44);
+fz_literal("Boot0001 ", 50);
+fz_literal("Boot0001 AGNOS-A", 56);
+fz_literal("Boot0001* AGNOS-", 62);
+fz_literal("BootNext: ", 68);
+fz_literal("BootNext: 12", 74);
+fz_literal("BootNext: 1234", 80);
+
+# --- token soup, ending against the guard page ---
+var toks = vec_new();
+vec_push(toks, "Boot");
+vec_push(toks, "BootNext: ");
+vec_push(toks, "BootCurrent: ");
+vec_push(toks, "0001");
+vec_push(toks, "ABCD");
+vec_push(toks, "12");
+vec_push(toks, "*");
+vec_push(toks, " ");
+vec_push(toks, "  ");
+vec_push(toks, "\t");
+vec_push(toks, "\n");
+vec_push(toks, "AGNOS-A");
+vec_push(toks, "AGNOS-B");
+vec_push(toks, "AGNOS-");
+vec_push(toks, "HD(1,GPT,x)");
+var ntok = vec_len(toks);
+
+var guard = fz_guard_end();
+var scratch = alloc(4096);
+var it = 0;
+while (it < 40000) {
+    var want = fz_rand() % 300;
+    var pos = 0;
+    while (pos < want) {
+        var pick = fz_rand() % (ntok + 1);
+        if (pick == ntok) {
+            store8(scratch + pos, fz_rand() % 255 + 1);
+            pos = pos + 1;
+        } else {
+            var tk = vec_get(toks, pick);
+            var tl = strlen(tk);
+            memcpy(scratch + pos, tk, tl);
+            pos = pos + tl;
+        }
+    }
+    var text = guard - pos - 1;
+    memcpy(text, scratch, pos);
+    store8(text + pos, 0);
+    fz_check(text, pos, 100);
+    it = it + 1;
+}
+
+sys_write(1, "update_efi: ok\n", 15);
+sys_exit(0);
