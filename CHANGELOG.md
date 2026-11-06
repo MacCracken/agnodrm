@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`tests/tcyr/test_powercut.tcyr`: a power cut at every durable write of the A/B slot flows.** 1.7.2's last review round
+  used a scratch harness: a hand-patched copy of `update.cyr` with 12 numbered cut points, and a table read by eye. This
+  makes it permanent, and mechanical. Each flow runs whole, then in a child that dies at write 1, 2, 3, and so on, and a
+  firmware model boots the host after each cut. The test then asserts what `docs/architecture/001-slot-write-order.md`
+  promises: the boot reached a whole image the state explains, a confirm names only what booted, a rollback settles the
+  host, and running the call again finishes it or changes nothing. New since the scratch run: every recovery is cut at
+  each of its own writes too, each flow's end state is checked independently of the code under test, and hosts with no
+  EFI, a failing `--bootnext` and a first-ever update are walked. 34 flows from 14 starting points, 101 cuts, 10 with the
+  slot half-written, 290 second cuts, 7,729 assertions, 2 to 9 seconds. No defect in the flows turned up.
+- **Mutation-tested before it was trusted.** The first run passed everything, so 52 mutants of `src/update.cyr` went
+  through it, among them the state-first rollback (F-15), `dd` before the record clears (F-16) and 1.7.1's rollback flag.
+  That found the test's own blind spot: the uninterrupted run was the reference, so a flow that ended wrong agreed with
+  itself. With the end-state checks added, the suite catches 51. The survivor swaps the marker and the firmware going
+  forward, which is safe in the model. This is a model of the boot order, not a power cut.
+- `test_integration`: a real move clears a boot count no trial explains. Only an older or edited state file can hold one,
+  so no flow reached that line, and nothing tested it.
+
+### Changed
+
+- **`_update_cut`, a compile-time seam.** `src/update.cyr` calls it at every durable write, under
+  `#define AGNODRM_POWERCUT`, and only the new test sets that and defines the function, so nothing in `src/` or a bundle can
+  stop a flow. Every binary is byte-identical to 1.7.2's: `src/main.cyr` and the API probe, which calls every public fn, on
+  x86_64, aarch64 and agnos. The bundle's text gains the guarded calls, and nothing else changes for a consumer.
+- `scripts/audit.sh` gate 7 reads every test file. It had only ever seen one, so its count named the first file alone, and
+  its `passed, 0 failed` grep matched if any file passed. A failing file did already fail the gate, through `cyrius test`'s
+  exit status, so no failure was hidden.
+
 ## [1.7.2] — 2026-11-05
 
 **A full P(-1) audit: 46 findings, all repaired.** 4 HIGH, 23 MEDIUM and 19 LOW, from independent reviews of every module,

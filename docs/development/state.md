@@ -54,7 +54,8 @@ Per-module public-fn arity is tracked in [`api-surface-1.0.snapshot`](api-surfac
 
 | Category | Count | Where |
 |---|---|---|
-| Integration tests passed | **1,606 / 1,606** | `cyrius test`; also under the poison allocator, on cyrius 6.6.10, 6.6.20 and 6.7.9, and under `qemu-aarch64`, 1,607 there. 1.7.2 added the core-hardening, slot-lifecycle, version, boot-tree, journal-io, firewall and fuse-ops groups (475 → 1,606). Mutation: 164 of 166 reverted repairs fail the suite. |
+| Integration tests passed | **1,609 / 1,609** | `tests/tcyr/test_integration.tcyr`; also under the poison allocator, on cyrius 6.6.10, 6.6.20 and 6.7.9, and under `qemu-aarch64`, 1,610 there. 1.7.2 added the core-hardening, slot-lifecycle, version, boot-tree, journal-io, firewall and fuse-ops groups (475 → 1,606). Mutation: 164 of 166 reverted repairs fail the suite. |
+| Power-cut walk | **7,729 / 7,729** | `tests/tcyr/test_powercut.tcyr`, unreleased: 34 flows from 14 starting points, 101 cuts, 10 of them with the slot half-written, and 290 second cuts during recovery. Under the poison allocator, on cyrius 6.6.10, 6.6.20 and 6.7.9, and under `qemu-aarch64`. Catches 51 of 52 mutants of `src/update.cyr` with `test_integration`; the survivor is equivalent |
 | Fuzz harnesses | 8 | `fuzz/fuse_parse.fcyr`, `fuzz/journald_filter.fcyr`, `fuzz/bootloader_cmdline.fcyr`, `fuzz/bootloader_entries.fcyr` (the BLS entry parser, name filter and comparator, and the bootctl parser), and, new at 1.7.2 with inputs ending against unmapped memory, `fuzz/udev_parse.fcyr`, `fuzz/update_state.fcyr`, `fuzz/journald_json.fcyr` and `fuzz/netns_render.fcyr` |
 | Benchmarks | 22 (7 groups) | `tests/bcyr/bench_all.bcyr`. Since 1.6.2 it records through the stdlib's `bench_batch_start` / `bench_batch_stop` with 8-aligned inputs. Since 1.7.2 it pins the hash seed, so hashmap rows compare with each other only from there |
 

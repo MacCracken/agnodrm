@@ -1,0 +1,917 @@
+# test_powercut.tcyr — a power cut at every durable write of the A/B slot flows.
+#
+# Runs the table in docs/architecture/001-slot-write-order.md rather than trusting it. Each
+# flow runs once whole, to learn what finishing looks like and how many writes it takes,
+# then again in a forked child that dies at write 1, 2, 3, ... until one finishes. The
+# counter is `_update_cut` below, which src/update.cyr calls at every durable write under
+# AGNODRM_POWERCUT, so a write added to a flow is cut here without changing this file, and
+# the pinned count fails until it is walked.
+#
+# After each cut the firmware model boots the host: BootNext, spent by the boot that uses
+# it, then the marker argonaut reads, then BootOrder, which is slot A. From that one world
+# this asks what the rule in that document promises:
+#
+#   - the boot reached a whole image, one the state can explain;
+#   - a boot can confirm only what actually booted, and a count can only rise on a trial;
+#   - update_rollback settles the host on a good slot, or says there is nothing to undo;
+#   - running the interrupted call again finishes it, or refuses and changes nothing;
+#   - both of those survive a second cut, at each of their own writes.
+#
+# This models the boot order. It is not a power cut: it assumes fsync holds, and no real
+# firmware or block device is involved. efibootmgr, argonaut and sha256sum are stubs under
+# the fixture root that use only /bin/sh builtins. dd is the real /usr/bin/dd, on a file.
+#
+# Run: cyrius test tests/tcyr/test_powercut.tcyr
+
+#define LINUX
+#define AGNODRM_POWERCUT
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/hashmap.cyr"
+include "lib/process.cyr"
+include "lib/fs.cyr"
+include "lib/ct.cyr"
+include "lib/slice.cyr"
+include "lib/fnptr.cyr"
+include "lib/assert.cyr"
+
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/update.cyr"
+
+# The cut. It lives here, not beside its callers, so that nothing in src/ or the bundles can
+# stop a flow: without this test there is no such function, and no call to one.
+enum PcCut { PC_CUT_STATUS = 77; }
+var _pc_cut_after = 0;
+
+fn _update_cut(): i64 {
+    if (_pc_cut_after == 0) { return 0; }
+    _pc_cut_after = _pc_cut_after - 1;
+    if (_pc_cut_after == 0) { sys_exit(PC_CUT_STATUS); }
+    return 0;
+}
+
+enum PcOp {
+    PC_APPLY = 1;
+    PC_SWITCH_A = 2;
+    PC_SWITCH_B = 3;
+    PC_ROLLBACK = 4;
+    PC_CONFIRM = 5;
+}
+
+# Where a flow starts. Each is a host the library can really be left in.
+enum PcWorld {
+    PCW_CLEAN = 1;      # running A, nothing outstanding, no marker yet
+    PCW_FRESH = 2;      # the same with no state file: the first update ever
+    PCW_OUT = 3;        # a switch to an older image, this boot, BootNext armed
+    PCW_MARKER = 4;     # the same with no BootNext
+    PCW_STALE = 5;      # nothing on record, and a BootNext left aimed at the target
+    PCW_FROM_B = 6;     # running B, with A the slot to overwrite
+    PCW_READY = 7;      # an image written to B and pending, nothing switched
+    PCW_READY_BN = 8;   # the same with a BootNext left on A
+    PCW_TRIAL = 9;      # the image on B booted, one boot counted
+    PCW_ARMED = 10;     # switched this boot, BootNext armed, not rebooted
+    PCW_ARMED_1 = 11;   # the same with a boot already counted
+    PCW_FALLBACK = 12;  # state on B, but the firmware fell back to A
+    PCW_CONFIRMED = 13; # the image on B confirmed, A still rollback-able
+    PCW_CUT_BACK = 14;  # a rollback cut after its marker, and the image booted anyway
+}
+
+enum PcOpts {
+    PCO_NO_EFI = 1;     # no firmware to speak to
+    PCO_LIST_FAIL = 2;  # efibootmgr cannot list, on an EFI host
+    PCO_SET_FAIL = 4;   # efibootmgr lists, and refuses --bootnext
+}
+
+enum PcLimits {
+    PC_FILES = 8;
+    PC_MAX_WRITES = 16;    # a flow that needs more is a runaway, not a flow
+    PC_CRASHED = 255;      # the child died of a signal
+}
+
+var PC_STATE = "/var/lib/agnos/update-state.json";
+var PC_MARKER = "/var/lib/agnos/next-slot";
+var PC_IMAGE = "/var/lib/agnos/updates/image.img";
+var PC_BOOTNEXT = "/fw/bootnext";
+var PC_LIST_FAIL = "/fw/list-fail";
+var PC_SET_FAIL = "/fw/set-fail";
+var PC_CMDLINE = "/proc/cmdline";
+var PC_SLOT_A = "/slot_a";
+var PC_SLOT_B = "/slot_b";
+
+var PC_OLD_VER = "2026.1.1";
+var PC_NEW_VER = "2026.2.1";
+var PC_OLDER_VER = "2026.1.15";
+var PC_TORN = "HALF";
+# sha256 of "NEWIMAGE", the fixture image's bytes.
+var PC_SHA = "a1fd16012676b0b9aab1acc3efa9f545365649533f409630ed617d6fd3641b9a";
+
+var _pc_root = 0;
+var _pc_cfg = 0;
+var _pc_paths = 0;       # the files that make up a world
+var _pc_snapshot = 0;    # their text, as it stood after the boot that followed a cut
+
+var _pc_running = 0;     # the slot a world starts on
+var _pc_start = 0;       # the same, for the flow under way
+var _pc_start_boots = 0; # the boots counted when it began
+var _pc_target_text = 0; # what the slot update_apply writes held before it
+
+var _pc_end_state = 0;   # how the uninterrupted flow left the host
+var _pc_end_marker = 0;
+var _pc_end_target = 0;
+
+var _pc_name = 0;        # the row being walked, for a failure's name
+var _pc_cut_n = 0;
+var _pc_is_torn = 0;
+var _pc_second = 0;
+var _pc_rows = 0;
+var _pc_torn_rows = 0;
+var _pc_second_rows = 0;
+
+# ================================================================
+# Reading and writing the world
+# ================================================================
+
+fn _pc_ok(cond, what) {
+    if (cond == 1) { return assert(1, what); }
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, _pc_name);
+    str_builder_add_cstr(sb, " cut ");
+    str_builder_add_int(sb, _pc_cut_n);
+    if (_pc_is_torn == 1) { str_builder_add_cstr(sb, " torn"); }
+    if (_pc_second != 0) {
+        str_builder_add_cstr(sb, " then cut ");
+        str_builder_add_int(sb, _pc_second);
+    }
+    str_builder_add_cstr(sb, ": ");
+    str_builder_add_cstr(sb, what);
+    return assert(0, str_data(str_builder_build(sb)));
+}
+
+# The text of a file under the root, or 0 if it is missing or empty.
+fn _pc_get(rel) {
+    var buf = alloc(512);
+    var n = file_read_all(_update_path(rel), buf, 511);
+    if (n <= 0) { return 0; }
+    store8(buf + n, 0);
+    return buf;
+}
+
+fn _pc_rm(rel) { return xunlink(_update_path(rel)); }
+
+fn _pc_put(rel, text) {
+    var path = _update_path(rel);
+    xunlink(path);
+    return file_write_all(path, text, strlen(text));
+}
+
+fn _pc_same(a, b) {
+    if (a == 0) { return b == 0; }
+    if (b == 0) { return 0; }
+    return streq(a, b);
+}
+
+fn _pc_state() {
+    var t, v = update_load_state(_update_path(PC_STATE));
+    if (is_ok(t) == 1) { return v; }
+    _pc_ok(drm_syserr_errno(v) == ENOENT, "the state file reads, or is not there");
+    return 0;
+}
+
+fn _pc_slot_path(slot) {
+    if (slot == SLOT_A) { return PC_SLOT_A; }
+    return PC_SLOT_B;
+}
+
+fn _pc_slot_text(slot) { return _pc_get(_pc_slot_path(slot)); }
+
+fn _pc_marker_slot() {
+    var m = _pc_get(PC_MARKER);
+    if (m == 0) { return 0; }
+    if (streq(m, "a") == 1) { return SLOT_A; }
+    if (streq(m, "b") == 1) { return SLOT_B; }
+    return 0;
+}
+
+# The boot's kernel command line names the slot it reached.
+fn _pc_boots_as(slot) {
+    _pc_running = slot;
+    if (slot == SLOT_A) { return _pc_put(PC_CMDLINE, "root=/dev/x ro agnos.slot=a\n"); }
+    return _pc_put(PC_CMDLINE, "root=/dev/x ro agnos.slot=b\n");
+}
+
+# The firmware's choice: BootNext, spent by this boot, then the marker, then BootOrder.
+fn _pc_boot() {
+    var slot = 0;
+    var next = _pc_get(PC_BOOTNEXT);
+    if (next != 0) {
+        if (streq(next, "0001") == 1) { slot = SLOT_A; }
+        if (streq(next, "0002") == 1) { slot = SLOT_B; }
+        _pc_rm(PC_BOOTNEXT);
+    }
+    if (slot == 0) { slot = _pc_marker_slot(); }
+    if (slot == 0) { slot = SLOT_A; }
+    _pc_boots_as(slot);
+    return slot;
+}
+
+fn _pc_save_world() {
+    var i = 0;
+    while (i < PC_FILES) {
+        store64(_pc_snapshot + i * 8, _pc_get(vec_get(_pc_paths, i)));
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _pc_load_world() {
+    var i = 0;
+    while (i < PC_FILES) {
+        var rel = vec_get(_pc_paths, i);
+        var text = load64(_pc_snapshot + i * 8);
+        if (text == 0) {
+            _pc_rm(rel);
+        } else {
+            _pc_put(rel, text);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _pc_unchanged() {
+    var i = 0;
+    while (i < PC_FILES) {
+        var text = load64(_pc_snapshot + i * 8);
+        if (_pc_same(_pc_get(vec_get(_pc_paths, i)), text) != 1) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
+fn _pc_repair() {
+    _pc_rm(PC_LIST_FAIL);
+    _pc_rm(PC_SET_FAIL);
+    return 0;
+}
+
+# ================================================================
+# Fixture
+# ================================================================
+
+fn _pc_tool(rel, text) {
+    var path = _update_path(rel);
+    xunlink(path);
+    var fd = file_create_exclusive(path, 0x1ED);  # mode 0755
+    sys_write(fd, text, strlen(text));
+    sys_close(fd);
+    return 0;
+}
+
+# Runs with the empty env exec_vec passes, so nothing but sh builtins.
+fn _pc_efibootmgr() {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "#!/bin/sh\nF=");
+    str_builder_add_cstr(sb, _pc_root);
+    str_builder_add_cstr(sb, "/fw\n");
+    str_builder_add_cstr(sb, "if [ $# = 0 ] && [ -e $F/list-fail ]; then exit 1; fi\n");
+    str_builder_add_cstr(sb, "if [ \"$1\" = --bootnext ]; then\n");
+    str_builder_add_cstr(sb, "  [ -e $F/set-fail ] && exit 1\n");
+    str_builder_add_cstr(sb, "  printf %s \"$2\" > $F/bootnext\n  exit 0\nfi\n");
+    str_builder_add_cstr(sb, "if [ \"$1\" = --delete-bootnext ]; then : > $F/bootnext; exit 0; fi\n");
+    str_builder_add_cstr(sb, "if [ -s $F/bootnext ]; then read -r n < $F/bootnext; echo \"BootNext: $n\"; fi\n");
+    str_builder_add_cstr(sb, "echo 'BootCurrent: 0001'\n");
+    str_builder_add_cstr(sb, "printf 'Boot0001* AGNOS-A\\tHD(1)\\nBoot0002* AGNOS-B\\tHD(2)\\n'\n");
+    return str_data(str_builder_build(sb));
+}
+
+fn _pc_digest_tool() {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "#!/bin/sh\necho \"");
+    str_builder_add_cstr(sb, PC_SHA);
+    str_builder_add_cstr(sb, "  $1\"\n");
+    return str_data(str_builder_build(sb));
+}
+
+fn _pc_firmware(opts) {
+    _pc_rm("/usr/bin/efibootmgr");
+    xrmdir(_update_path("/sys/firmware/efi"));
+    if ((opts & PCO_NO_EFI) != 0) { return 0; }
+    xmkdir(_update_path("/sys/firmware/efi"), 0x1C0);
+    return _pc_tool("/usr/bin/efibootmgr", _pc_efibootmgr());
+}
+
+fn _pc_fixture_dirs() {
+    var dirs = vec_new();
+    vec_push(dirs, "/fw");
+    vec_push(dirs, "/proc");
+    vec_push(dirs, "/sys");
+    vec_push(dirs, "/sys/firmware");
+    vec_push(dirs, "/usr");
+    vec_push(dirs, "/usr/bin");
+    vec_push(dirs, "/var");
+    vec_push(dirs, "/var/lib");
+    vec_push(dirs, "/var/lib/agnos");
+    vec_push(dirs, "/var/lib/agnos/updates");
+    return dirs;
+}
+
+fn _pc_fixture_up() {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "/tmp/agnodrm-powercut-");
+    str_builder_add_int(sb, sys_getpid());
+    _pc_root = str_data(str_builder_build(sb));
+    _update_root = _pc_root;
+    assert_eq(xmkdir(_pc_root, 0x1C0), 0, "pc_fixture_root");
+
+    var dirs = _pc_fixture_dirs();
+    var i = 0;
+    while (i < vec_len(dirs)) {
+        assert_eq(xmkdir(_update_path(vec_get(dirs, i)), 0x1C0), 0, "pc_fixture_dir");
+        i = i + 1;
+    }
+
+    _pc_tool("/usr/bin/argonaut", "#!/bin/sh\nexit 0\n");
+    _pc_tool("/usr/bin/sha256sum", _pc_digest_tool());
+    _pc_put(PC_IMAGE, "NEWIMAGE");
+
+    _pc_paths = vec_new();
+    vec_push(_pc_paths, PC_STATE);
+    vec_push(_pc_paths, PC_MARKER);
+    vec_push(_pc_paths, PC_SLOT_A);
+    vec_push(_pc_paths, PC_SLOT_B);
+    vec_push(_pc_paths, PC_CMDLINE);
+    vec_push(_pc_paths, PC_BOOTNEXT);
+    vec_push(_pc_paths, PC_LIST_FAIL);
+    vec_push(_pc_paths, PC_SET_FAIL);
+    _pc_snapshot = alloc(PC_FILES * 8);
+
+    _pc_cfg = update_config_new();
+    update_config_set_state_file(_pc_cfg, _update_path(PC_STATE));
+    update_config_set_slot_a(_pc_cfg, _update_path(PC_SLOT_A));
+    update_config_set_slot_b(_pc_cfg, _update_path(PC_SLOT_B));
+    return 0;
+}
+
+fn _pc_fixture_down() {
+    var i = 0;
+    while (i < PC_FILES) {
+        _pc_rm(vec_get(_pc_paths, i));
+        i = i + 1;
+    }
+    _pc_rm(PC_IMAGE);
+    _pc_rm("/usr/bin/argonaut");
+    _pc_rm("/usr/bin/sha256sum");
+    _pc_firmware(PCO_NO_EFI);
+    var dirs = _pc_fixture_dirs();
+    i = vec_len(dirs) - 1;
+    while (i >= 0) {
+        xrmdir(_update_path(vec_get(dirs, i)));
+        i = i - 1;
+    }
+    xrmdir(_pc_root);
+    _update_root = 0;
+    return 0;
+}
+
+fn _pc_seed(slot, ver, pending, rollback, boots) {
+    var s = update_state_new(slot, ver);
+    update_state_set_pending(s, pending);
+    update_state_set_rollback(s, rollback);
+    update_state_set_boot_count(s, boots);
+    var t, v = update_save_state(s, _update_path(PC_STATE));
+    return is_err_result(t);
+}
+
+# An image on B, on trial: `boots` counted, `marker` the slot the marker names.
+fn _pc_seed_trial(boots, marker) {
+    _pc_seed(SLOT_B, PC_OLD_VER, PC_NEW_VER, 1, boots);
+    _pc_put(PC_SLOT_B, "NEWIMAGE");
+    return _pc_put(PC_MARKER, marker);
+}
+
+fn _pc_setup_world(world) {
+    if (world == PCW_CLEAN) { return _pc_seed(SLOT_A, PC_OLD_VER, 0, 0, 0); }
+    if (world == PCW_FRESH) { return 0; }
+    if (world == PCW_OUT) {
+        _pc_seed(SLOT_B, PC_OLD_VER, PC_OLDER_VER, 1, 0);
+        _pc_put(PC_SLOT_B, "IMAGE-Y");
+        _pc_put(PC_MARKER, "b");
+        return _pc_put(PC_BOOTNEXT, "0002");
+    }
+    if (world == PCW_MARKER) {
+        _pc_seed(SLOT_B, PC_OLD_VER, PC_OLDER_VER, 1, 0);
+        _pc_put(PC_SLOT_B, "IMAGE-Y");
+        return _pc_put(PC_MARKER, "b");
+    }
+    if (world == PCW_STALE) {
+        _pc_seed(SLOT_A, PC_OLD_VER, 0, 0, 0);
+        _pc_put(PC_MARKER, "a");
+        return _pc_put(PC_BOOTNEXT, "0002");
+    }
+    if (world == PCW_FROM_B) {
+        _pc_seed(SLOT_B, PC_OLD_VER, 0, 0, 0);
+        _pc_put(PC_SLOT_A, "OLD-A");
+        _pc_put(PC_SLOT_B, "GOOD-B");
+        return _pc_boots_as(SLOT_B);
+    }
+    if (world == PCW_READY) {
+        _pc_seed(SLOT_A, PC_OLD_VER, PC_NEW_VER, 0, 0);
+        return _pc_put(PC_SLOT_B, "NEWIMAGE");
+    }
+    if (world == PCW_READY_BN) {
+        _pc_seed(SLOT_A, PC_OLD_VER, PC_NEW_VER, 0, 0);
+        _pc_put(PC_SLOT_B, "NEWIMAGE");
+        return _pc_put(PC_BOOTNEXT, "0001");
+    }
+    if (world == PCW_TRIAL) {
+        _pc_seed_trial(1, "b");
+        return _pc_boots_as(SLOT_B);
+    }
+    if (world == PCW_ARMED) {
+        _pc_seed_trial(0, "b");
+        return _pc_put(PC_BOOTNEXT, "0002");
+    }
+    if (world == PCW_ARMED_1) {
+        _pc_seed_trial(1, "b");
+        return _pc_put(PC_BOOTNEXT, "0002");
+    }
+    if (world == PCW_FALLBACK) { return _pc_seed_trial(1, "b"); }
+    if (world == PCW_CONFIRMED) {
+        var s = update_state_new(SLOT_B, PC_NEW_VER);
+        update_state_set_rollback(s, 1);
+        update_state_set_previous(s, PC_OLD_VER);
+        update_save_state(s, _update_path(PC_STATE));
+        _pc_put(PC_SLOT_B, "NEWIMAGE");
+        _pc_put(PC_MARKER, "b");
+        return _pc_boots_as(SLOT_B);
+    }
+    if (world == PCW_CUT_BACK) {
+        _pc_seed_trial(1, "a");
+        return _pc_boots_as(SLOT_B);
+    }
+    return 0;
+}
+
+fn _pc_setup(world, opts) {
+    _pc_rm(PC_STATE);
+    _pc_rm(PC_MARKER);
+    _pc_rm(PC_BOOTNEXT);
+    _pc_repair();
+    _pc_put(PC_SLOT_A, "GOOD-A");
+    _pc_put(PC_SLOT_B, "OLD-B");
+    _pc_boots_as(SLOT_A);
+    _pc_setup_world(world);
+    if ((opts & PCO_LIST_FAIL) != 0) { _pc_put(PC_LIST_FAIL, "1"); }
+    if ((opts & PCO_SET_FAIL) != 0) { _pc_put(PC_SET_FAIL, "1"); }
+    _pc_start = _pc_running;
+    _pc_start_boots = 0;
+    var st = _pc_state();
+    if (st != 0) { _pc_start_boots = update_state_boot_count(st); }
+    _pc_target_text = _pc_slot_text(update_other_slot(_pc_start));
+    return 0;
+}
+
+# ================================================================
+# Running a flow
+# ================================================================
+
+fn _pc_manifest() {
+    var m = update_manifest_new(PC_NEW_VER, CHAN_STABLE, "2026-02-01");
+    vec_push(update_manifest_files(m), update_file_new(_update_path(PC_IMAGE), PC_SHA, 8));
+    return m;
+}
+
+# 1 if the flow returned Err.
+fn _pc_do(op) {
+    if (op == PC_APPLY) {
+        var at, av = update_apply(_pc_cfg, _pc_manifest());
+        return is_err_result(at);
+    }
+    if (op == PC_SWITCH_A) {
+        var st, sv = update_switch_slot(_pc_cfg, SLOT_A);
+        return is_err_result(st);
+    }
+    if (op == PC_SWITCH_B) {
+        var bt, bv = update_switch_slot(_pc_cfg, SLOT_B);
+        return is_err_result(bt);
+    }
+    if (op == PC_ROLLBACK) {
+        var rt, rv = update_rollback(_pc_cfg);
+        return is_err_result(rt);
+    }
+    var ct, cv = update_mark_boot_successful(_pc_cfg);
+    return is_err_result(ct);
+}
+
+# Run a flow in a child that dies at its `cut`th write, 0 for none, as one boot's worth of
+# work: nothing in this process learns anything except from what reached the disk.
+# Returns 0 for Ok, 1 for Err, PC_CUT_STATUS if the cut landed.
+fn _pc_run(op, cut) {
+    var pid = sys_fork();
+    if (pid == 0) {
+        sys_dup2(sys_open("/dev/null", O_WRONLY, 0), 2);  # dd reports on stderr
+        _pc_cut_after = cut;
+        sys_exit(_pc_do(op));
+    }
+    _pc_ok(pid > 0, "the flow forks");
+    var status = 0;
+    sys_waitpid(pid, &status, 0);
+    var code = PC_CRASHED;
+    if ((status & 0x7F) == 0) { code = (status >> 8) & 0xFF; }
+    var known = code == 0;
+    if (code == 1) { known = 1; }
+    if (code == PC_CUT_STATUS) { known = 1; }
+    _pc_ok(known, "the flow ends, or is cut, and does not crash");
+    return code;
+}
+
+# ================================================================
+# What must hold
+# ================================================================
+
+fn _pc_trusted(text) {
+    if (text == 0) { return 0; }
+    return strstr(text, "GOOD-") == 0;
+}
+
+fn _pc_version_of(text) {
+    if (text == 0) { return 0; }
+    if (_pc_trusted(text) == 1) { return PC_OLD_VER; }
+    if (streq(text, "NEWIMAGE") == 1) { return PC_NEW_VER; }
+    if (streq(text, "IMAGE-Y") == 1) { return PC_OLDER_VER; }
+    return 0;
+}
+
+# 1 if `text` may be what booted from `slot`: a known-good image, the image on trial
+# there, or one confirmed there. Anything else booted with no record of it.
+fn _pc_boot_explained(st, slot, text) {
+    if (_pc_trusted(text) == 1) { return 1; }
+    if (st == 0) { return 0; }
+    if (update_state_slot(st) != slot) { return 0; }
+    var ver = _pc_version_of(text);
+    if (ver == 0) { return 0; }
+    var pending = update_state_pending(st);
+    if (pending == 0) { return streq(update_state_version(st), ver); }
+    if (update_state_rollback_available(st) != 1) { return 0; }
+    return streq(pending, ver);
+}
+
+# What every boot must find, however it got here.
+fn _pc_check_boot(booted) {
+    var text = _pc_slot_text(booted);
+    var st = _pc_state();
+    _pc_ok(_pc_same(text, PC_TORN) == 0, "the boot never reaches a half-written slot");
+    _pc_ok(_pc_boot_explained(st, booted, text), "the state explains the image that booted");
+    if (st == 0) { return 0; }
+    if (update_state_rollback_available(st) == 1) {
+        var behind = _pc_slot_text(update_other_slot(update_state_slot(st)));
+        _pc_ok(_pc_trusted(behind), "a rollback record names a slot holding a good image");
+    }
+    return 0;
+}
+
+# The state, the marker, the next boot and the image agree, with nothing left to undo.
+fn _pc_check_settled() {
+    var st = _pc_state();
+    if (st == 0) { return _pc_check_boot(_pc_boot()); }
+    var slot = update_state_slot(st);
+    _pc_ok(update_state_rollback_available(st) == 0, "settled: no rollback owing");
+    _pc_ok(update_state_pending(st) == 0, "settled: nothing pending");
+    _pc_ok(update_state_boot_count(st) == 0, "settled: no boots counted");
+    _pc_ok(_pc_marker_slot() == slot, "settled: the marker agrees with the state");
+    var booted = _pc_boot();
+    _pc_ok(booted == slot, "settled: the next boot is the slot the state names");
+    _pc_check_boot(booted);
+    var ver = update_state_version(st);
+    if (strlen(ver) != 0) {
+        _pc_ok(_pc_same(ver, _pc_version_of(_pc_slot_text(slot))), "settled: the version is the image's");
+    }
+    return 0;
+}
+
+# A boot counts itself, then confirms. Only a trial counts, and a confirm that succeeds
+# must have seen the image boot.
+fn _pc_check_confirm(booted) {
+    var st = _pc_state();
+    if (st == 0) { return 0; }
+    var trial = _update_on_trial(st);
+    var boots = update_state_boot_count(st);
+    var at, av = update_mark_boot_attempt(_pc_cfg);
+    _pc_ok(is_err_result(at) == 0, "a boot can always count itself");
+    var counted = _pc_state();
+    _pc_ok(update_state_boot_count(counted) == boots + trial, "only a trial counts boots");
+    _pc_ok(update_needs_rollback(counted, 1) == trial, "a counted trial asks for a rollback");
+
+    var before = _pc_get(PC_STATE);
+    var ct, cv = update_mark_boot_successful(_pc_cfg);
+    if (is_err_result(ct) == 1) {
+        _pc_ok(trial, "a confirm refuses only a trial");
+        _pc_ok(update_state_slot(counted) != booted, "a confirm refuses only a boot it cannot show");
+        _pc_ok(_pc_same(_pc_get(PC_STATE), before), "a refused confirm keeps the record");
+        return 0;
+    }
+    if (trial == 0) {
+        _pc_ok(_pc_same(_pc_get(PC_STATE), before), "with no trial a confirm writes nothing");
+        return 0;
+    }
+    var done = _pc_state();
+    _pc_ok(update_state_slot(done) == booted, "a confirm names the slot that booted");
+    _pc_ok(update_state_pending(done) == 0, "a confirm ends the trial");
+    _pc_ok(_pc_marker_slot() == booted, "the marker stays with a confirmed image");
+    var next = _pc_boot();
+    _pc_ok(next == booted, "a confirmed image boots again");
+    return _pc_check_boot(next);
+}
+
+# update_rollback settles the host, and refuses only with nothing to undo. Firmware that
+# cannot answer refuses, keeps the record, and the same call finishes once it can.
+fn _pc_check_rollback(opts) {
+    var st = _pc_state();
+    var err = _pc_run(PC_ROLLBACK, 0);
+    if (st == 0) {
+        _pc_ok(err == 1, "with no state there is nothing to roll back");
+        return _pc_check_settled();
+    }
+    var record = update_state_rollback_available(st);
+    var owed = record;
+    if (update_state_pending(st) != 0) { owed = 1; }
+    if (err == 1) {
+        if ((opts & PCO_LIST_FAIL) != 0) {
+            if (record == 1) {
+                var kept = _pc_state();
+                _pc_ok(update_state_rollback_available(kept) == 1, "a refused rollback keeps the record");
+                _pc_repair();
+                err = _pc_run(PC_ROLLBACK, 0);
+            }
+        }
+    }
+    _pc_ok(err != owed, "a rollback runs exactly when there is something to undo");
+    return _pc_check_settled();
+}
+
+# The interrupted call, run again from where the cut left the host. It finishes as the
+# uninterrupted one did, or refuses and changes nothing. A cut that moved the host is
+# another call on another host, so only the boot is held to it.
+fn _pc_check_retry(op, opts, booted) {
+    var err = _pc_run(op, 0);
+    if (err == 1) {
+        _pc_ok(_pc_unchanged(), "a refusal changes nothing");
+        if ((opts & PCO_LIST_FAIL) == 0) { return 0; }
+        _pc_repair();
+        err = _pc_run(op, 0);
+        if (err == 1) { return 0; }
+    }
+    if (booted == _pc_start) {
+        _pc_ok(_pc_same(_pc_get(PC_STATE), _pc_end_state), "running it again ends where the flow ends");
+        _pc_ok(_pc_same(_pc_get(PC_MARKER), _pc_end_marker), "running it again aims the marker the same");
+        var target = _pc_slot_text(update_other_slot(_pc_start));
+        _pc_ok(_pc_same(target, _pc_end_target), "running it again leaves the slot the same");
+    }
+    return _pc_check_boot(_pc_boot());
+}
+
+# What the uninterrupted flow must leave. The rows below compare against that run, so
+# without this a flow that ends wrong would agree with itself.
+fn _pc_check_whole(op) {
+    var st = _pc_state();
+    if (op == PC_ROLLBACK) { return _pc_check_settled(); }
+    if (st == 0) { return _pc_ok(0, "the flow leaves a state"); }
+    var booted = _pc_boot();
+    _pc_check_boot(booted);
+    _pc_ok(_pc_marker_slot() == booted, "whole: the marker and the next boot agree");
+    _pc_ok(update_state_boot_count(st) == 0, "whole: no boots counted");
+    if (op == PC_APPLY) {
+        var target = _pc_slot_text(update_other_slot(_pc_start));
+        _pc_ok(booted == _pc_start, "whole: an update stays on the running slot");
+        _pc_ok(update_state_slot(st) == _pc_start, "whole: an update leaves the state on it");
+        _pc_ok(_pc_same(update_state_pending(st), PC_NEW_VER), "whole: an update leaves the image pending");
+        _pc_ok(update_state_rollback_available(st) == 0, "whole: an update records no rollback");
+        return _pc_ok(_pc_same(target, "NEWIMAGE"), "whole: an update writes the slot");
+    }
+    if (op == PC_SWITCH_B) {
+        _pc_ok(booted == SLOT_B, "whole: a switch boots the image");
+        _pc_ok(update_state_slot(st) == SLOT_B, "whole: a switch moves the state");
+        _pc_ok(_pc_same(update_state_pending(st), PC_NEW_VER), "whole: a switch keeps the image pending");
+        return _pc_ok(update_state_rollback_available(st) == 1, "whole: a switch records the good slot");
+    }
+    if (op == PC_SWITCH_A) {
+        var want = PC_NEW_VER;
+        if (_pc_start != SLOT_A) { want = 0; }
+        if (_pc_start_boots != 0) { want = 0; }
+        _pc_ok(booted == SLOT_A, "whole: switching back boots the good slot");
+        _pc_ok(update_state_slot(st) == SLOT_A, "whole: switching back moves the state");
+        _pc_ok(_pc_same(update_state_pending(st), want), "whole: only an image that never booted stays pending");
+        return _pc_ok(update_state_rollback_available(st) == 0, "whole: switching back spends the record");
+    }
+    _pc_ok(booted == _pc_start, "whole: a confirm stays on the slot that booted");
+    _pc_ok(update_state_slot(st) == _pc_start, "whole: a confirm leaves the state on it");
+    _pc_ok(update_state_pending(st) == 0, "whole: a confirm ends the trial");
+    _pc_ok(_pc_same(update_state_version(st), PC_NEW_VER), "whole: a confirm makes the image current");
+    _pc_ok(_pc_same(update_state_previous(st), PC_OLD_VER), "whole: a confirm remembers the old version");
+    return _pc_ok(update_state_rollback_available(st) == 1, "whole: a confirm keeps the way back");
+}
+
+# Cut `op` at each of its writes, from the world the first cut left, then finish with a
+# rollback. Stopping a recovery must be as safe as stopping the flow.
+fn _pc_check_second_cut(op) {
+    var m = 1;
+    while (m <= PC_MAX_WRITES) {
+        _pc_load_world();
+        _pc_second = m;
+        var rc = _pc_run(op, m);
+        if (rc != PC_CUT_STATUS) { break; }
+        _pc_second_rows = _pc_second_rows + 1;
+        _pc_check_boot(_pc_boot());
+        _pc_repair();
+        _pc_run(PC_ROLLBACK, 0);
+        _pc_check_settled();
+        m = m + 1;
+    }
+    _pc_second = 0;
+    return 0;
+}
+
+# Everything asked of one cut, each from the same world.
+fn _pc_row(op, opts) {
+    var booted = _pc_boot();
+    _pc_check_boot(booted);
+    if (op == PC_CONFIRM) {
+        _pc_ok(booted == _pc_start, "a confirm cut short leaves the host on the image");
+    }
+    _pc_save_world();
+
+    _pc_check_confirm(booted);
+    _pc_load_world();
+    _pc_check_rollback(opts);
+    _pc_load_world();
+    if (op != PC_ROLLBACK) {
+        _pc_check_retry(op, opts, booted);
+    }
+    _pc_check_second_cut(PC_ROLLBACK);
+    if (op != PC_ROLLBACK) { _pc_check_second_cut(op); }
+
+    if (_pc_is_torn == 1) {
+        _pc_load_world();
+        var to = PC_SWITCH_A;
+        if (update_other_slot(_pc_start) == SLOT_B) { to = PC_SWITCH_B; }
+        _pc_ok(_pc_run(to, 0) == 1, "nothing switches to a half-written slot");
+        _pc_torn_rows = _pc_torn_rows + 1;
+    }
+    _pc_rows = _pc_rows + 1;
+    return 0;
+}
+
+# 1 if a cut stopped update_apply with its slot written and no record of the image: where
+# `dd` may be anywhere between its first byte and its last.
+fn _pc_dd_window(op) {
+    if (op != PC_APPLY) { return 0; }
+    var target = _pc_slot_text(update_other_slot(_pc_start));
+    if (_pc_same(target, _pc_target_text) == 1) { return 0; }
+    var st = _pc_state();
+    if (st == 0) { return 1; }
+    return _pc_same(update_state_pending(st), PC_NEW_VER) == 0;
+}
+
+# Walk one flow: whole, then cut at each write until one finishes. `want_err` is what the
+# uninterrupted call returns, and `want_writes` how many writes it makes before it does.
+fn _pc_walk(name, world, op, opts, want_err, want_writes) {
+    _pc_name = name;
+    _pc_cut_n = 0;
+    _pc_firmware(opts);
+
+    _pc_setup(world, opts);
+    var err = _pc_run(op, 0);
+    _pc_ok(err == want_err, "the uninterrupted flow returns what it should");
+    if (err == 1) {
+        if ((opts & PCO_LIST_FAIL) != 0) {
+            _pc_repair();
+            _pc_run(op, 0);
+        }
+    }
+    _pc_end_state = _pc_get(PC_STATE);
+    _pc_end_marker = _pc_get(PC_MARKER);
+    _pc_end_target = _pc_slot_text(update_other_slot(_pc_start));
+    _pc_check_whole(op);
+
+    var n = 1;
+    while (n <= PC_MAX_WRITES) {
+        _pc_cut_n = n;
+        _pc_is_torn = 0;
+        _pc_setup(world, opts);
+        var rc = _pc_run(op, n);
+        if (rc != PC_CUT_STATUS) {
+            _pc_ok(rc == want_err, "past its last write the flow returns as it did whole");
+            break;
+        }
+        var torn = _pc_dd_window(op);
+        _pc_row(op, opts);
+        if (torn == 1) {
+            _pc_is_torn = 1;
+            _pc_setup(world, opts);
+            _pc_run(op, n);
+            _pc_put(_pc_slot_path(update_other_slot(_pc_start)), PC_TORN);
+            _pc_row(op, opts);
+            _pc_is_torn = 0;
+        }
+        n = n + 1;
+    }
+    _pc_cut_n = n;
+    _pc_ok(n - 1 == want_writes, "the flow makes the writes the table walks");
+    return 0;
+}
+
+# ================================================================
+# The flows
+# ================================================================
+
+fn test_powercut_apply() {
+    println("-- update_apply: hold, clear and save, dd, save pending --");
+    _pc_walk("apply/clean", PCW_CLEAN, PC_APPLY, 0, 0, 4);
+    _pc_walk("apply/clean no-efi", PCW_CLEAN, PC_APPLY, PCO_NO_EFI, 0, 4);
+    _pc_walk("apply/first-ever", PCW_FRESH, PC_APPLY, 0, 0, 4);
+    _pc_walk("apply/first-ever no-efi", PCW_FRESH, PC_APPLY, PCO_NO_EFI, 0, 4);
+    _pc_walk("apply/bootnext-out", PCW_OUT, PC_APPLY, 0, 0, 5);
+    _pc_walk("apply/marker-out", PCW_MARKER, PC_APPLY, 0, 0, 4);
+    _pc_walk("apply/marker-out no-efi", PCW_MARKER, PC_APPLY, PCO_NO_EFI, 0, 4);
+    _pc_walk("apply/stale-bootnext", PCW_STALE, PC_APPLY, 0, 0, 4);
+    _pc_walk("apply/from-b", PCW_FROM_B, PC_APPLY, 0, 0, 4);
+    _pc_walk("apply/from-b no-efi", PCW_FROM_B, PC_APPLY, PCO_NO_EFI, 0, 4);
+    _pc_walk("apply/list-fails", PCW_CLEAN, PC_APPLY, PCO_LIST_FAIL, 1, 1);
+    _pc_walk("apply/bootnext-out list-fails", PCW_OUT, PC_APPLY, PCO_LIST_FAIL, 1, 1);
+    return 0;
+}
+
+fn test_powercut_switch() {
+    println("-- update_switch_slot forward: state, marker, firmware --");
+    _pc_walk("switch/ready", PCW_READY, PC_SWITCH_B, 0, 0, 3);
+    _pc_walk("switch/ready no-efi", PCW_READY, PC_SWITCH_B, PCO_NO_EFI, 0, 2);
+    _pc_walk("switch/stale-bootnext", PCW_READY_BN, PC_SWITCH_B, 0, 0, 3);
+    _pc_walk("switch/list-fails", PCW_READY, PC_SWITCH_B, PCO_LIST_FAIL, 0, 2);
+    _pc_walk("switch/set-fails", PCW_READY, PC_SWITCH_B, PCO_SET_FAIL, 0, 2);
+    _pc_walk("switch/stale-bootnext set-fails", PCW_READY_BN, PC_SWITCH_B, PCO_SET_FAIL, 0, 3);
+    return 0;
+}
+
+fn test_powercut_rollback() {
+    println("-- update_rollback: marker, firmware, state --");
+    _pc_walk("rollback/trial", PCW_TRIAL, PC_ROLLBACK, 0, 0, 3);
+    _pc_walk("rollback/trial no-efi", PCW_TRIAL, PC_ROLLBACK, PCO_NO_EFI, 0, 2);
+    _pc_walk("rollback/armed", PCW_ARMED, PC_ROLLBACK, 0, 0, 3);
+    _pc_walk("rollback/fallback", PCW_FALLBACK, PC_ROLLBACK, 0, 0, 3);
+    _pc_walk("rollback/fallback no-efi", PCW_FALLBACK, PC_ROLLBACK, PCO_NO_EFI, 0, 2);
+    _pc_walk("rollback/confirmed", PCW_CONFIRMED, PC_ROLLBACK, 0, 0, 3);
+    _pc_walk("rollback/armed set-fails", PCW_ARMED, PC_ROLLBACK, PCO_SET_FAIL, 0, 3);
+    _pc_walk("rollback/armed list-fails", PCW_ARMED, PC_ROLLBACK, PCO_LIST_FAIL, 1, 1);
+    _pc_walk("rollback/armed counted list-fails", PCW_ARMED_1, PC_ROLLBACK, PCO_LIST_FAIL, 1, 1);
+    _pc_walk("rollback/fallback list-fails", PCW_FALLBACK, PC_ROLLBACK, PCO_LIST_FAIL, 1, 1);
+
+    println("-- update_switch_slot back: a rollback by another name --");
+    _pc_walk("switch-back/armed", PCW_ARMED, PC_SWITCH_A, 0, 0, 3);
+    _pc_walk("switch-back/trial", PCW_TRIAL, PC_SWITCH_A, 0, 0, 3);
+    _pc_walk("switch-back/armed list-fails", PCW_ARMED, PC_SWITCH_A, PCO_LIST_FAIL, 1, 1);
+    _pc_walk("switch-back/armed counted list-fails", PCW_ARMED_1, PC_SWITCH_A, PCO_LIST_FAIL, 1, 1);
+    return 0;
+}
+
+fn test_powercut_confirm() {
+    println("-- update_mark_boot_successful: marker, state --");
+    _pc_walk("confirm/trial", PCW_TRIAL, PC_CONFIRM, 0, 0, 1);
+    _pc_walk("confirm/after-cut-rollback", PCW_CUT_BACK, PC_CONFIRM, 0, 0, 2);
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    println("================================================================");
+    println("  agnodrm power cuts — every write of the A/B slot flows");
+    println("================================================================");
+    _pc_fixture_up();
+    test_powercut_apply();
+    test_powercut_switch();
+    test_powercut_rollback();
+    test_powercut_confirm();
+    _pc_fixture_down();
+    println("");
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "  cuts walked: ");
+    str_builder_add_int(sb, _pc_rows);
+    str_builder_add_cstr(sb, " (");
+    str_builder_add_int(sb, _pc_torn_rows);
+    str_builder_add_cstr(sb, " with the slot half-written), and ");
+    str_builder_add_int(sb, _pc_second_rows);
+    str_builder_add_cstr(sb, " second cuts during recovery");
+    println_str(str_builder_build(sb));
+    var f = assert_summary();
+    if (f > 0) { return 1; }
+    return 0;
+}
+var r = main();
+sys_exit(r);

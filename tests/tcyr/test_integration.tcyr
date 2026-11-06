@@ -1903,6 +1903,17 @@ fn test_update_lifecycle() {
     assert_eq(update_state_rollback_available(st), 0, "lc_switch_back_no_rollback");
     assert_eq(update_needs_rollback(st, 0), 0, "lc_switch_back_not_armed");
 
+    # A real move clears a count even when no trial explains it. No flow leaves one, so only
+    # an older or edited state file can, and it must not count against the next image.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    var cm = update_state_new(SLOT_B, "2026.2.1");
+    update_state_set_rollback(cm, 1);
+    update_state_set_boot_count(cm, 2);
+    _lcfx_put(cm, sf);
+    var cm_t, cm_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_ok(cm_t) == 1, "lc_move_with_count_ok");
+    assert_eq(update_state_boot_count(_lcfx_load(sf)), 0, "lc_move_clears_count");
+
     # An image on trial on the running slot: the target is the one good slot left.
     _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
     _lcfx_trial(SLOT_B, sf);

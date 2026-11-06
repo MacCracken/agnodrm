@@ -43,6 +43,21 @@ how "written but never switched to" stays distinct from "on trial".
 | rollback | firmware | good slot | a fallback | run it again |
 | rollback | state | good slot | clean | none needed |
 
+## This table is a test
+
+`tests/tcyr/test_powercut.tcyr` runs these flows rather than trusting the table. Each runs once whole, which is checked
+against what it must leave behind, then again in a child that dies at write 1, 2, 3, and so on until one finishes. After
+each cut a model of the firmware boots the host (`BootNext`, then the marker, then `BootOrder`), and the test asks what the
+rule promises: the boot reached a whole image the state can explain, a confirm can only name what booted, `update_rollback`
+settles the host, and running the call again finishes it or refuses without changing anything. Then it cuts those
+recoveries too, at each of their writes. A cut in the `dd` window also runs with the slot half-written.
+
+The cuts come from a counter, `_update_cut`, that every durable write passes: the state and the marker in
+`_update_commit_tmp`, the firmware and the slot at their calls. So a new write in those places is cut with no change to the
+test, and the count pinned for each flow fails until someone has walked it here. A write that goes anywhere else needs its
+own `_update_cut`. Those calls exist only under `#define AGNODRM_POWERCUT`, and only that test sets it and defines the
+function, so no shipped build or bundle holds a way to stop mid-update, and the seam adds no bytes to a binary.
+
 ## Firmware that cannot answer
 
 `BootNext` outranks the marker, so an update must not write a slot `BootNext` may be aimed at, and a rollback must not
@@ -64,3 +79,6 @@ out: the marker has moved to the good slot, the record stays, and running the ca
   trial. Nothing in the workspace has ever run that code.
 - Nothing updates `BootOrder`, so whether a slot stays selected past its one `BootNext` depends on argonaut.
 - The table assumes `fsync` means what it says on the slot's storage.
+- The test holds the rule, not each line of the order. Going forward, the marker and the firmware can swap without a row
+  going bad: `BootNext` only takes the host onto a trial the state already records. It is a model of the boot order, not
+  a power cut, and nothing in it touches real firmware or a real block device.

@@ -59,6 +59,10 @@ enum UpdateLimits {
 # Atomic file write
 # ================================================================
 
+# Under AGNODRM_POWERCUT every durable write of the A/B flows calls _update_cut: the state
+# and the marker here, the firmware and the slot at their calls. Only
+# tests/tcyr/test_powercut.tcyr sets that and defines it, so no shipped build and no bundle
+# holds a way to stop mid-update. A new durable write anywhere else needs its own call.
 # Publish a finished temp over `dst`: set `mode` (negative leaves the temp's), flush,
 # close, rename, then flush the directory, so the rename is on disk before whatever the
 # caller does next. Consumes `fd`. Before the rename any failure removes the temp and
@@ -81,6 +85,9 @@ fn _update_commit_tmp(fd, tmppath, dst, mode): i64 {
     if (ret < 0) {
         return drm_err_io(0 - ret, "atomic update: directory fsync failed");
     }
+    #ifdef AGNODRM_POWERCUT
+    _update_cut();
+    #endif
     return Ok(0);
 }
 
@@ -1308,6 +1315,9 @@ fn update_apply(config, manifest): i64 {
 
     var dd_res_t, dd_res_v = agnodrm_run_checked(args, "dd image write failed");
     if (is_err_result(dd_res_t) == 1) { return Err(dd_res_v); }
+    #ifdef AGNODRM_POWERCUT
+    _update_cut();
+    #endif
 
     # A caller must not switch to the image with no pending record on disk.
     update_state_set_pending(state, update_manifest_version(manifest));
@@ -1447,7 +1457,12 @@ fn _update_set_bootnext(slot, hold, strict): i64 {
         vec_push(args, efibootmgr);
         vec_push(args, "--bootnext");
         vec_push(args, num);
-        if (exec_vec(args) == 0) { return Ok(0); }  # execve needs the abs path above
+        if (exec_vec(args) == 0) {  # execve needs the abs path above
+            #ifdef AGNODRM_POWERCUT
+            _update_cut();
+            #endif
+            return Ok(0);
+        }
     }
 
     # BootNext cannot point at this slot. One left by an earlier switch would send the
@@ -1459,6 +1474,9 @@ fn _update_set_bootnext(slot, hold, strict): i64 {
         if (exec_vec(clear_args) != 0) {
             if (strict == 1) { return drm_err_unknown("cannot clear the firmware's BootNext"); }
         }
+        #ifdef AGNODRM_POWERCUT
+        _update_cut();
+        #endif
     }
     return Ok(0);
 }

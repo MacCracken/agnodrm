@@ -169,8 +169,11 @@ stage 7/14 "tests"
 # warnings and the results.
 cyrius test > "$AUDIT_TMP/test.log" 2>&1 || { cat "$AUDIT_TMP/test.log"; fail "tests"; }
 check_build_log "tests" "$AUDIT_TMP/test.log"
-grep -q "^[0-9]* passed, 0 failed" "$AUDIT_TMP/test.log" || fail "test count"
-pass "$(grep -oE '^[0-9]+ passed' "$AUDIT_TMP/test.log" | head -1)"
+# One "N passed, M failed (T total)" line per file, then a line of files: read them all.
+grep -qE '^[0-9]+ passed, [0-9]+ failed \(' "$AUDIT_TMP/test.log" || fail "test count"
+grep -E '^[0-9]+ passed, [1-9][0-9]* failed' "$AUDIT_TMP/test.log" && fail "tests"
+pass "$(grep -E '^[0-9]+ passed, 0 failed \(' "$AUDIT_TMP/test.log" \
+    | awk '{ n += $1 } END { print n }') passed, $(ls tests/tcyr/*.tcyr | wc -l) files"
 
 stage 8/14 "fmt drift"
 # Gate the FORMATTER, not just the sources.
