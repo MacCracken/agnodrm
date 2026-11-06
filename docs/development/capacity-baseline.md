@@ -13,6 +13,8 @@
 
 Numbers come from `CYRIUS_STATS=1 cyrius build <src> <out>`.
 
+> **Refresh note (1.7.2, 2026-11-05, Cyrius 6.7.18).** `src/main.cyr`: fn_table 891 / 131,072, identifiers 22,881 / 8,388,608, var_table 504 / 1,048,576, fixup_table 1,319 / 1,048,576, string_data 4,527 / 2,097,152, code_size 220,536 / 67,108,864, fn_name_hash 891 / 4,096 slots (22%), max probe 4. All under the 85% gate.
+>
 > **Refresh note (1.7.1, 2026-11-05, Cyrius 6.7.18).** The gate build now measures as below. No ceiling moved.
 > `fn_name_hash` is still the highest-utilization table, at 21%, and its max probe is now 4.
 >

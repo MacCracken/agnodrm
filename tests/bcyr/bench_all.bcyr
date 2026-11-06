@@ -1,5 +1,5 @@
 # bench_all.bcyr — batch-amortized benchmarks
-# 18 benchmarks in 6 groups (error, bootloader, update, udev, fuse, string).
+# 22 benchmarks in 7 groups (error, bootloader, update, udev, fuse, string, parsers).
 # Every row times BA_WINDOWS windows of BA_OPS inline ops each, through the
 # stdlib's bench_batch_start / bench_batch_stop, so the book (raw total,
 # iterations, windows, and the per-op min/max in picoseconds that 6.6.5 added)
@@ -32,11 +32,16 @@ include "src/bootloader.cyr"
 include "src/update.cyr"
 include "src/fuse.cyr"
 include "src/udev.cyr"
+include "src/journald.cyr"
+include "src/netns.cyr"
 
 # Batch shape: 10K ops per timed window x 100 windows (1M ops per row).
 enum BenchShape {
     BA_OPS = 10000;
     BA_WINDOWS = 100;
+    # Rows whose op allocates: alloc() never frees, so 1M of them would measure paging.
+    BA_HEAVY_OPS = 500;
+    BA_HEAVY_WINDOWS = 20;
 }
 
 fn do_bench(name) { return bench_new(name); }
@@ -110,7 +115,9 @@ fn bench_errors() {
     while (ri < BA_WINDOWS) {
         bench_batch_start(b);
         var k = 0;
-        while (k < BA_OPS) { wrap_syscall(sys_getpid()); k = k + 1; }
+        # A constant, so this times the wrapper. Through 1.7.1 it called sys_getpid()
+        # here, and 279 of the row's 280 ns were the kernel's.
+        while (k < BA_OPS) { wrap_syscall(1234); k = k + 1; }
         bench_batch_stop(b, BA_OPS);
         ri = ri + 1;
     }
@@ -348,11 +355,90 @@ fn bench_strings() {
 }
 
 # ================================================================
+# parsers: the external-input paths
+# ================================================================
+
+fn bench_parsers() {
+    println("-- parsers --");
+    var usb = str_builder_new();
+    str_builder_add_cstr(usb, "P: /devices/pci0000:00/0000:00:1f.2/ata1/host0/target0:0:0/0:0:0:0/block/sda\n");
+    str_builder_add_cstr(usb, "U: block\nT: disk\nN: sda\nE: DEVNAME=/dev/sda\nE: SUBSYSTEM=block\n");
+    str_builder_add_cstr(usb, "E: ID_MODEL=Samsung\nE: ID_SERIAL=S1234\n");
+    var udev_text = ba_aligned_cstr(str_data(str_builder_build(usb)));
+    var udev_len = strlen(udev_text);
+    var b = do_bench("udev_parse_block");
+    var ri = 0;
+    while (ri < BA_HEAVY_WINDOWS) {
+        bench_batch_start(b);
+        var k = 0;
+        while (k < BA_HEAVY_OPS) { _udev_parse_block(udev_text, udev_len); k = k + 1; }
+        bench_batch_stop(b, BA_HEAVY_OPS);
+        ri = ri + 1;
+    }
+    bench_report(b);
+
+    var lsb = str_builder_new();
+    str_builder_add_cstr(lsb, "{\"__REALTIME_TIMESTAMP\":\"1700000000000000\",\"_SYSTEMD_UNIT\":\"sshd.service\",");
+    str_builder_add_cstr(lsb, "\"PRIORITY\":\"6\",\"_PID\":\"1234\",\"MESSAGE\":\"Accepted publickey for root\"}");
+    var line = str_from(ba_aligned_cstr(str_data(str_builder_build(lsb))));
+    b = do_bench("journald_parse_json");
+    ri = 0;
+    while (ri < BA_HEAVY_WINDOWS) {
+        bench_batch_start(b);
+        var k = 0;
+        while (k < BA_HEAVY_OPS) { journald_parse_json(line); k = k + 1; }
+        bench_batch_stop(b, BA_HEAVY_OPS);
+        ri = ri + 1;
+    }
+    bench_report(b);
+
+    var ssb = str_builder_new();
+    str_builder_add_cstr(ssb, "{\"current_slot\":2,\"current_version\":\"2026.11.5\",");
+    str_builder_add_cstr(ssb, "\"pending_update\":\"2026.12.1\",\"rollback_available\":true,\"boot_count\":3}\n");
+    var state = ba_aligned_cstr(str_data(str_builder_build(ssb)));
+    var state_len = strlen(state);
+    b = do_bench("update_parse_state");
+    ri = 0;
+    while (ri < BA_HEAVY_WINDOWS) {
+        bench_batch_start(b);
+        var k = 0;
+        while (k < BA_HEAVY_OPS) { _update_parse_state(state, state_len); k = k + 1; }
+        bench_batch_stop(b, BA_HEAVY_OPS);
+        ri = ri + 1;
+    }
+    bench_report(b);
+
+    var rules = alloc(8 * 4);
+    store64(rules, netns_fw_rule_new(TRAFFIC_INBOUND, PROTO_TCP, 22, "10.0.0.5", FW_ACCEPT, "ssh"));
+    store64(rules + 8, netns_fw_rule_new(TRAFFIC_INBOUND, PROTO_UDP, 53, 0, FW_DROP, "dns"));
+    store64(rules + 16, netns_fw_rule_new(TRAFFIC_OUTBOUND, PROTO_TCP, 443, "192.168.1.0/24", FW_ACCEPT, 0));
+    store64(rules + 24, netns_fw_rule_new(TRAFFIC_OUTBOUND, PROTO_ANY, 0, 0, FW_DROP, "rest"));
+    var policy = netns_fw_policy_new(FW_DROP, FW_ACCEPT);
+    netns_fw_policy_set_rules(policy, rules, 4);
+    b = do_bench("nft_render_policy");
+    ri = 0;
+    while (ri < BA_HEAVY_WINDOWS) {
+        bench_batch_start(b);
+        var k = 0;
+        while (k < BA_HEAVY_OPS) { netns_render_nftables_ruleset(policy); k = k + 1; }
+        bench_batch_stop(b, BA_HEAVY_OPS);
+        ri = ri + 1;
+    }
+    bench_report(b);
+
+    return 0;
+}
+
+# ================================================================
 # Main
 # ================================================================
 
 fn main() {
     alloc_init();
+    # A fixed hash seed. The stdlib draws one per process, and with the danger map 43 keys
+    # in 64 slots, validate_cmdline_safe swung 474-2974 ns across seeds and map_get_miss
+    # 40-76 ns: rows that move that far between runs cannot show a regression.
+    _hm_seed = 0x9E3779B97F4A7C15;
     println("================================================================");
     println("  agnodrm bench — device model + deferred, batch-amortized (10K x 100)");   #skip-lint
     println("================================================================");
@@ -369,9 +455,11 @@ fn main() {
 
     bench_strings();
 
+    bench_parsers();
+
     println("");
     println("================================================================");
-    println("  done — 6 groups");
+    println("  done — 7 groups");
     println("================================================================");
     return 0;
 }

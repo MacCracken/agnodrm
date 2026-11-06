@@ -88,8 +88,9 @@ jobs:
 
     steps:
       - name: Checkout agnosys (this repo)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           path: agnosys
 
       - name: Read agnosys cyrius pin
@@ -104,7 +105,10 @@ jobs:
         run: |
           CYRIUS_VERSION="${{ steps.pin.outputs.cyrius }}"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          curl -fsSLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          # The compiler runs in this job, so it is checked before it is unpacked. A pin
+          # with no line in the hash file fails here: see CLAUDE.md.
+          grep -F "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz" agnosys/.github/toolchain.sha256 | sha256sum -c -
           tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
           CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
           mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib" "$HOME/.cyrius/versions/$CYRIUS_VERSION/lib"
@@ -125,8 +129,9 @@ jobs:
           ls -la dist/
 
       - name: Checkout consumer (${{ matrix.consumer }} main)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           repository: MacCracken/${{ matrix.consumer }}
           path: ${{ matrix.consumer }}
 
@@ -171,7 +176,7 @@ jobs:
 
       - name: File consumer-break issue on failure
         if: failure() && steps.consumer_audit.conclusion == 'failure'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const consumer = '${{ matrix.consumer }}';

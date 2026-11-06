@@ -4,7 +4,10 @@
 # Shells out to udevadm for device info. Parses output into structs.
 # Rule validation rejects dangerous action keys (RUN, PROGRAM, etc).
 #
-# Requires: src/error.cyr, lib/syscalls.cyr, lib/process.cyr
+# Requires: src/error.cyr, src/util.cyr, lib/syscalls.cyr, lib/process.cyr
+
+include "src/error.cyr"
+include "src/util.cyr"
 
 # ================================================================
 # Device subsystem constants
@@ -60,39 +63,79 @@ fn udev_devinfo_set_props(d, keys, vals, count): i64 {
 # Parse udevadm info output for a single device
 # ================================================================
 
-# Parse a block of udevadm info output (P:/N:/S:/E: prefixed lines).
-# text: null-terminated string of udevadm output.
-# Returns Result: Ok(devinfo_ptr) or Err.
-fn udev_parse_udevadm_info(text): i64 {
-    if (text == 0) {
-        return drm_err_invalid_argument("udevadm output is null");
-    }
+# Test seam, 0 outside tests/tcyr: a stub to run in place of /usr/bin/udevadm.
+var _udev_tool = 0;
 
+enum UdevLimits {
+    UDEV_DB_CHUNK = 1048576;       # first capture of --export-db
+    UDEV_DB_MAX = 67108864;        # past this the listing fails rather than cut the db
+    UDEV_INFO_MAX = 65536;         # one device's `udevadm info`
+}
+
+# A NUL-terminated heap copy of `n` bytes at `p`.
+fn _udev_copy(p, n): i64 {
+    var v = alloc(n + 1);
+    memcpy(v, p, n);
+    store8(v + n, 0);
+    return v;
+}
+
+# 1 if the `n` bytes at `p` hold a ".." path component.
+fn _udev_has_dotdot(p, n): i64 {
+    var i = 0;
+    while (i + 1 < n) {
+        if (load8(p + i) == 46) { if (load8(p + i + 1) == 46) {
+                var head = 1;
+                if (i > 0) { head = load8(p + i - 1) == 47; }
+                var tail = 1;
+                if (i + 2 < n) { tail = load8(p + i + 2) == 47; }
+                if (head == 1) { if (tail == 1) { return 1; } }
+            } }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Parse one device block of udevadm info output: `textlen` bytes at `text`, whose
+# P:/N:/U:/T:/V:/E: prefixed lines end in LF. Returns Result: Ok(devinfo_ptr) or Err.
+#
+# udevadm prints a line of each single-valued kind once, so a repeat is not a real
+# device. E: values are device-supplied text, and a USB name holding a newline can
+# forge a whole line, so a line never overrides one before it: the first P: stands and
+# a second one fails the block, the first N: stands, and the U:/T:/V: lines udevadm
+# writes itself outrank the E: properties. A device node that climbs out of /dev is
+# refused, because the caller is about to open it (audit F-36). Every property is
+# kept, as many as the device has. A value holding a blank line still ends this block and
+# starts another, which no parser of this format can tell from a real device: a listing
+# is what udevadm printed, not proof a device exists.
+fn _udev_parse_block(text, textlen): i64 {
     var devpath = 0;
     var devnode = 0;
-    # Allocate property arrays (max 128 properties)
-    var max_props = 128;
+    var subsystem = 0;
+    var devtype = 0;
+    var driver = 0;
+
+    # A property takes a line, so the line count bounds them.
+    var max_props = 1;
+    var scan = 0;
+    while (scan < textlen) {
+        if (load8(text + scan) == 10) { max_props = max_props + 1; }
+        scan = scan + 1;
+    }
     var prop_keys = alloc(max_props * 8);
     var prop_vals = alloc(max_props * 8);
     var prop_count = 0;
 
-    # Parse line by line
     var pos = 0;
-    var textlen = strlen(text);
-
     while (pos < textlen) {
         # Find end of line
         var linestart = pos;
         while (pos < textlen) {
-            if (load8(text + pos) == 10) {
-                pos = pos + 1;
-                break;
-            }
+            if (load8(text + pos) == 10) { break; }
             pos = pos + 1;
         }
         var linelen = pos - linestart;
-        if (load8(text + pos - 1) == 10) { linelen = linelen - 1; }
-        if (linelen < 3) { continue; }
+        if (pos < textlen) { pos = pos + 1; }
 
         # Skip leading whitespace
         var ls = linestart;
@@ -103,67 +146,54 @@ fn udev_parse_udevadm_info(text): i64 {
         }
         var eff_len = linestart + linelen - ls;
         if (eff_len < 3) { continue; }
+        if (load8(text + ls + 1) != 58) { continue; }   # ':'
+        if (load8(text + ls + 2) != 32) { continue; }   # ' '
 
-        var c0 = load8(text + ls);
-        var c1 = load8(text + ls + 1);
-        var c2 = load8(text + ls + 2);
+        var kind = load8(text + ls);
+        var vstart = ls + 3;
+        var vlen = eff_len - 3;
 
-        # P: devpath
-        if (c0 == 80) { if (c1 == 58) { if (c2 == 32) {
-                    var vlen = eff_len - 3;
-                    var v = alloc(vlen + 1);
-                    memcpy(v, text + ls + 3, vlen);
-                    store8(v + vlen, 0);
-                    devpath = v;
-                    continue;
-                } } }
-
-        # N: devnode
-        if (c0 == 78) { if (c1 == 58) { if (c2 == 32) {
-                    var vlen = eff_len - 3;
-                    # Prepend /dev/
-                    var v = alloc(vlen + 6);
-                    memcpy(v, "/dev/", 5);
-                    memcpy(v + 5, text + ls + 3, vlen);
-                    store8(v + 5 + vlen, 0);
-                    devnode = v;
-                    continue;
-                } } }
-
-        # E: key=value property
-        if (c0 == 69) { if (c1 == 58) { if (c2 == 32) {
-                    if (prop_count < max_props) {
-                        var vstart = ls + 3;
-                        var vlen = eff_len - 3;
-                        # Find '=' separator
-                        var eq_pos = 0;
-                        var j = 0;
-                        while (j < vlen) {
-                            if (load8(text + vstart + j) == 61) {  # '='
-                                eq_pos = j;
-                                break;
-                            }
-                            j = j + 1;
-                        }
-                        if (eq_pos > 0) {
-                            var klen = eq_pos;
-                            var key = alloc(klen + 1);
-                            memcpy(key, text + vstart, klen);
-                            store8(key + klen, 0);
-
-                            var val_offset = eq_pos + 1;
-                            var val_len = vlen - val_offset;
-                            var val = alloc(val_len + 1);
-                            memcpy(val, text + vstart + val_offset, val_len);
-                            store8(val + val_len, 0);
-
-                            store64(prop_keys + prop_count * 8, key);
-                            store64(prop_vals + prop_count * 8, val);
-                            prop_count = prop_count + 1;
-                        }
-                    }
-                    continue;
-                } } }
+        if (kind == 80) {           # P: devpath
+            if (devpath != 0) {
+                return drm_err_invalid_argument("udevadm block has more than one P: line");
+            }
+            if (_udev_has_dotdot(text + vstart, vlen) == 1) {
+                return drm_err_invalid_argument("udevadm P: line climbs out of /sys");
+            }
+            devpath = _udev_copy(text + vstart, vlen);
+        } elif (kind == 78) {       # N: devnode, relative to /dev
+            if (devnode == 0) {
+                if (_udev_has_dotdot(text + vstart, vlen) == 1) {
+                    return drm_err_invalid_argument("udevadm N: line leaves /dev");
+                }
+                var node = alloc(vlen + 6);
+                memcpy(node, "/dev/", 5);
+                memcpy(node + 5, text + vstart, vlen);
+                store8(node + 5 + vlen, 0);
+                devnode = node;
+            }
+        } elif (kind == 85) {       # U: subsystem
+            if (subsystem == 0) { subsystem = _udev_copy(text + vstart, vlen); }
+        } elif (kind == 84) {       # T: devtype
+            if (devtype == 0) { devtype = _udev_copy(text + vstart, vlen); }
+        } elif (kind == 86) {       # V: driver
+            if (driver == 0) { driver = _udev_copy(text + vstart, vlen); }
+        } elif (kind == 69) {       # E: key=value property
+            var eq_pos = 0;
+            var j = 0;
+            while (j < vlen) {
+                if (load8(text + vstart + j) == 61) {  # '='
+                    eq_pos = j;
+                    break;
+                }
+                j = j + 1;
+            }
+            if (eq_pos > 0) {
+                store64(prop_keys + prop_count * 8, _udev_copy(text + vstart, eq_pos));
+                store64(prop_vals + prop_count * 8, _udev_copy(text + vstart + eq_pos + 1, vlen - eq_pos - 1));
+                prop_count = prop_count + 1;
+            }
+        }
     }
 
     if (devpath == 0) {
@@ -177,22 +207,24 @@ fn udev_parse_udevadm_info(text): i64 {
     memcpy(syspath + 4, devpath, dplen);
     store8(syspath + 4 + dplen, 0);
 
-    # Extract subsystem and other properties from the property list
-    var subsystem = "";
-    var devtype = 0;
-    var driver = 0;
+    # What the U:/T:/V:/N: lines left unset comes from the properties, first one wins.
     var i = 0;
     while (i < prop_count) {
         var key = load64(prop_keys + i * 8);
         var val = load64(prop_vals + i * 8);
-        if (streq(key, "SUBSYSTEM") == 1) { subsystem = val; }
-        if (streq(key, "DEVTYPE") == 1) { devtype = val; }
-        if (streq(key, "DRIVER") == 1) { driver = val; }
+        if (subsystem == 0) { if (streq(key, "SUBSYSTEM") == 1) { subsystem = val; } }
+        if (devtype == 0) { if (streq(key, "DEVTYPE") == 1) { devtype = val; } }
+        if (driver == 0) { if (streq(key, "DRIVER") == 1) { driver = val; } }
         if (devnode == 0) {
-            if (streq(key, "DEVNAME") == 1) { devnode = val; }
+            if (streq(key, "DEVNAME") == 1) {
+                if (agnodrm_cstr_starts_with(val, "/dev/") == 1) {
+                    if (_udev_has_dotdot(val, strlen(val)) == 0) { devnode = val; }
+                }
+            }
         }
         i = i + 1;
     }
+    if (subsystem == 0) { subsystem = ""; }
 
     var info = udev_devinfo_new();
     udev_devinfo_set_syspath(info, syspath);
@@ -206,54 +238,71 @@ fn udev_parse_udevadm_info(text): i64 {
     return Ok(info);
 }
 
+# Parse a block of udevadm info output (P:/N:/U:/T:/V:/E: prefixed lines).
+# text: null-terminated string of udevadm output.
+# Returns Result: Ok(devinfo_ptr) or Err.
+fn udev_parse_udevadm_info(text): i64 {
+    if (text == 0) {
+        return drm_err_invalid_argument("udevadm output is null");
+    }
+    return _udev_parse_block(text, strlen(text));
+}
+
 # ================================================================
 # List devices via udevadm info --export-db
 # ================================================================
 
-# List all devices, optionally filtered by subsystem string.
-# subsystem_filter: a null-terminated string, or 0 for no filter.
-# result_arr: pre-allocated array of device pointers.
-# max_devices: max capacity of result_arr.
-# Returns Result: Ok(count) or Err.
-fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
-    #ifdef CYRIUS_TARGET_AGNOS
-    return Ok(0);                # agnos has no udev/udevadm — no devices to enumerate
-    #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    # argv vec: element 0 is the ABSOLUTE command path — execve(2) does no
-    # PATH lookup, so a bare "udevadm" never runs. Each arg is its own vec
-    # entry; agnodrm_run_capture shells out via exec_capture (no /bin/sh, no
-    # metacharacter split). The old 2-arg run_capture(cmd, argv) form passed
-    # the whole argv array as run_capture's single `arg1` and left buf/buflen
-    # garbage — see CHANGELOG. Mirrors netns_run_ip / journald_query.
-    var args = vec_new();
-    vec_push(args, "/usr/bin/udevadm");
-    vec_push(args, "info");
-    vec_push(args, "--export-db");
-
-    # Capture the full device DB. 1 MiB heap buffer (+1 for the NUL so the
-    # terminator never writes past the end even on a full read). Output past
-    # 1 MiB is truncated (graceful: fewer device blocks parsed, no crash).
-    var cap = 1048576;
-    var buf = alloc(cap + 1);
-    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "udevadm info --export-db failed");
-    if (is_err_result(res_t) == 1) { return Err(res_v); }
-
-    var nbytes = res_v;
-    if (nbytes == 0) {
-        return Ok(0);
+# 1 if the block at `text` is on subsystem `filter`, by the rule _udev_parse_block
+# applies: the U: line, else the first E: SUBSYSTEM=. It copies nothing, so a poller that
+# wants one subsystem does not leave every other device on the heap (audit F-40).
+fn _udev_block_on_subsystem(text, textlen, filter): i64 {
+    var flen = strlen(filter);
+    var from_e = 0 - 1;
+    var pos = 0;
+    while (pos < textlen) {
+        var ls = pos;
+        while (pos < textlen) {
+            if (load8(text + pos) == 10) { break; }
+            pos = pos + 1;
+        }
+        var end = pos;
+        pos = pos + 1;
+        while (ls < end) {
+            var ch = load8(text + ls);
+            if (ch != 32) { if (ch != 9) { break; } }
+            ls = ls + 1;
+        }
+        var n = end - ls;
+        if (n < 3) { continue; }
+        if (load8(text + ls + 1) != 58) { continue; }
+        if (load8(text + ls + 2) != 32) { continue; }
+        var kind = load8(text + ls);
+        if (kind == 85) {        # U: decides, wherever it comes
+            if (n - 3 != flen) { return 0; }
+            return memeq(text + ls + 3, filter, flen);
+        }
+        if (kind == 69) {
+            if (from_e < 0) {
+                if (n >= 13) {
+                    if (memeq(text + ls + 3, "SUBSYSTEM=", 10) == 1) {
+                        from_e = 0;
+                        if (n - 13 == flen) { from_e = memeq(text + ls + 13, filter, flen); }
+                    }
+                }
+            }
+        }
     }
-    store8(buf + nbytes, 0);
-    var output = buf;
+    return from_e == 1;
+}
 
-    # Split output into blocks separated by blank lines, parse each
+# Parse `textlen` bytes of --export-db output, blocks split by blank lines, into
+# result_arr. Blocks that do not parse are skipped. Stops once result_arr is full.
+fn _udev_parse_db(output, textlen, subsystem_filter, result_arr, max_devices): i64 {
     var count = 0;
-    var textlen = strlen(output);
     var block_start = 0;
     var pos = 0;
-    var done = 0;
-
-    while (pos <= textlen && done == 0) {
+    while (pos <= textlen) {
+        if (count >= max_devices) { break; }
         var at_end = 0;
         if (pos == textlen) { at_end = 1; }
         elif (load8(output + pos) == 10) {
@@ -262,53 +311,84 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
                 if (load8(output + pos + 1) == 10) { at_end = 1; }
             }
         }
-
-        if (at_end == 1) {
-            if (pos > block_start) {
-                # Extract block
-                var blen = pos - block_start;
-                var block = alloc(blen + 1);
-                memcpy(block, output + block_start, blen);
-                store8(block + blen, 0);
-
-                var dev_res_t, dev_res_v = udev_parse_udevadm_info(block);
-                if (is_ok(dev_res_t) == 1) {
-                    var dev = dev_res_v;
-                    var include = 1;
-                    if (subsystem_filter != 0) {
-                        if (strlen(subsystem_filter) > 0) {
-                            var dev_sub = udev_devinfo_subsystem(dev);
-                            if (streq(dev_sub, subsystem_filter) != 1) {
-                                include = 0;
-                            }
-                        }
-                    }
-                    if (include == 1) {
-                        if (count < max_devices) {
-                            store64(result_arr + count * 8, dev);
-                            count = count + 1;
-                        }
-                    }
-                }
-            }
-            # Skip blank lines
-            while (pos < textlen) {
-                if (load8(output + pos) == 10) { pos = pos + 1; }
-                else { break; }
-            }
-            block_start = pos;
-            # Terminate once the final block has been consumed. Without this,
-            # pos==textlen re-enters the at_end branch forever (the skip-blank
-            # loop can't advance past textlen) — an infinite loop that stayed
-            # latent while the broken 2-arg run_capture never delivered output
-            # to parse. See CHANGELOG.
-            if (pos >= textlen) { done = 1; }
+        if (at_end == 0) {
+            pos = pos + 1;
             continue;
         }
-        pos = pos + 1;
-    }
 
-    return Ok(count);
+        if (pos > block_start) {
+            var keep = 1;
+            if (subsystem_filter != 0) {
+                if (strlen(subsystem_filter) > 0) {
+                    keep = _udev_block_on_subsystem(output + block_start, pos - block_start, subsystem_filter);
+                }
+            }
+            if (keep == 1) {
+                var dev_res_t, dev_res_v = _udev_parse_block(output + block_start, pos - block_start);
+                if (is_ok(dev_res_t) == 1) {
+                    store64(result_arr + count * 8, dev_res_v);
+                    count = count + 1;
+                }
+            }
+        }
+        # Skip blank lines
+        while (pos < textlen) {
+            if (load8(output + pos) != 10) { break; }
+            pos = pos + 1;
+        }
+        block_start = pos;
+        # Without this, pos==textlen re-enters the at_end branch forever.
+        if (pos >= textlen) { break; }
+    }
+    return count;
+}
+
+# List all devices, optionally filtered by subsystem string.
+# subsystem_filter: a null-terminated string, or 0 for no filter.
+# result_arr: pre-allocated array of device pointers.
+# max_devices: max capacity of result_arr. A count equal to it may mean there are more.
+# Returns Result: Ok(count) or Err.
+#
+# The whole database is parsed or none of it: a capture that fills its buffer runs again
+# with a larger one, and past UDEV_DB_MAX the call fails. A cut database would parse its
+# last block with a truncated N: line, and hand the caller the wrong device node (audit
+# F-37). The capture buffer is released on return; the devices are heap copies.
+fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return Ok(0);                # agnos has no udev/udevadm — no devices to enumerate
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    if (_agnodrm_out_ok(result_arr, max_devices) != 1) {
+        return drm_err_invalid_argument("result array is null or max_devices is negative");
+    }
+    # argv vec: element 0 is the ABSOLUTE command path — execve(2) does no
+    # PATH lookup, so a bare "udevadm" never runs. Each arg is its own vec
+    # entry; agnodrm_run_capture runs it with no /bin/sh and no metacharacter
+    # split. Mirrors netns_run_ip / journald_query.
+    var args = vec_new();
+    vec_push(args, "/usr/bin/udevadm");
+    vec_push(args, "info");
+    vec_push(args, "--export-db");
+    if (_udev_tool != 0) { vec_set(args, 0, _udev_tool); }
+
+    var cap = UDEV_DB_CHUNK;
+    while (cap <= UDEV_DB_MAX) {
+        var buf = _agnodrm_scratch_new(cap);
+        if (buf == 0) { return drm_err_io(ENOMEM, "no memory for the udev device database"); }
+        var res_t, res_v = agnodrm_run_capture(args, buf, cap, "udevadm info --export-db failed");
+        if (is_err_result(res_t) == 1) {
+            _agnodrm_scratch_free(buf, cap);
+            return Err(res_v);
+        }
+        if (res_v < cap) {
+            var count = _udev_parse_db(buf, res_v, subsystem_filter, result_arr, max_devices);
+            _agnodrm_scratch_free(buf, cap);
+            return Ok(count);
+        }
+        _agnodrm_scratch_free(buf, cap);
+        cap = cap * 4;
+    }
+    return drm_err_io(0, "udev device database is too large to read whole");
     #endif
 }
 
@@ -316,6 +396,9 @@ fn udev_list_devices(subsystem_filter, result_arr, max_devices): i64 {
 # Get device info for a single device by sysfs path
 # ================================================================
 
+# Get one device's info. syspath: an absolute /sys/... path or devpath, the forms
+# udev_devinfo hands out. A relative path, or one holding a ".." component, is refused
+# before udevadm sees it.
 fn udev_get_device_info(syspath): i64 {
     if (syspath == 0) {
         return drm_err_invalid_argument("syspath is null");
@@ -328,10 +411,17 @@ fn udev_get_device_info(syspath): i64 {
     return drm_err_not_supported("udev device query (agnos has no udev/udevadm)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    if (load8(syspath) != 47) {
+        return drm_err_invalid_argument("syspath must be absolute");
+    }
+    var slen = strlen(syspath);
+    if (_udev_has_dotdot(syspath, slen) == 1) {
+        return drm_err_invalid_argument("syspath must not contain '..'");
+    }
+
     # Build --path=<syspath> argument
     var prefix = "--path=";
     var plen = strlen(prefix);
-    var slen = strlen(syspath);
     var patharg = alloc(plen + slen + 1);
     memcpy(patharg, prefix, plen);
     memcpy(patharg + plen, syspath, slen);
@@ -345,17 +435,24 @@ fn udev_get_device_info(syspath): i64 {
     vec_push(args, "/usr/bin/udevadm");
     vec_push(args, "info");
     vec_push(args, patharg);
+    if (_udev_tool != 0) { vec_set(args, 0, _udev_tool); }
 
-    # Single-device info is small (a few hundred bytes); 64 KiB heap buffer
-    # (+1 for the NUL) is ample.
-    var cap = 65536;
-    var buf = alloc(cap + 1);
+    var cap = UDEV_INFO_MAX;
+    var buf = _agnodrm_scratch_new(cap);
+    if (buf == 0) { return drm_err_io(ENOMEM, "no memory for udevadm info"); }
     var res_t, res_v = agnodrm_run_capture(args, buf, cap, "udevadm info --path failed");
-    if (is_err_result(res_t) == 1) { return Err(res_v); }
-
-    var nbytes = res_v;
-    store8(buf + nbytes, 0);
-    return udev_parse_udevadm_info(buf);
+    if (is_err_result(res_t) == 1) {
+        _agnodrm_scratch_free(buf, cap);
+        return Err(res_v);
+    }
+    if (res_v >= cap) {
+        _agnodrm_scratch_free(buf, cap);
+        return drm_err_io(0, "udevadm info output is too large to read whole");
+    }
+    var dev_t, dev_v = _udev_parse_block(buf, res_v);
+    _agnodrm_scratch_free(buf, cap);
+    if (is_err_result(dev_t) == 1) { return Err(dev_v); }
+    return Ok(dev_v);
     #endif
 }
 
@@ -363,36 +460,67 @@ fn udev_get_device_info(syspath): i64 {
 # Udev rule validation
 # ================================================================
 
-# Dangerous action keys that must be rejected
-# RUN, PROGRAM, IMPORT{program}, IMPORT{builtin}
-
 # Check if a string starts with a given prefix.
 # Thin wrapper over the shared single-pass predicate (public API stable).
 fn udev_starts_with(str, prefix): i64 {
     return agnodrm_cstr_starts_with(str, prefix);
 }
 
+# 1 if `key` is the rule key `name`: the name alone, or followed by an attribute or an
+# operator, so RUN{program}, RUN+= and SYSCTL{kernel.core_pattern} all count.
+fn _udev_key_is(key, name): i64 {
+    if (agnodrm_cstr_starts_with(key, name) != 1) { return 0; }
+    var c = load8(key + strlen(name));
+    if (c == 0) { return 1; }
+    if (c == 123) { return 1; }   # '{'
+    if (c == 43) { return 1; }    # '+'
+    if (c == 45) { return 1; }    # '-'
+    if (c == 58) { return 1; }    # ':'
+    if (c == 61) { return 1; }    # '='
+    if (c == 32) { return 1; }
+    if (c == 9) { return 1; }
+    return 0;
+}
+
+# The key that makes `key` dangerous, as a message, or 0. A denylist of the keys that
+# run a program, write a sysctl or start a unit as root; an unlisted key passes. Rule
+# keys are case-sensitive, so no folding is needed.
+fn _udev_key_danger(key): i64 {
+    while (load8(key) == 32 || load8(key) == 9) { key = key + 1; }
+    if (_udev_key_is(key, "RUN") == 1) { return "udev rule contains dangerous key: RUN"; }
+    if (_udev_key_is(key, "PROGRAM") == 1) { return "udev rule contains dangerous key: PROGRAM"; }
+    if (_udev_key_is(key, "SYSCTL") == 1) { return "udev rule contains dangerous key: SYSCTL"; }
+    if (udev_starts_with(key, "IMPORT{program}") == 1) {
+        return "udev rule contains dangerous key: IMPORT{program}";
+    }
+    if (udev_starts_with(key, "IMPORT{builtin}") == 1) {
+        return "udev rule contains dangerous key: IMPORT{builtin}";
+    }
+    if (udev_starts_with(key, "ENV{SYSTEMD_WANTS}") == 1) {
+        return "udev rule contains dangerous key: ENV{SYSTEMD_WANTS}";
+    }
+    if (udev_starts_with(key, "ENV{SYSTEMD_USER_WANTS}") == 1) {
+        return "udev rule contains dangerous key: ENV{SYSTEMD_USER_WANTS}";
+    }
+    return 0;
+}
+
 # Validate a udev rule.
 # action_keys: array of string pointers to action key names.
 # action_count: number of action keys.
-# Returns Result: Ok(0) if valid, Err if dangerous keys found.
+# Returns Result: Ok(0) if no dangerous key was found, Err if one was or an argument is
+# bad. Through 1.7.1 RUN matched only exactly, so RUN{program}, the spelling real rules
+# use, passed (audit F-34). Ok(0) means nothing listed matched, not that a rule is safe.
 fn udev_validate_rule(action_keys, action_count): i64 {
+    if (_agnodrm_out_ok(action_keys, action_count) != 1) {
+        return drm_err_invalid_argument("action keys are null or the count is negative");
+    }
     var i = 0;
     while (i < action_count) {
         var key = load64(action_keys + i * 8);
-        # Reject dangerous action keys
-        if (streq(key, "RUN") == 1) {
-            return drm_err_invalid_argument("udev rule contains dangerous key: RUN");
-        }
-        if (streq(key, "PROGRAM") == 1) {
-            return drm_err_invalid_argument("udev rule contains dangerous key: PROGRAM");
-        }
-        if (udev_starts_with(key, "IMPORT{program}") == 1) {
-            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{program}");
-        }
-        if (udev_starts_with(key, "IMPORT{builtin}") == 1) {
-            return drm_err_invalid_argument("udev rule contains dangerous key: IMPORT{builtin}");
-        }
+        if (key == 0) { return drm_err_invalid_argument("udev rule key is null"); }
+        var danger = _udev_key_danger(key);
+        if (danger != 0) { return drm_err_invalid_argument(danger); }
         i = i + 1;
     }
     return Ok(0);

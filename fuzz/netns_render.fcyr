@@ -1,0 +1,96 @@
+# Fuzz: the firewall renderer on hostile rule data.
+# Invariants: no crash; a policy either renders or is refused, never in part; a rendered
+# rule is exactly one line, its quotes balanced, so no data becomes syntax.
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/process.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/netns.cyr"
+
+alloc_init();
+
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+
+var alpha = "0123456789.:/abf\"\\\n ;{}#%-";
+var alen = strlen(alpha);
+
+fn fz_text(maxlen): i64 {
+    var n = fz_rand() % maxlen;
+    var s = alloc(n + 1);
+    var i = 0;
+    while (i < n) {
+        store8(s + i, load8(alpha + fz_rand() % alen));
+        i = i + 1;
+    }
+    store8(s + n, 0);
+    return s;
+}
+
+fn fz_count(s, c): i64 {
+    var n = 0;
+    var i = 0;
+    while (load8(s + i) != 0) {
+        if (load8(s + i) == c) { n = n + 1; }
+        i = i + 1;
+    }
+    return n;
+}
+
+var fixed = "table inet kavach\ndelete table inet kavach\ntable inet kavach {\n";
+var it = 0;
+var rendered = 0;
+while (it < 60000) {
+    var count = 1 + fz_rand() % 3;
+    var rules = alloc(8 * count);
+    var i = 0;
+    while (i < count) {
+        var addr = 0;
+        if (fz_rand() % 2 == 0) { addr = fz_text(20); }
+        var comment = 0;
+        if (fz_rand() % 2 == 0) { comment = fz_text(10); }
+        var port = 0;
+        if (fz_rand() % 2 == 0) { port = fz_rand() % 70000; }
+        var dir = 1 + fz_rand() % 2;
+        var proto = 1 + fz_rand() % 3;
+        store64(rules + i * 8, netns_fw_rule_new(dir, proto, port, addr, 1 + fz_rand() % 2, comment));
+        i = i + 1;
+    }
+    var pol = netns_fw_policy_new(1 + fz_rand() % 2, 1 + fz_rand() % 2);
+    netns_fw_policy_set_rules(pol, rules, count);
+    var text = netns_render_nftables_ruleset(pol);
+    var vt, vv = netns_fw_policy_validate(pol);
+    if (is_ok(vt) == 1) {
+        if (text == 0) { sys_exit(30); }
+    } else {
+        if (text != 0) { sys_exit(31); }
+    }
+    if (text != 0) {
+        rendered = rendered + 1;
+        # Table header + two chain headers + 4 fixed lines + 2 closes + one close + rules.
+        if (fz_count(text, 10) != 12 + count) { sys_exit(32); }
+        if (fz_count(text, 34) % 2 != 0) { sys_exit(33); }
+        if (agnodrm_cstr_starts_with(text, fixed) != 1) { sys_exit(34); }
+    }
+    it = it + 1;
+}
+# A run that never rendered anything tested nothing.
+if (rendered < 100) { sys_exit(35); }
+sys_exit(0);

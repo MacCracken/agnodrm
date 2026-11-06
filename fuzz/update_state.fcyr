@@ -1,0 +1,143 @@
+# Fuzz: the update state and manifest reader, the version key and the cmdline scanner, on
+# mutated input that ends against unmapped memory, so a read past the end faults.
+# Invariants: no crash; a parsed state holds a real slot; version order is antisymmetric
+# and agrees with a model that compares the three numbers.
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/process.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/update.cyr"
+
+alloc_init();
+
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+
+fn fz_guarded(len): i64 {
+    var p = _agnodrm_scratch_new(16384);
+    _agnodrm_scratch_free(p + 12288, 4096);
+    return p + 12288 - len;
+}
+
+fn fz_mutate(buf, len, alphabet, alphalen): i64 {
+    var muts = fz_rand() % 6;
+    var m = 0;
+    while (m < muts) {
+        if (len > 0) { store8(buf + fz_rand() % len, load8(alphabet + fz_rand() % alphalen)); }
+        m = m + 1;
+    }
+    return 0;
+}
+
+var doc_sb = str_builder_new();
+str_builder_add_cstr(doc_sb, "{\"current_slot\":2,\"current_version\":\"2026.1.1\",\"pending_update\":\"2026.2.1\",");
+str_builder_add_cstr(doc_sb, "\"rollback_available\":true,\"boot_count\":3,\"x\":[1,{\"y\":\"}\"}]}\n");
+var doc = str_data(str_builder_build(doc_sb));
+var doclen = strlen(doc);
+var jalpha = "{}[]\",:\\ 0129tfn.a";
+var jalen = strlen(jalpha);
+var it = 0;
+while (it < 40000) {
+    var len = fz_rand() % (doclen + 1);
+    var buf = fz_guarded(len);
+    memcpy(buf, doc, len);
+    fz_mutate(buf, len, jalpha, jalen);
+    var off = _update_json_field(buf, len, "boot_count");
+    if (off < 0 - 2) { sys_exit(30); }
+    if (off > len) { sys_exit(31); }
+    var t, v = _update_parse_state(buf, len);
+    if (is_ok(t) == 1) {
+        var slot = update_state_slot(v);
+        if (slot != SLOT_A) { if (slot != SLOT_B) { sys_exit(32); } }
+        if (update_state_boot_count(v) < 0) { sys_exit(33); }
+    }
+    _agnodrm_scratch_free(buf + len - 12288, 12288);
+    it = it + 1;
+}
+
+var cmd = "ro agnos.slot=a foo=\"bar baz\" quiet -- agnos.slot=b\n";
+var cmdlen = strlen(cmd);
+var calpha = "agnos.lt=b\" -\n\tAB";
+var calen = strlen(calpha);
+it = 0;
+while (it < 40000) {
+    var len = fz_rand() % (cmdlen + 1);
+    var buf = fz_guarded(len);
+    memcpy(buf, cmd, len);
+    fz_mutate(buf, len, calpha, calen);
+    var t, v = _update_scan_cmdline(buf, len);
+    if (is_ok(t) == 1) {
+        if (v != 0) { if (v != SLOT_A) { if (v != SLOT_B) { sys_exit(35); } } }
+    }
+    _agnodrm_scratch_free(buf + len - 12288, 12288);
+    it = it + 1;
+}
+
+# Version order against a model of three plain numbers.
+fn fz_ver(y, m, d): i64 {
+    var sb = str_builder_new();
+    str_builder_add_int(sb, y);
+    str_builder_add_cstr(sb, ".");
+    str_builder_add_int(sb, m);
+    str_builder_add_cstr(sb, ".");
+    str_builder_add_int(sb, d);
+    return str_cstr(str_builder_build(sb));
+}
+fn fz_sign(a, b): i64 {
+    if (a < b) { return 0 - 1; }
+    if (a > b) { return 1; }
+    return 0;
+}
+it = 0;
+while (it < 20000) {
+    var y1 = 2024 + fz_rand() % 3;
+    var m1 = 1 + fz_rand() % 3;
+    var d1 = 1 + fz_rand() % 3;
+    var y2 = 2024 + fz_rand() % 3;
+    var m2 = 1 + fz_rand() % 3;
+    var d2 = 1 + fz_rand() % 3;
+    var a = fz_ver(y1, m1, d1);
+    var b = fz_ver(y2, m2, d2);
+    var want = fz_sign(y1, y2);
+    if (want == 0) { want = fz_sign(m1, m2); }
+    if (want == 0) { want = fz_sign(d1, d2); }
+    if (update_compare_versions(a, b) != want) { sys_exit(36); }
+    if (update_compare_versions(b, a) != 0 - want) { sys_exit(37); }
+    it = it + 1;
+}
+
+# Any text at all: antisymmetric, and no crash.
+var valpha = "0123456789.x";
+it = 0;
+while (it < 20000) {
+    var la = fz_rand() % 24;
+    var lb = fz_rand() % 24;
+    var a = alloc(la + 1);
+    var b = alloc(lb + 1);
+    var i = 0;
+    while (i < la) { store8(a + i, load8(valpha + fz_rand() % 12)); i = i + 1; }
+    i = 0;
+    while (i < lb) { store8(b + i, load8(valpha + fz_rand() % 12)); i = i + 1; }
+    store8(a + la, 0);
+    store8(b + lb, 0);
+    if (update_compare_versions(a, b) != 0 - update_compare_versions(b, a)) { sys_exit(38); }
+    it = it + 1;
+}
+sys_exit(0);

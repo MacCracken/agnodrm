@@ -40,28 +40,38 @@ include "src/drm.cyr"
 # Main — build smoke
 # ================================================================
 
+# Each probe counts as a failure unless it printed "ok", so "ready" cannot print over a
+# broken build. Through 1.7.1 it printed whatever the probes above it had found.
 fn main(): i64 {
     alloc_init();
+    var failed = 0;
 
     # -- error --
     var e_t, e_v = drm_err_invalid_argument("test error");
-    if (is_err_result(e_t) == 1) { println("error: ok"); }
+    if (is_err_result(e_t) == 1) { println("error: ok"); } else { failed = failed + 1; }
 
     var e2_t, e2_v = drm_err_from_errno(EPERM);
-    if (is_err_result(e2_t) == 1) {
-        if (drm_syserr_kind(e2_v) == DRM_ERR_PERMISSION_DENIED) { println("errno mapping: ok"); }
+    if (drm_syserr_kind(e2_v) == DRM_ERR_PERMISSION_DENIED) {
+        println("errno mapping: ok");
+    } else {
+        failed = failed + 1;
     }
 
     # -- util (pure helper) --
-    if (agnodrm_is_hex_char(97) == 1) { println("util hex-char: ok"); }
+    if (agnodrm_is_hex_char(97) == 1) { println("util hex-char: ok"); } else { failed = failed + 1; }
 
     # -- udev (pure parse) --
-    if (udev_starts_with("block", "blo") == 1) { println("udev parse: ok"); }
+    var d_t, d_v = udev_parse_udevadm_info("P: /devices/x\nU: block\nN: sda\n");
+    if (is_ok(d_t) == 1) { println("udev parse: ok"); } else { failed = failed + 1; }
 
     # -- drm (verinfo constructor) --
     var v = drm_verinfo_new(1, 2, 3, "test", "20260619", "smoke");
-    if (v != 0) { println("drm verinfo: ok"); }
+    if (v != 0) { println("drm verinfo: ok"); } else { failed = failed + 1; }
 
+    if (failed != 0) {
+        println("agnodrm smoke failed");
+        return 1;
+    }
     println("agnodrm ready — device model (udev + drm) on error + util support");
     return 0;
 }

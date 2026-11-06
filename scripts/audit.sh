@@ -15,6 +15,8 @@
 #  10. Vet             — cyrius vet src/main.cyr (include-graph audit)
 #  11. Fuzz            — every fuzz/*.fcyr, 10s timeout, must exit 0
 #  12. Benchmarks      — tests/bcyr/bench_all.bcyr runs to completion
+#  13. Dist staleness  — cyrius distlib regenerates the committed bundles exactly
+#  14. Lockfile        — cyrius deps --locked, also run first: other gates re-vendor lib/
 #
 # Every compile the gates run (5 build, 7 tests, 11 fuzz, 12 benchmarks) has
 # its output captured and passed through check_build_log below.
@@ -90,26 +92,40 @@ trap 'rm -rf "$AUDIT_TMP"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-stage 1/12 "syntax check"
+# Before anything else runs. `cyrius check`, `build`, `distlib` and `capacity` all re-vendor
+# lib/ and rewrite cyrius.lock as a side effect, so a later check could not fail, and a
+# failure held for the end would be gone by the next run. --locked compares and writes
+# nothing. Gate 14 runs it again, to catch a gate that changed lib/.
+[ -f cyrius.lock ] || fail "cyrius.lock missing"
+cyrius deps --locked > "$AUDIT_TMP/lock.log" 2>&1 \
+    || { cat "$AUDIT_TMP/lock.log"; fail "lib/ does not match cyrius.lock"; }
+
+stage 1/14 "syntax check"
 for f in src/*.cyr; do
     cyrius check "$f" > /dev/null 2>&1 || fail "check: $f"
 done
 pass "$(ls src/*.cyr | wc -l) files"
 
-stage 2/12 "API surface"
-scripts/check-api-surface.sh | tail -1 | grep -q '^ok' || fail "api surface drift"
+stage 2/14 "API surface"
+api_out=$(scripts/check-api-surface.sh | tail -1) || fail "api surface: a public fn was removed or changed"
+echo "$api_out" | grep -q '^ok' || fail "api surface drift"
+# An addition is non-breaking, but the agnos lane's probe is generated FROM the snapshot:
+# a public fn that is not in it never gets its agnos arm compiled.
+if echo "$api_out" | grep -q ' added since snapshot'; then
+    fail "new public fn not in the snapshot (run scripts/check-api-surface.sh --update)"
+fi
 scripts/gen-api-surface-prose.sh --check > /dev/null 2>&1 || fail "api-surface prose stale (run scripts/gen-api-surface-prose.sh)"
 pass "snapshot + prose match"
 
-stage 3/12 "capability map"
+stage 3/14 "capability map"
 scripts/gen-capability-map.sh --check > /dev/null 2>&1 || fail "capability-map drift (run scripts/gen-capability-map.sh)"
 pass "map matches src/"
 
-stage 4/12 "capacity gate"
+stage 4/14 "capacity gate"
 cyrius capacity --check src/main.cyr > /dev/null 2>&1 || fail "capacity >= 85%"
 pass "all tables under 85%"
 
-stage 5/12 "build"
+stage 5/14 "build"
 mkdir -p build
 cyrius build src/main.cyr build/agnodrm > "$AUDIT_TMP/build.log" 2>&1 || { cat "$AUDIT_TMP/build.log"; fail "build"; }
 check_build_log "x86_64" "$AUDIT_TMP/build.log"
@@ -143,11 +159,11 @@ cyrius build --agnos "$AUDIT_TMP/api_probe.cyr" "$AUDIT_TMP/api_probe_agnos" > "
 check_build_log "agnos API probe" "$AUDIT_TMP/build_probe_agnos.log"
 pass "build/agnodrm ($(wc -c < build/agnodrm) bytes), agnos ($(wc -c < build/agnodrm-agnos) bytes)"
 
-stage 6/12 "smoke"
+stage 6/14 "smoke"
 ./build/agnodrm 2>&1 | grep -q "agnodrm ready" || fail "smoke"
 pass "agnodrm ready"
 
-stage 7/12 "tests"
+stage 7/14 "tests"
 # `cyrius test` compiles each tests/tcyr/*.tcyr and passes the compiler's
 # diagnostics through to its own output, so the one log holds both the build
 # warnings and the results.
@@ -156,7 +172,7 @@ check_build_log "tests" "$AUDIT_TMP/test.log"
 grep -q "^[0-9]* passed, 0 failed" "$AUDIT_TMP/test.log" || fail "test count"
 pass "$(grep -oE '^[0-9]+ passed' "$AUDIT_TMP/test.log" | head -1)"
 
-stage 8/12 "fmt drift"
+stage 8/14 "fmt drift"
 # Gate the FORMATTER, not just the sources.
 #
 # Invoke the `cyrfmt` binary directly — NOT `cyrius fmt <file>`. Since cyrius
@@ -188,7 +204,7 @@ for f in src/*.cyr tests/tcyr/*.tcyr tests/bcyr/*.bcyr fuzz/*.fcyr; do
 done
 pass "$fmt_n files match cyrfmt"
 
-stage 9/12 "lint"
+stage 9/14 "lint"
 # Gate the LINTER's FINDINGS, not just its exit code.
 #
 # Two holes this replaces, both found in the 1.5.3 P(-1) sweep:
@@ -233,12 +249,12 @@ done
     || fail "lint: $lint_defer_total untracked deferral(s) — cross-reference each, or mark #skip-lint"
 pass "$lint_files files, 0 warnings, 0 untracked deferrals"
 
-stage 10/12 "vet"
+stage 10/14 "vet"
 # cyrius 5.7.x changed vet's output; we now rely on exit code only.
 cyrius vet src/main.cyr > /dev/null 2>&1 || fail "vet"
 pass "include-graph clean"
 
-stage 11/12 "fuzz"
+stage 11/14 "fuzz"
 if ls fuzz/*.fcyr > /dev/null 2>&1; then
     for f in fuzz/*.fcyr; do
         name=$(basename "$f" .fcyr)
@@ -248,7 +264,7 @@ if ls fuzz/*.fcyr > /dev/null 2>&1; then
         cyrius build "$f" "build/$name" > "$AUDIT_TMP/fuzz_$name.build.log" 2>&1 \
             || { cat "$AUDIT_TMP/fuzz_$name.build.log"; fail "fuzz build: $name"; }
         check_build_log "fuzz $name" "$AUDIT_TMP/fuzz_$name.build.log"
-        timeout 10 "build/$name" 500 > "$AUDIT_TMP/fuzz_$name.run.log" 2>&1 \
+        timeout 10 "build/$name" > "$AUDIT_TMP/fuzz_$name.run.log" 2>&1 \
             || { cat "$AUDIT_TMP/fuzz_$name.run.log"; fail "fuzz crash: $name"; }
     done
     pass "$(ls fuzz/*.fcyr | wc -l) harnesses"
@@ -256,7 +272,7 @@ else
     pass "no harnesses (skipped)"
 fi
 
-stage 12/12 "benchmarks"
+stage 12/14 "benchmarks"
 cyrius build tests/bcyr/bench_all.bcyr build/bench_all > "$AUDIT_TMP/bench_build.log" 2>&1 \
     || { cat "$AUDIT_TMP/bench_build.log"; fail "bench build"; }
 check_build_log "bench" "$AUDIT_TMP/bench_build.log"
@@ -271,4 +287,36 @@ bench_rows=$(grep -E ': .* avg ' "$AUDIT_TMP/bench.log" | grep -cv '^[[:space:]]
 [ "$bench_rows" -gt 0 ] || { cat "$AUDIT_TMP/bench.log"; fail "bench printed no result rows"; }
 pass "$bench_groups groups, $bench_rows benchmarks"
 
-printf "\n${GREEN}audit clean${NC} — all 12 gates pass\n"
+stage 13/14 "dist staleness"
+# CI has always failed a stale bundle; locally a stale one passed. Regenerate, compare
+# with what was there, and put the old files back unless they matched, so the gate reports
+# drift rather than quietly fixing it.
+dist_files="dist/agnodrm.cyr dist/agnodrm.deps dist/agnodrm-core.cyr dist/agnodrm-core.deps"
+mkdir -p "$AUDIT_TMP/dist"
+for f in $dist_files; do
+    [ -f "$f" ] || fail "dist: $f missing"
+    cp "$f" "$AUDIT_TMP/dist/$(basename "$f")"
+done
+dist_restore() {
+    for f in $dist_files; do cp "$AUDIT_TMP/dist/$(basename "$f")" "$f"; done
+}
+cyrius distlib > "$AUDIT_TMP/distlib.log" 2>&1 \
+    || { dist_restore; cat "$AUDIT_TMP/distlib.log"; fail "distlib"; }
+cyrius distlib core >> "$AUDIT_TMP/distlib.log" 2>&1 \
+    || { dist_restore; cat "$AUDIT_TMP/distlib.log"; fail "distlib core"; }
+dist_stale=""
+for f in $dist_files; do
+    cmp -s "$f" "$AUDIT_TMP/dist/$(basename "$f")" || dist_stale="$dist_stale $f"
+done
+if [ -n "$dist_stale" ]; then
+    dist_restore
+    fail "dist stale:$dist_stale (run cyrius distlib and cyrius distlib core)"
+fi
+pass "both bundles match their sources"
+
+stage 14/14 "lockfile"
+cyrius deps --locked > "$AUDIT_TMP/lock.log" 2>&1 \
+    || { cat "$AUDIT_TMP/lock.log"; fail "lib/ does not match cyrius.lock"; }
+pass "lib/ matches cyrius.lock"
+
+printf "\n${GREEN}audit clean${NC} — all 14 gates pass\n"

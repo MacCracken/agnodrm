@@ -9,6 +9,10 @@
 # the agnosys → agnodrm decomposition; udev/drm + the deferred group (roadmap.md Scope) still
 # use them.)
 
+# For the per-target O_* and STAT_* names and the scratch mapping; include-once, so
+# includers pay nothing.
+include "lib/syscalls.cyr"
+include "lib/mmap.cyr"
 include "src/error.cyr"
 
 # Emit a JSON value for a possibly-null C string into a str_builder:
@@ -98,27 +102,75 @@ fn agnodrm_run_checked(args, errmsg): i64 {
     return Ok(0);
 }
 
-# Read up to `cap` bytes from `fd` into a fresh heap buffer, NUL-terminate,
-# and return it as a Str (also valid as a cstr). Drains short reads. The
-# buffer is `cap + 1` bytes so the terminator never writes past the end
-# even at a full read (the per-module copies alloc'd exactly `cap`, a
-# latent 1-byte overflow when the file filled the buffer). Shared by the
-# pam config / passwd readers.
-fn agnodrm_read_fd_to_str(fd, cap): i64 {
-    var buf = alloc(cap + 1);
+# Read from `fd` until EOF or `cap` bytes, draining short reads and retrying EINTR.
+# Returns the byte count, or a negative errno: a read that fails part way must not
+# pass for a short file.
+fn _agnodrm_read_all(fd, buf, cap): i64 {
     var total = 0;
-    var rgo = 1;
-    while (rgo == 1) {
-        var n = sys_read(fd, buf + total, cap - total);
-        if (n <= 0) {
-            rgo = 0;
-        } else {
-            total = total + n;
-            if (total >= cap) { rgo = 0; }
-        }
+    while (total < cap) {
+        var n = file_read(fd, buf + total, cap - total);
+        if (n == 0) { break; }
+        if (n == 0 - EINTR) { continue; }
+        if (n < 0) { return n; }
+        total = total + n;
     }
+    return total;
+}
+
+# Write all `len` bytes, retrying EINTR. Returns 0 or a negative errno. A write that
+# makes no progress is -EIO, so a 0 from the kernel cannot spin the loop.
+fn _agnodrm_write_all(fd, data, len): i64 {
+    var off = 0;
+    while (off < len) {
+        var w = file_write(fd, data + off, len - off);
+        if (w == 0 - EINTR) { continue; }
+        if (w < 0) { return w; }
+        if (w == 0) { return 0 - EIO; }
+        off = off + w;
+    }
+    return 0;
+}
+
+# Read up to `cap` bytes from `fd` into a fresh heap buffer, NUL-terminate,
+# and return it as a Str (also valid as a cstr). The buffer is `cap + 1` bytes
+# so the terminator never writes past the end even at a full read. A read error
+# ends the text early: a caller that must tell the two apart uses _agnodrm_read_all.
+fn agnodrm_read_fd_to_str(fd, cap): i64 {
+    if (cap < 0) { cap = 0; }
+    var buf = alloc(cap + 1);
+    var total = _agnodrm_read_all(fd, buf, cap);
+    if (total < 0) { total = 0; }
     store8(buf + total, 0);
     return str_new(buf, total);
+}
+
+# 1 if a caller's result array can take `max` entries.
+fn _agnodrm_out_ok(arr, max): i64 {
+    if (max < 0) { return 0; }
+    if (max > 0) {
+        if (arr == 0) { return 0; }
+    }
+    return 1;
+}
+
+# Scratch that a call gives back on return. alloc() never frees, so a buffer taken
+# from it stays for the life of the process: a 5 s poller of udev_list_devices reached
+# 1 GiB in 15 minutes (audit F-40), and arena_free does not help, because an arena is
+# carved from alloc(). Nothing may keep a pointer into this past the free. Returns 0
+# on failure. The agnos arm is alloc(), since mmap_anon always fails there, and agnos
+# has no udev, journal or FUSE to reach these; its cyr_munmap is a no-op.
+fn _agnodrm_scratch_new(size): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return alloc(size);
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    return mmap_anon(size);
+    #endif
+}
+
+fn _agnodrm_scratch_free(p, size): i64 {
+    if (p != 0) { cyr_munmap(p, size); }
+    return 0;
 }
 
 # Durability pair for update.cyr's atomic write (write tmp -> fsync ->
@@ -143,6 +195,42 @@ fn agnodrm_fsync(fd): i64 {
 # 4-arg sys_rename, with file_rename computing both lengths.
 fn agnodrm_rename(oldpath, newpath): i64 {
     return file_rename(oldpath, newpath);
+}
+
+# The permission bits of what `path` resolves to, or -1 if it cannot be stat'd. 0x1FF is
+# 0777: set-id bits are not carried across, as the stdlib's own atomic write does not
+# carry them.
+fn _agnodrm_file_mode(path): i64 {
+    var st = alloc(STAT_BUFSZ);
+    if (xstat(path, st) != 0) { return 0 - 1; }
+    return load32(st + STAT_MODE) & 0x1FF;
+}
+
+# Flush the directory holding `path`, so a rename reaches the disk before anything that
+# depends on it does. A rename is only durable once its directory is: without this, a
+# power cut can undo the rename after a later step, such as firmware BootNext, has
+# landed. Returns 0 or a negative errno. EINVAL is a filesystem with no directory fsync,
+# which has nothing more to offer.
+fn _agnodrm_fsync_parent(path): i64 {
+    var slash = strlen(path) - 1;
+    while (slash >= 0) {
+        if (load8(path + slash) == 47) { break; }
+        slash = slash - 1;
+    }
+    var dir = ".";
+    if (slash == 0) { dir = "/"; }
+    if (slash > 0) {
+        dir = alloc(slash + 1);
+        memcpy(dir, path, slash);
+        store8(dir + slash, 0);
+    }
+    var fd = file_open(dir, O_RDONLY | O_DIRECTORY, 0);
+    if (fd < 0) { return fd; }
+    var ret = xfsync(fd);
+    file_close(fd);
+    if (ret == 0 - EINVAL) { return 0; }
+    if (ret < 0) { return ret; }
+    return 0;
 }
 
 enum AgnodrmTmp {
@@ -176,6 +264,12 @@ fn _agnodrm_tmp_seed(): i64 {
 # Create a new file named `<base>.tmp.<pid>.<ctr>`, mode 0644 before umask.
 # Returns the write fd and stores the path through `path_out`, or returns a
 # negative errno and leaves `path_out` alone.
+fn agnodrm_tmp_create(base, path_out): i64 {
+    return _agnodrm_tmp_open(base, path_out, 0x1A4);  # mode 0644
+}
+
+# agnodrm_tmp_create with a chosen mode. A temp that will replace a 0600 file must be
+# born 0600: created wider and tightened later, its bytes are readable in between.
 #
 # The name must be treated as predictable, so it is never opened with O_TRUNC:
 # file_create_exclusive refuses a name that exists as anything, including a
@@ -188,7 +282,7 @@ fn _agnodrm_tmp_seed(): i64 {
 # A crash between this and the caller's rename or unlink leaves the temp behind.
 # It is not reused or cleaned up. The suffix takes up to about 23 bytes of the
 # file name, so a `base` file name over about 232 bytes fails with -ENAMETOOLONG.
-fn agnodrm_tmp_create(base, path_out): i64 {
+fn _agnodrm_tmp_open(base, path_out, mode): i64 {
     if (base == 0 || path_out == 0) { return 0 - EINVAL; }
     if (_agnodrm_tmp_ctr == 0) { _agnodrm_tmp_seed(); }
     var baselen = strlen(base);
@@ -208,7 +302,15 @@ fn agnodrm_tmp_create(base, path_out): i64 {
         var end = pos + fmt_int_buf(_agnodrm_tmp_ctr, path + pos);
         store8(path + end, 0);
         _agnodrm_tmp_ctr = _agnodrm_tmp_ctr + 1;
-        var fd = file_create_exclusive(path, 0x1A4);  # mode 0644
+        #ifdef CYRIUS_TARGET_AGNOS
+        var fd = file_create_exclusive(path, mode);
+        #endif
+        #ifndef CYRIUS_TARGET_AGNOS
+        # file_create_exclusive's flags plus O_CLOEXEC, so no helper a caller forks
+        # later inherits the write end. agnos has no exec to leak it through, and its
+        # refusal needs the classification that helper does.
+        var fd = file_open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, mode);
+        #endif
         if (fd >= 0) {
             store64(path_out, path);
             return fd;

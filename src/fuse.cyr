@@ -10,6 +10,7 @@
 # the per-arch struct stat offsets; include-once, so includers pay nothing.
 include "lib/syscalls.cyr"
 include "src/error.cyr"
+include "src/util.cyr"
 
 # ================================================================
 # FuseMount struct
@@ -35,36 +36,20 @@ enum FuseMountTable {
     FUSE_MOUNTS_MAX_BYTES = 16777216;
 }
 
-# Parse a whole mount table from `fd` into a vec of fuse_mount records, fuse
-# entries only when `fuse_only` is 1. Returns Ok(vec) or Err.
-#
-# The table is read to EOF into a buffer that grows. A fixed buffer cut it silently
-# at 8 KiB, about 90 mounts, so a FUSE mount past the cut read as not mounted (audit
-# F-7). Past FUSE_MOUNTS_MAX_BYTES this fails rather than parse part of a table.
-fn _fuse_collect_mounts(fd, fuse_only): i64 {
-    var cap = FUSE_MOUNTS_CHUNK;
-    var buf = alloc(cap + 1);
-    var total_read = 0;
-    while (1) {
-        if (total_read == cap) {
-            if (cap >= FUSE_MOUNTS_MAX_BYTES) {
-                return drm_err_io(0, "mount table is too large");
-            }
-            var bigger = alloc(cap * 2 + 1);
-            if (bigger == 0) { return drm_err_io(ENOMEM, "mount table is too large"); }
-            memcpy(bigger, buf, total_read);
-            buf = bigger;
-            cap = cap * 2;
-        }
-        var nread = file_read(fd, buf + total_read, cap - total_read);
-        if (nread < 0) { return drm_err_io(0 - nread, "failed to read mount table"); }
-        if (nread == 0) { break; }
-        total_read = total_read + nread;
-    }
-    store8(buf + total_read, 0);
+# 1 for a filesystem type that is a FUSE mount: fuse or fuseblk, alone or with a
+# .<subtype>. Not fusectl, the control filesystem at /sys/fs/fuse/connections, which is
+# no FUSE mount and read as one to a prefix match (audit F-48).
+fn _fuse_type_ok(fstype): i64 {
+    if (streq(fstype, "fuse") == 1) { return 1; }
+    if (streq(fstype, "fuseblk") == 1) { return 1; }
+    if (agnodrm_cstr_starts_with(fstype, "fuse.") == 1) { return 1; }
+    return agnodrm_cstr_starts_with(fstype, "fuseblk.");
+}
 
-    # Parse line by line
-    # Format: device mountpoint fstype options dump pass
+# Parse `total_read` bytes of mount table at `buf` into a vec of fuse_mount records,
+# fuse entries only when `fuse_only` is 1. Every field is a heap copy.
+# Format: device mountpoint fstype options dump pass
+fn _fuse_parse_mounts(buf, total_read, fuse_only): i64 {
     var mounts = vec_new();
     var pos = 0;
 
@@ -84,7 +69,7 @@ fn _fuse_collect_mounts(fd, fuse_only): i64 {
 
         var include = 1;
         if (fuse_only == 1) {
-            if (fuse_starts_with(fstype, "fuse") != 1) {
+            if (_fuse_type_ok(fstype) != 1) {
                 include = 0;
             }
         }
@@ -97,6 +82,49 @@ fn _fuse_collect_mounts(fd, fuse_only): i64 {
         }
     }
 
+    return mounts;
+}
+
+# Parse a whole mount table from `fd` into a vec of fuse_mount records, fuse
+# entries only when `fuse_only` is 1. Returns Ok(vec) or Err.
+#
+# The table is read to EOF into a buffer that grows. A fixed buffer cut it silently
+# at 8 KiB, about 90 mounts, so a FUSE mount past the cut read as not mounted (audit
+# F-7). Past FUSE_MOUNTS_MAX_BYTES this fails rather than parse part of a table. The
+# buffer is scratch, given back on return.
+fn _fuse_collect_mounts(fd, fuse_only): i64 {
+    var cap = FUSE_MOUNTS_CHUNK;
+    var buf = _agnodrm_scratch_new(cap);
+    if (buf == 0) { return drm_err_io(ENOMEM, "no memory for the mount table"); }
+    var total_read = 0;
+    while (1) {
+        if (total_read == cap) {
+            if (cap >= FUSE_MOUNTS_MAX_BYTES) {
+                _agnodrm_scratch_free(buf, cap);
+                return drm_err_io(0, "mount table is too large");
+            }
+            var bigger = _agnodrm_scratch_new(cap * 2);
+            if (bigger == 0) {
+                _agnodrm_scratch_free(buf, cap);
+                return drm_err_io(ENOMEM, "mount table is too large");
+            }
+            memcpy(bigger, buf, total_read);
+            _agnodrm_scratch_free(buf, cap);
+            buf = bigger;
+            cap = cap * 2;
+        }
+        var nread = file_read(fd, buf + total_read, cap - total_read);
+        if (nread == 0 - EINTR) { continue; }
+        if (nread < 0) {
+            _agnodrm_scratch_free(buf, cap);
+            return drm_err_io(0 - nread, "failed to read mount table");
+        }
+        if (nread == 0) { break; }
+        total_read = total_read + nread;
+    }
+
+    var mounts = _fuse_parse_mounts(buf, total_read, fuse_only);
+    _agnodrm_scratch_free(buf, cap);
     return Ok(mounts);
 }
 
@@ -209,13 +237,17 @@ fn fuse_extract_field(line, linelen, field_idx): i64 {
 # Parse /proc/mounts and return FUSE mounts.
 # result_arr: pre-allocated array of FuseMount pointers.
 # max_mounts: capacity.
-# fuse_only: 1 to return only fuse.* mounts, 0 for all.
+# fuse_only: 1 to return only FUSE mounts (fuse, fuseblk, fuse.*), 0 for all.
+# A count equal to max_mounts may mean there are more.
 # Returns Result: Ok(count) or Err.
 fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return Ok(0);            # agnos has no /proc/mounts and no FUSE — zero mounts
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    if (_agnodrm_out_ok(result_arr, max_mounts) != 1) {
+        return drm_err_invalid_argument("result array is null or max_mounts is negative");
+    }
     var res_t, res_v = _fuse_read_mounts(fuse_only);
     if (is_err_result(res_t) == 1) { return Err(res_v); }
     var total = vec_len(res_v);
@@ -234,11 +266,17 @@ fn fuse_parse_proc_mounts(result_arr, max_mounts, fuse_only): i64 {
 # ================================================================
 
 # Mount a FUSE filesystem.
-# device: the FUSE filesystem source (e.g., sshfs#user@host:path).
-# mountpoint: target directory.
-# fuse_type: the specific FUSE fs type command (e.g., "sshfs", "ntfs-3g").
+# device: the FUSE filesystem source (e.g., user@host:path).
+# mountpoint: target directory, which must pass fuse_validate_mountpoint.
+# fuse_type: the absolute path of the helper (e.g., "/usr/bin/sshfs"). execve does no PATH
+# lookup, and a relative path runs from the working directory.
 # extra_opts: additional mount options string, or 0 for none.
 # Returns Result: Ok(0) or Err.
+#
+# Each argument reaches the helper in its own argv entry, with no shell. A device or
+# mountpoint starting with '-' is refused, since a helper would read it as an option,
+# and sshfs's -o ssh_command= runs a program (audit F-23). extra_opts is the caller's to
+# trust: it is options by definition.
 fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("fuse mount");   # agnos has no FUSE / fusermount
@@ -250,13 +288,13 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
 
     if (strlen(device) == 0) { return drm_err_invalid_argument("fuse device is empty"); }
     if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("fuse mountpoint is empty"); }
+    if (load8(fuse_type) != 47) { return drm_err_invalid_argument("fuse helper must be an absolute path"); }
+    if (load8(device) == 45) { return drm_err_invalid_argument("fuse device cannot start with '-'"); }
+    if (load8(mountpoint) == 45) { return drm_err_invalid_argument("fuse mountpoint cannot start with '-'"); }
 
-    # Build argv vec. Element 0 is the fuse helper (sshfs, ntfs-3g, or an
-    # absolute fusermount path) — it MUST be an absolute path: execve(2) does
-    # no PATH lookup. Each arg is its own vec entry (no shell, no
-    # metacharacter split), so `device`/`mountpoint`/`extra_opts` reach the
-    # helper verbatim. agnodrm_run_checked checks the exit code — the old
-    # 2-arg run_capture ignored it (and left buf/buflen garbage). See CHANGELOG.
+    var chk_t, chk_v = fuse_validate_mountpoint(mountpoint);
+    if (is_err_result(chk_t) == 1) { return Err(chk_v); }
+
     var args = vec_new();
     vec_push(args, fuse_type);
     vec_push(args, device);
@@ -277,9 +315,19 @@ fn fuse_mount(device, mountpoint, fuse_type, extra_opts): i64 {
 # Unmount FUSE filesystem
 # ================================================================
 
-# Unmount a FUSE filesystem at the given mountpoint.
-# Returns Result: Ok(0) or Err.
-fn fuse_unmount(mountpoint): i64 {
+# Test seam, 0 outside tests/tcyr: a stub to run in place of fusermount.
+var _fuse_fusermount = 0;
+
+# fusermount3 where it exists, the only name a fuse3-only host has, else fusermount.
+fn _fuse_unmount_tool(): i64 {
+    if (_fuse_fusermount != 0) { return _fuse_fusermount; }
+    if (sys_access("/usr/bin/fusermount3", 0) == 0) { return "/usr/bin/fusermount3"; }
+    return "/usr/bin/fusermount";
+}
+
+# Run `fusermount <flag> -- <mountpoint>`. The "--" keeps a mountpoint starting with '-'
+# from reading as an option.
+fn _fuse_run_unmount(mountpoint, flag, errmsg): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("fuse unmount");   # agnos has no FUSE / fusermount
     #endif
@@ -288,12 +336,19 @@ fn fuse_unmount(mountpoint): i64 {
     if (strlen(mountpoint) == 0) { return drm_err_invalid_argument("unmount mountpoint is empty"); }
 
     var args = vec_new();
-    vec_push(args, "/usr/bin/fusermount");
-    vec_push(args, "-u");
+    vec_push(args, _fuse_unmount_tool());
+    vec_push(args, flag);
+    vec_push(args, "--");
     vec_push(args, mountpoint);
 
-    return agnodrm_run_checked(args, "fusermount -u failed");
+    return agnodrm_run_checked(args, errmsg);
     #endif
+}
+
+# Unmount a FUSE filesystem at the given mountpoint.
+# Returns Result: Ok(0) or Err.
+fn fuse_unmount(mountpoint): i64 {
+    return _fuse_run_unmount(mountpoint, "-u", "fusermount -u failed");
 }
 
 # ================================================================
@@ -302,19 +357,7 @@ fn fuse_unmount(mountpoint): i64 {
 
 # Lazy unmount via fusermount -uz (for busy mounts).
 fn fuse_unmount_lazy(mountpoint): i64 {
-    #ifdef CYRIUS_TARGET_AGNOS
-    return drm_err_not_supported("fuse lazy unmount");   # agnos has no FUSE / fusermount
-    #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    if (mountpoint == 0) { return drm_err_invalid_argument("unmount mountpoint is null"); }
-
-    var args = vec_new();
-    vec_push(args, "/usr/bin/fusermount");
-    vec_push(args, "-uz");
-    vec_push(args, mountpoint);
-
-    return agnodrm_run_checked(args, "fusermount -uz failed");
-    #endif
+    return _fuse_run_unmount(mountpoint, "-uz", "fusermount -uz failed");
 }
 
 # ================================================================
@@ -337,7 +380,7 @@ fn fuse_is_available(): i64 {
 # ================================================================
 
 # Validate that a path is suitable as a FUSE mountpoint.
-# Checks: not null, not root, exists, is a directory.
+# Checks: not null, exists, is a directory, is not the root directory by any spelling.
 # Returns Result: Ok(0) or Err.
 fn fuse_validate_mountpoint(path): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
@@ -346,11 +389,6 @@ fn fuse_validate_mountpoint(path): i64 {
     #ifndef CYRIUS_TARGET_AGNOS
     if (path == 0 || strlen(path) == 0) {
         return drm_err_invalid_argument("mountpoint path is empty");
-    }
-
-    # Must not be filesystem root
-    if (strlen(path) == 1 && load8(path) == 47) {
-        return drm_err_invalid_argument("cannot use filesystem root as mountpoint");
     }
 
     # Check path exists and is a directory. struct stat is per-arch: st_mode
@@ -367,6 +405,17 @@ fn fuse_validate_mountpoint(path): i64 {
     # S_IFDIR = 0x4000 = 16384
     if ((mode & 0xF000) != 0x4000) {
         return drm_err_invalid_argument("mountpoint is not a directory");
+    }
+
+    # Root by identity, so "//", "/." and "/tmp/.." are caught too. st_dev is at +0 and
+    # st_ino at +8 on x86_64 and aarch64 alike; the stdlib names neither.
+    var rootbuf = alloc(STAT_BUFSZ);
+    if (sys_stat("/", rootbuf) == 0) {
+        if (load64(statbuf) == load64(rootbuf)) {
+            if (load64(statbuf + 8) == load64(rootbuf + 8)) {
+                return drm_err_invalid_argument("cannot use filesystem root as mountpoint");
+            }
+        }
     }
 
     return Ok(0);
@@ -396,7 +445,26 @@ enum FuseStatus {
     FUSE_ERROR = 3;
 }
 
-# Get the status of a FUSE mount at the given mountpoint.
+# 1 if `mountpoint`, trailing slashes aside, is in `mounts`, a vec of fuse_mount.
+fn _fuse_mounted_in(mounts, mountpoint): i64 {
+    var mplen = strlen(mountpoint);
+    while (mplen > 1) {
+        if (load8(mountpoint + mplen - 1) != 47) { break; }
+        mplen = mplen - 1;
+    }
+    var i = 0;
+    while (i < vec_len(mounts)) {
+        var m = vec_get(mounts, i);
+        var mp = fuse_mount_mountpoint(m);
+        if (mp != 0 && strlen(mp) == mplen && memeq(mp, mountpoint, mplen) == 1) {
+            return 1;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+# Get the status of a FUSE mount at the given mountpoint, trailing slashes aside.
 # Returns Result: Ok(FuseStatus) or Err.
 fn fuse_get_status(mountpoint): i64 {
     if (mountpoint == 0 || strlen(mountpoint) == 0) {
@@ -405,18 +473,7 @@ fn fuse_get_status(mountpoint): i64 {
 
     var res_t, res_v = _fuse_read_mounts(1);
     if (is_err_result(res_t) == 1) { return Ok(FUSE_ERROR); }
-    var mounts = res_v;
 
-    var mplen = strlen(mountpoint);
-    var i = 0;
-    while (i < vec_len(mounts)) {
-        var m = vec_get(mounts, i);
-        var mp = fuse_mount_mountpoint(m);
-        if (mp != 0 && strlen(mp) == mplen && memeq(mp, mountpoint, mplen) == 1) {
-            return Ok(FUSE_MOUNTED);
-        }
-        i = i + 1;
-    }
-
+    if (_fuse_mounted_in(res_v, mountpoint) == 1) { return Ok(FUSE_MOUNTED); }
     return Ok(FUSE_NOT_MOUNTED);
 }

@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — agnodrm
 
-> **Last refresh**: 2026-11-05 (issue ledger, at the 1.6.3 pin bump; the rest last audited 2026-06-19 for the 1.4.4 decomposition) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-11-05 (SECURITY-NOTES and the audit set, at the 1.7.2 P(-1); the issue ledger at the 1.6.3 pin bump; the rest last audited 2026-06-19 for the 1.4.4 decomposition) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`agnodrm`, formerly `agnosys`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo cyrius pin/version drift lives in [`development/state.md`](development/state.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as docs change. Agnodrm is the AGNOS device / DRM model (renamed from agnosys at 1.4.4); device-access docs propagate to ai-hwaccel / mabda, so doc currency carries weight. The doc surface is moderate (~34 files) and most are load-bearing.

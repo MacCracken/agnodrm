@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_call:
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -16,13 +19,18 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Cyrius toolchain
         run: |
           CYRIUS_VERSION="${CYRIUS_VERSION:-$(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)}"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          curl -fsSLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          # The compiler runs in this job, so it is checked before it is unpacked. A pin
+          # with no line in the hash file fails here: see CLAUDE.md.
+          grep -F "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz" .github/toolchain.sha256 | sha256sum -c -
           tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
           CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
           mkdir -p "$HOME/.cyrius/versions/$CYRIUS_VERSION/bin" "$HOME/.cyrius/versions/$CYRIUS_VERSION/lib"
@@ -49,18 +57,14 @@ jobs:
         # `./lib/` is gitignored — `cyrius deps` populates it from
         # the version-pinned stdlib snapshot. Matches yukti/patra
         # convention.
-        run: cyrius deps
+        # --locked first: `cyrius deps` rewrites cyrius.lock, so the verify after it could
+        # not see a drifted lock. It writes nothing, and checks the lock against the tags.
+        run: |
+          cyrius deps --locked
+          cyrius deps
 
       - name: Verify dep hashes
-        # Skip on the first push that introduces a new dep before
-        # `cyrius.lock` has been generated and committed. Once the
-        # lockfile lands in-tree, this step starts enforcing hashes.
-        run: |
-          if [ -f cyrius.lock ]; then
-            cyrius deps --verify
-          else
-            echo "::warning::cyrius.lock not committed — skipping hash verification"
-          fi
+        run: cyrius deps --verify
 
       - name: Syntax check
         run: |
@@ -69,7 +73,15 @@ jobs:
           done
 
       - name: API surface check
-        run: scripts/check-api-surface.sh
+        # An addition is non-breaking, but the agnos lane's probe is generated from the
+        # snapshot, so a public fn missing from it never gets its agnos arm compiled.
+        run: |
+          out=$(scripts/check-api-surface.sh)
+          echo "$out"
+          if echo "$out" | grep -q ' added since snapshot'; then
+            echo "ERROR: new public fn not in the snapshot; run scripts/check-api-surface.sh --update"
+            exit 1
+          fi
 
       - name: Capacity gate
         run: cyrius capacity --check src/main.cyr
@@ -307,7 +319,7 @@ jobs:
               cat "$log"; echo "ERROR: fuzz build failed: $name"; exit 1; }
             cat "$log"
             scripts/audit.sh --check-build-log "fuzz $name" "$log"
-            timeout 10 "build/$name" 500 || { echo "FUZZ CRASH: $name"; exit 1; }
+            timeout 10 "build/$name" || { echo "FUZZ CRASH: $name"; exit 1; }
             echo "  $name: ok"
           done
 
@@ -324,7 +336,9 @@ jobs:
     name: Security Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Scan for dangerous patterns
         # Matches code lines only — rejects patterns in # comments.
         # Use awk instead of "grep -v '# '" which would eat any line
@@ -372,7 +386,9 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Check required docs
         run: |
           MISSING=0

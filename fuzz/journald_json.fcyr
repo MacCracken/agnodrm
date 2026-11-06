@@ -1,0 +1,122 @@
+# Fuzz: the journalctl JSON reader, on mutated lines that end against unmapped memory, so
+# a read past the end faults, and the datagram layout, whose two passes must agree.
+# Invariants: no crash; a decoded value is never longer than its text; PRIORITY is 0-7;
+# a measured datagram is the size it fills; hostile values never add a field.
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/process.cyr"
+include "lib/net.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/journald.cyr"
+
+alloc_init();
+
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+
+fn fz_guarded(len): i64 {
+    var p = _agnodrm_scratch_new(16384);
+    _agnodrm_scratch_free(p + 12288, 4096);
+    return p + 12288 - len;
+}
+
+var seeds = vec_new();
+vec_push(seeds, "{\"MESSAGE\":\"a\\nb\\u0041\\\"c\",\"PRIORITY\":\"6\",\"_PID\":\"42\",\"_UID\":\"1700\"}");
+vec_push(seeds, "{\"MESSAGE\":[104,105,27,0],\"PRIORITY\":[\"3\",\"4\"],\"_SYSTEMD_UNIT\":null}");
+vec_push(seeds, "{\"MESSAGE\":[[1,2],[3]],\"X\":\"\\\\\",\"PRIORITY\":\"9\"}");
+var alpha = "\"\\[],:{}u0179anbtMESAG";
+var alen = strlen(alpha);
+var it = 0;
+while (it < 60000) {
+    var seed = vec_get(seeds, fz_rand() % 3);
+    var slen = strlen(seed);
+    var len = fz_rand() % (slen + 1);
+    var buf = fz_guarded(len);
+    memcpy(buf, seed, len);
+    var muts = fz_rand() % 6;
+    var m = 0;
+    while (m < muts) {
+        if (len > 0) { store8(buf + fz_rand() % len, load8(alpha + fz_rand() % alen)); }
+        m = m + 1;
+    }
+    var line = str_new(buf, len);
+    var msg = journald_json_get_str(line, "MESSAGE");
+    if (msg != 0) {
+        if (str_len(msg) > len) { sys_exit(30); }
+    }
+    var t, v = journald_parse_json(line);
+    if (is_ok(t) == 1) {
+        var p = journald_entry_priority(v);
+        if (p < 0) { sys_exit(31); }
+        if (p > 7) { sys_exit(32); }
+    }
+    _agnodrm_scratch_free(buf + len - 12288, 12288);
+    it = it + 1;
+}
+
+# Layout: both passes agree, and whatever a value holds, the fields are the ones asked for.
+fn fz_field_count(p, n): i64 {
+    var keys = 0;
+    var pos = 0;
+    while (pos < n) {
+        while (pos < n) {
+            var c = load8(p + pos);
+            if (c == 10) { break; }
+            if (c == 61) { break; }
+            pos = pos + 1;
+        }
+        if (pos >= n) { return 0 - 1; }
+        keys = keys + 1;
+        if (load8(p + pos) == 61) {
+            while (pos < n) {
+                if (load8(p + pos) == 10) { break; }
+                pos = pos + 1;
+            }
+            pos = pos + 1;
+        } else {
+            pos = pos + 1;
+            if (pos + 8 > n) { return 0 - 1; }
+            pos = pos + 8 + load64(p + pos);
+            if (pos >= n) { return 0 - 1; }
+            if (load8(p + pos) != 10) { return 0 - 1; }
+            pos = pos + 1;
+        }
+    }
+    return keys;
+}
+
+var valpha = "ab=\nPRIORITY";
+it = 0;
+while (it < 40000) {
+    var vl = fz_rand() % 32;
+    var msg = alloc(vl + 1);
+    var i = 0;
+    while (i < vl) {
+        store8(msg + i, load8(valpha + fz_rand() % 12));
+        i = i + 1;
+    }
+    store8(msg + vl, 0);
+    var n = _journald_layout(0, msg, fz_rand() % 8, msg, 0, 0);
+    var buf = alloc(n + 1);
+    if (_journald_layout(buf, msg, 1, msg, 0, 0) != n) { sys_exit(33); }
+    if (fz_field_count(buf, n) != 3) { sys_exit(34); }
+    it = it + 1;
+}
+sys_exit(0);

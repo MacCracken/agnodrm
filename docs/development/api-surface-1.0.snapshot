@@ -175,6 +175,7 @@ netns::netns_fw_policy_set_default_out/2
 netns::netns_fw_policy_set_rule_count/2
 netns::netns_fw_policy_set_rules/3
 netns::netns_fw_policy_set_rules_arr/2
+netns::netns_fw_policy_validate/1
 netns::netns_fw_rule_action/1
 netns::netns_fw_rule_comment/1
 netns::netns_fw_rule_direction/1
@@ -280,6 +281,7 @@ update::update_manifest_set_min_version/2
 update::update_manifest_set_release_date/2
 update::update_manifest_set_version/2
 update::update_manifest_version/1
+update::update_mark_boot_attempt/1
 update::update_mark_boot_successful/1
 update::update_needs_rollback/2
 update::update_other_slot/1
@@ -292,9 +294,11 @@ update::update_slot_suffix/1
 update::update_state_boot_count/1
 update::update_state_new/2
 update::update_state_pending/1
+update::update_state_previous/1
 update::update_state_rollback_available/1
 update::update_state_set_boot_count/2
 update::update_state_set_pending/2
+update::update_state_set_previous/2
 update::update_state_set_rollback/2
 update::update_state_set_rollback_available/2
 update::update_state_set_slot/2

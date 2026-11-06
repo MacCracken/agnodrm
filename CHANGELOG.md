@@ -7,6 +7,191 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.2] — 2026-11-05
+
+**A full P(-1) audit: 46 findings, all repaired.** 4 HIGH, 23 MEDIUM and 19 LOW, from independent reviews of every module,
+the bundles, the scripts and the workflows, and a CVE pass. The cyrius pin stays at 6.7.18, the latest. The API grows from
+317 to 321 public fns. Nothing in the workspace calls the functions that changed, so exposure was future, not live: stiva
+passes on this bundle unchanged. See [`docs/audit/2026-11-05-audit.md`](docs/audit/2026-11-05-audit.md).
+
+⚠ **Consumer floor rises 6.6.7 → 6.6.10**, for `dir_list_checked`. On 6.6.9 a build that reaches the loader-entries scan
+fails. stiva (pin 6.6.10) is at the floor. Both bundles' sidecars gain the `mmap` leaf, which is now in `[deps] stdlib`.
+
+⚠ **Behaviour changes:** see `Changed`. In short, many calls that returned `Ok` or a partial result now refuse. The ones to
+check first:
+
+- `update_mark_boot_successful` needs `agnos.slot=` to name the trial's slot, and `update_apply` needs `/usr/bin/sha256sum`
+  with `verify` on, the default.
+- On an EFI host a failing `efibootmgr` refuses `update_apply` and `update_rollback` until it works.
+- `netns_render_nftables_ruleset` returns 0 for a policy it cannot render truthfully, and one rule is now one line.
+- `netns_generate_agent_ips` returns different addresses.
+- `fuse_type` must be an absolute path.
+
+### Security
+
+- **F-15 (HIGH): rolling back before any switch booted the unverified image.** `update_rollback` took "not the state's
+  slot" as the slot to return to, which there is the image just written.
+- **F-16 (HIGH): `rollback_available` survived a failed `dd` over the rollback slot,** so a rollback booted half an image.
+  `update_apply` now proves the next boot stays on the running slot, then clears the record, then writes.
+- **F-17 (HIGH): `update_needs_rollback` could not fire.** Only confirmation counted boots, and it also cleared `pending`.
+  `update_mark_boot_attempt` is new, and counts boots of an image on trial.
+- **F-18 (HIGH): a firewall rule with a port and an address rendered as two rules, OR not AND.** "ssh from the bastion"
+  opened 22 to everyone and every port to the bastion. A rule that named nothing renderable vanished, which under a default
+  accept is a hole. Inherited from the Rust original. One rule is now one line, and what cannot be rendered is refused.
+- **F-19: a rule's `comment` and `remote_addr` reached nft text raw,** so policy data could add rules. Both are validated.
+- **F-20: `--boot` takes an optional argument, so a filter value could parse as a new journalctl option:** `--boot
+  --vacuum-time=1s` is an option, and `--boot _UID=0` a match. It is now one word, `--boot=<value>`. Reproduced against real
+  journalctl.
+- **F-23: `fuse_type` could be relative, and `device` or `mountpoint` could start with `-`.** sshfs's `-o ssh_command=` runs
+  a program. All three are refused.
+- **F-27, F-28: entries systemd-boot would boot could be hidden from a validator.** It ends lines at CR, folds the `.conf`
+  suffix, stops at NUL, reads any size and merges the ESP and XBOOTLDR; this reader did none of those, and returned `Ok`.
+- **F-29: `update_apply` never checked the manifest, and nothing compared its sha256.** It now does, through `sha256sum`,
+  and refuses compressed, delta and multi-file manifests, which `dd` would have written raw. **The manifest is still not
+  signed**, so this catches a corrupt image, not a forged one.
+- **F-31: version strings were unescaped,** so one could rewrite other state fields. The state reader now walks tokens.
+- **F-32: atomic write and copy widened a 0600 target to 0644.** The temp is now born with the target's mode.
+- **F-34: `udev_validate_rule` passed `RUN{program}`,** the spelling real rules use, and `SYSCTL{...}`.
+- **F-36: forgeable udev lines decided a device's identity.** A later `P:`, `N:` or `E:` overwrote an earlier one. The first
+  stands, a second `P:` fails the block, `U:`/`T:`/`V:` outrank properties, and a node that climbs out of `/dev` is refused.
+- **F-38: `drm_open` accepted any path,** a regular file, `/dev/ptmx`, `/dev/kvm`. It now requires a DRM device.
+- **F-41: the toolchain tarball was unverified, and ran under a write token.** CI now checks it against
+  `.github/toolchain.sha256` before unpacking, with `curl -f`, least-privilege `permissions`, `persist-credentials: false`
+  and actions pinned to commit SHAs.
+- **F-51: the kernel cmdline validator missed spellings the kernel accepts:** `init="/bin/sh"`, `init-on-alloc=0`,
+  `audit=off`, `init=/usr/bin/bash`, and `rd.break=` with a value.
+
+CVE pass: [`docs/audit/2026-11-05-cve-landscape.md`](docs/audit/2026-11-05-cve-landscape.md). No new CVE needs a code change
+here; the udev `E:` injection class (GHSA-m8q3-73v4-wvg7, CVE-2026-40225) is why F-36's parser distrusts properties.
+
+### Fixed
+
+- **F-21: `journald_query` past 128 KiB kept the oldest entries and a fabricated last one,** and lost the newest, which is
+  what "last N" is for. The buffer grows to 32 MiB, and past that the call fails.
+- **F-22: an agent name of 9 or more bytes lost its `-h`/`-a` suffix,** so both veth ends had one name and every create
+  failed. Long names now use a hash.
+- **F-24: a re-applied ruleset merged,** so a tightened policy kept its old accepts. The ruleset now replaces its table in
+  one transaction. Verified against real `nft`.
+- **F-25, F-26: confirmation never checked the running slot, and never promoted the version,** so `update_check` offered a
+  confirmed version again.
+- **F-30: an unreadable state file counted as no state,** which erased the records. Only a missing file is fresh.
+- **F-33: no directory fsync after a rename,** so BootNext could outlive the marker and the state.
+- **F-35: `DRM_IOCTL_VERSION` encoded 72 bytes; the ABI is 64, `0xC0406400`.** Real kernels take the caller's size, which is
+  why it worked. qemu-user and an ioctl allowlist refuse it.
+- **F-37: at the 1 MiB cap the last udev block parsed cut,** and could return the wrong device node. The database is read
+  whole or the call fails, up to 64 MiB.
+- **F-39: `EOPNOTSUPP` from a render-only driver was an `Err`,** and now reads as "no such capability".
+- **F-40: scratch buffers came from a heap that never frees:** 5.5 MB per `udev_list_devices` on a 2000-device host, 464 B per
+  log line. They are now mapped and unmapped.
+- **F-42 to F-60:** the LOW findings, listed in the audit report. Among them: `ip` and `nft` read a leading
+  zero as octal, so `010.0.0.1` was a rule on `8.0.0.1`; `result_print_err` returned 0 for an `Err` with errno 0;
+  `fusectl` counted as FUSE; `fusermount3`-only hosts could not unmount; `update_parse_version` wrapped at 2^64.
+
+### Added
+
+- `update_mark_boot_attempt(config)`, `netns_fw_policy_validate(policy)`, and `update_state_previous` with its setter. A
+  confirm records the version it replaced, so a rollback can put it back; a `previous_version` key joins the state file.
+- `docs/architecture/001-slot-write-order.md`: the order of the slot writes and what a power cut leaves at each step.
+- Fuzz harnesses `udev_parse`, `update_state`, `journald_json` and `netns_render`, the parsers' inputs ending against
+  unmapped memory, and a property fuzz in `bootloader_cmdline`.
+- Benchmarks `udev_parse_block`, `journald_parse_json`, `update_parse_state` and `nft_render_policy`.
+- `scripts/audit.sh` gates 13 (dist staleness) and 14 (lockfile), for 14 gates. A new public fn missing from the snapshot now
+  fails gate 2, because the agnos probe is generated from it.
+
+### Changed
+
+- **`update_*`:** `rollback_available` is set by a switch, not by `update_apply`, so a rollback before any switch abandons
+  the pending image. `update_apply` refuses while an image is on trial on the running slot, and for a missing target device.
+  `update_switch_slot` refuses a slot with nothing known to boot on it, and treats leaving a trial as a rollback.
+  `update_save_state` refuses a value JSON would have to escape. `update_load_state` refuses a malformed file. A version
+  must now be a real date, and `update_check` validates what it offers. `boot_count` is no longer raised by a confirm.
+- **`bootloader_*`:** a file over 64 KiB or unreadable, an unreadable directory, or more entries than `max_entries` is an
+  `Err`, on both paths. `bootloader_detect` probes `/efi`, `/boot` and GRUB2 too.
+- **`netns_*`:** `netns_validate_config` refuses names outside letters, digits, `-` and `_`, and non-IPv4 addresses.
+  `netns_generate_agent_ips` draws from 16384 /30 subnets, not 255. Inner `ip` and `nft` are absolute. `/run/agnos` is refused
+  if anyone else can write it. `netns_nft_append` is deprecated.
+- **`journald_*`:** the JSON reader decodes escapes, byte arrays and repeated fields, and passes `--all`, so a line with one
+  ESC byte no longer reads as empty. Extras cannot restate `MESSAGE`, `PRIORITY` or `SYSLOG_IDENTIFIER`.
+- **`fuse_*`:** `fuse_mount` calls `fuse_validate_mountpoint`, which finds the root by identity. Unmount passes `--`.
+- **`udev_get_device_info`** takes an absolute path with no `..`. **`drm_close`** returns the close's result. **`drm_get_capability`**
+  retries `EINTR` and `EAGAIN`. **`drm_list_devices`** reports a read failure.
+- The bench pins its hash seed, and `wrap_syscall_ok` no longer times `getpid`.
+
+### Known issues
+
+See the residuals in the audit report. The ones to plan around:
+
+- **Updates are not authenticated.** The manifest is unsigned.
+- **On an EFI host with a failing `efibootmgr`, a rollback and an update refuse until it works.** Two attempts to exempt a
+  host that had already reached the good slot each failed review, so there is no exception. Nothing is lost by waiting: the
+  marker has moved, the record stays, and a retry finishes.
+- **A state file written by 1.7.1's `update_apply` reads as a trial.** Nothing in the workspace has run that code.
+- **`update_apply` still needs `agnos.slot=` on the kernel cmdline,** which nothing in the workspace emits yet.
+- `.github/toolchain.sha256` is new and must be committed with the workflows, or the toolchain step fails.
+- Four qemu core dumps are still committed; see `docs/development/issues/2026-10-07-committed-qemu-core-dumps.md`.
+
+### Performance
+
+Measured on one host, three to five runs each. `validate_cmdline_safe` compares against tag 1.7.1 built with the same
+pinned seed.
+
+| Row | 1.7.1 | 1.7.2 | Why |
+|---|---|---|---|
+| `compare_versions` | 100 ns | 73 ns | A packed key, with no heap |
+| `validate_ver_good` | 51 ns | 45 ns | The same |
+| `validate_cmdline_safe` | ~790 ns | ~590 ns | At one seed; the key set changed too, so this does not generalise. Unseeded it swung 474–2974 ns |
+| `wrap_syscall_ok` | 294 ns | 4 ns | **Not a speedup.** The row timed `getpid`, 279 ns of its 280. It no longer does |
+| `map_get_miss` | 42–77 ns | 41 ns | Pinned seed; the 77 was a seed collision |
+| `strlen_16ch` | 15 ns | 11 ns | Code placement, as at 1.7.1 |
+
+`is_dangerous_token_hit` and `_miss` read 3–7 ns higher, with their source unchanged and within those rows' spread across
+runs. `memeq_16`, last release's open question, is unchanged at 30–31 ns. No row regressed beyond noise. The four new rows
+have no prior: `udev_parse_block` 1.6 µs, `journald_parse_json` 1.5 µs, `update_parse_state` 3.1 µs, `nft_render_policy` 6 µs.
+
+**Comparing rows:** the pinned seed and the `wrap_syscall_ok` change break those rows' history at this release.
+
+**Memory:** `journald_send` takes nothing from the heap per line, where it took 464 B. `udev_list_devices` with a filter that
+matches nothing takes under 4 KiB per call on a 2 MB database. A full listing keeps only the returned devices.
+
+### Build Metrics
+
+| Metric | 1.7.1 | 1.7.2 |
+|---|---|---|
+| x86_64 (DCE) | 28,384 B | 33,448 B |
+| agnos (DCE) | 24,488 B | 33,248 B |
+| aarch64 | 269,960 B | 270,928 B |
+| `dist/agnodrm.cyr` | 5,217 lines | 6,672 lines |
+| `dist/agnodrm-core.cyr` | 1,310 lines | 1,611 lines |
+| Public fns | 317 | 321 |
+| Assertions | 475 | 1,606 |
+| Fuzz harnesses | 4 | 8 |
+| Benchmarks | 18 | 22 |
+
+The binaries grew mostly because the smoke test now runs the real udev parser, and the parser is larger.
+
+### Verification
+
+- `scripts/audit.sh`: 14/14.
+- 1,606 assertions on x86_64, under the poison allocator, and on cyrius 6.6.10, 6.6.20 and 6.7.9; under `qemu-aarch64`,
+  1,607, where an emulator-only branch adds one. All 8 fuzz harnesses under both.
+- Floor: 6.6.9 fails to build, 6.6.10 passes. Sidecar-only probes of both bundles, every public fn, build warning-free on
+  x86_64, aarch64 and agnos at 6.6.10, 6.6.20, 6.7.9 and 6.7.18.
+- stiva passes all five of its suites against this exact bundle.
+- CI replay in a clean `HOME` from the release tarball: hash check, `--locked`, audit clean. A wrong hash is refused.
+- Mutation: 164 of 166 reverted repairs fail the suite. The two survivors are a failed directory fsync, which cannot be
+  injected, and a temp's birth mode, which shows only for an instant; that helper is tested directly.
+- Real tools in a private namespace: `nft` loads every rendered rule combination and a re-apply replaces the old table, and
+  `ip` takes the hashed veth names. Real `journalctl` confirmed the `--boot` behaviour. A real render node answers both
+  ioctls.
+- **Simulated power cuts at every write of `update_apply`, `update_switch_slot` and `update_rollback`,** in a scratch
+  harness, with a model of the boot order: 56 rows, none bad, on the final tree, after five review rounds. Those rounds
+  matter: the first repair of this state machine held 3 HIGH regressions with every test green, and the audit report
+  records them.
+
+**Not verified:** real `bootctl`, `efibootmgr`, `udevadm` and `fusermount` (stubs only), real block devices, a real power
+cut, a booted systemd-boot, and a real agnos system. Whether a slot stays selected past its one `BootNext` depends on
+argonaut, which was not checked.
+
 ## [1.7.1] — 2026-11-05
 
 **Every open audit finding is closed, and the cyrius pin moves 6.7.9 → 6.7.18.** F-3 to F-14 are repaired, and

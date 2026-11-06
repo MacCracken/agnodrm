@@ -7,10 +7,10 @@
 
 ## Summary
 
-- Total public functions: **317**
+- Total public functions: **321**
 - Modules: **10**
 - 1.0 baseline (frozen): 556 fns
-- Post-1.0 additions (V1.1 + V1.2 cycles): -239 fns
+- Post-1.0 additions (V1.1 + V1.2 cycles): -235 fns
 - Outliers (fns lacking module prefix): 0
 
 
@@ -33,7 +33,7 @@
 - `bootloader_config_timeout(arg)` → (no behavioral docs)
 - `bootloader_config_type(arg)` → (no behavioral docs)
 - `bootloader_danger_reset()` → (no behavioral docs)
-- `bootloader_detect()` → Detect the installed bootloader by probing well-known paths. Returns Result: Ok(BootloaderType co...
+- `bootloader_detect()` → Detect the installed bootloader by probing well-known paths: systemd-boot under each place an ESP...
 - `bootloader_entry_id(arg)` → (no behavioral docs)
 - `bootloader_entry_initrd(arg)` → (no behavioral docs)
 - `bootloader_entry_is_default(arg)` → (no behavioral docs)
@@ -61,11 +61,11 @@
 
 ### `drm` (src/drm.cyr)
 
-- `drm_close(arg)` → Close a DRM device fd.
+- `drm_close(arg)` → Close a DRM device fd. Returns 0 or a negative errno, so a double close shows.
 - `drm_get_capability(arg1, arg2)` → Query a DRM capability value for an open device fd. cap: one of the DRM_CAP_* constants. Returns ...
 - `drm_get_driver_version(arg)` → Get the DRM driver version for an open device fd. Returns Result: Ok(drm_verinfo_ptr) or Err.
 - `drm_list_devices(arg1, arg2)` → List DRM card device paths under /dev/dri/. result_arr: pre-allocated array of string pointers. m...
-- `drm_open(arg)` → Open a DRM device by path. Returns Result: Ok(fd) or Err.
+- `drm_open(arg)` → Open a DRM device by path. Returns Result: Ok(fd) or Err. Anything that is not a DRM device is cl...
 - `drm_supports_dumb_buffer(arg)` → Check if device supports dumb buffers. Returns Result: Ok(1) or Ok(0).
 - `drm_verinfo_date(arg)` → (no behavioral docs)
 - `drm_verinfo_desc(arg)` → (no behavioral docs)
@@ -102,19 +102,19 @@
 - `drm_syserr_kind(arg)` → Get error kind (works for both packed and heap errors)
 - `drm_syserr_message(arg)` → Get error message pointer (0 for packed errors)
 - `drm_syserr_new(arg1, arg2, arg3)` → Create a new error with message (heap-allocated, cold path)
-- `drm_syserr_pack(arg1, arg2)` → Pack kind + errno into a single integer (zero allocation)
+- `drm_syserr_pack(arg1, arg2)` → Pack kind + errno into a single integer (zero allocation). The mask keeps a stray value in its ow...
 - `drm_syserr_print(arg)` → (no behavioral docs)
 - `is_syscall_err(arg)` → Check if a syscall return value indicates error (negative = errno)
-- `result_print_err(arg1, arg2)` → Print error from a Result if it's Err, then return the error code. Returns 0 if the Result is Ok....
+- `result_print_err(arg1, arg2)` → Print error from a Result if it's Err, then return a nonzero code: its errno, or its kind when it...
 - `wrap_syscall(arg)` → Wrap a raw syscall return: Ok(ret) if >= 0, Err(from_errno) if < 0
 
 ### `fuse` (src/fuse.cyr)
 
 - `fuse_extract_field(arg1, arg2, arg3)` → Extract a whitespace-delimited field from a line. field_idx: 0-based field index. Returns heap-al...
-- `fuse_get_status(arg)` → Get the status of a FUSE mount at the given mountpoint. Returns Result: Ok(FuseStatus) or Err.
+- `fuse_get_status(arg)` → Get the status of a FUSE mount at the given mountpoint, trailing slashes aside. Returns Result: O...
 - `fuse_is_available()` → Check whether FUSE is available on this system (/dev/fuse exists). Returns 1 if available, 0 othe...
 - `fuse_list_mounts()` → List all currently mounted FUSE filesystems. Returns Result: Ok(vec_of_mounts) or Err.
-- `fuse_mount(arg1, arg2, arg3, arg4)` → Mount a FUSE filesystem. device: the FUSE filesystem source (e.g., sshfs#user@host:path). mountpo...
+- `fuse_mount(arg1, arg2, arg3, arg4)` → Mount a FUSE filesystem. device: the FUSE filesystem source (e.g., user@host:path). mountpoint: t...
 - `fuse_mount_device(arg)` → (no behavioral docs)
 - `fuse_mount_fstype(arg)` → (no behavioral docs)
 - `fuse_mount_mountpoint(arg)` → (no behavioral docs)
@@ -128,7 +128,7 @@
 - `fuse_starts_with(arg1, arg2)` → Check if a string starts with a prefix. Thin wrapper over the shared single-pass predicate (publi...
 - `fuse_unmount(arg)` → Unmount a FUSE filesystem at the given mountpoint. Returns Result: Ok(0) or Err.
 - `fuse_unmount_lazy(arg)` → Lazy unmount via fusermount -uz (for busy mounts).
-- `fuse_validate_mountpoint(arg)` → Validate that a path is suitable as a FUSE mountpoint. Checks: not null, not root, exists, is a d...
+- `fuse_validate_mountpoint(arg)` → Validate that a path is suitable as a FUSE mountpoint. Checks: not null, exists, is a directory, ...
 
 ### `journald` (src/journald.cyr)
 
@@ -167,7 +167,7 @@
 - `journald_filter_until(arg)` → (no behavioral docs)
 - `journald_get_unit_logs(arg1, arg2)` → Get the last `lines` journal entries for a specific systemd unit. unit_name: C string (e.g. "sshd...
 - `journald_info(arg)` → Send an info-level message to the journal. message: C string. Returns Result: Ok(0) or Err.
-- `journald_json_get_str(arg1, arg2)` → Minimal JSON field extraction: find a key in a JSON object string and extract the string value. R...
+- `journald_json_get_str(arg1, arg2)` → Minimal JSON field extraction: find a key in a JSON object string and return its value as a new S...
 - `journald_make_sockaddr()` → Build a sockaddr_un pointing to /run/systemd/journal/socket. Returns pointer to the struct (110 b...
 - `journald_parse_json(arg)` → Parse a single JSON line from journalctl output into a JournalEntry. Returns Result: Ok(entry_ptr...
 - `journald_query(arg)` → Query the systemd journal using journalctl and parse JSON output. filter: JournalFilter pointer (...
@@ -177,7 +177,7 @@
 
 ### `main` (src/main.cyr)
 
-- `main()` → (no behavioral docs)
+- `main()` → Each probe counts as a failure unless it printed "ok", so "ready" cannot print over a broken buil...
 
 ### `netns` (src/netns.cyr)
 
@@ -214,6 +214,7 @@
 - `netns_fw_policy_set_rule_count(arg1, arg2)` → (no behavioral docs)
 - `netns_fw_policy_set_rules(arg1, arg2, arg3)` → (no behavioral docs)
 - `netns_fw_policy_set_rules_arr(arg1, arg2)` → (no behavioral docs)
+- `netns_fw_policy_validate(arg)` → Check that every rule of a policy can be rendered as written, before anything acts on it. A rule ...
 - `netns_fw_rule_action(arg)` → (no behavioral docs)
 - `netns_fw_rule_comment(arg)` → (no behavioral docs)
 - `netns_fw_rule_direction(arg)` → (no behavioral docs)
@@ -227,7 +228,7 @@
 - `netns_fw_rule_set_port(arg1, arg2)` → (no behavioral docs)
 - `netns_fw_rule_set_protocol(arg1, arg2)` → (no behavioral docs)
 - `netns_fw_rule_set_remote_addr(arg1, arg2)` → (no behavioral docs)
-- `netns_generate_agent_ips(arg)` → Generate agent IPs. Returns a struct { host_ip, agent_ip }.
+- `netns_generate_agent_ips(arg)` → Generate agent IPs. Returns a struct { host_ip, agent_ip }: the first two hosts of one of the 163...
 - `netns_handle_name(arg)` → (no behavioral docs)
 - `netns_handle_netns_path(arg)` → (no behavioral docs)
 - `netns_handle_new(arg1, arg2, arg3, arg4)` → (no behavioral docs)
@@ -237,14 +238,14 @@
 - `netns_handle_set_veth_host(arg1, arg2)` → (no behavioral docs)
 - `netns_handle_veth_agent(arg)` → (no behavioral docs)
 - `netns_handle_veth_host(arg)` → (no behavioral docs)
-- `netns_hash_name(arg)` → Simple hash function for agent name -> 10.100.x.{1,2}/30
+- `netns_hash_name(arg)` → Simple hash function for agent name
 - `netns_nft_action_str(arg)` → (no behavioral docs)
-- `netns_nft_append(arg1, arg2, arg3)` → Helper to append a string to a buffer, return new position. Checks bounds against buf_size; if ex...
+- `netns_nft_append(arg1, arg2, arg3)` → Append to a fixed 16 KiB buffer, silently dropping what does not fit. The renderer no longer uses...
 - `netns_nft_proto_str(arg)` → (no behavioral docs)
 - `netns_render_nftables_ruleset(arg)` → Render a FirewallPolicy into an nftables ruleset string. Returns a heap-allocated null-terminated...
 - `netns_run_ip(arg)` → (no behavioral docs)
 - `netns_truncate_veth(arg)` → (no behavioral docs)
-- `netns_validate_config(arg)` → (no behavioral docs)
+- `netns_validate_config(arg)` → Validate a namespace config. The name goes into `ip` arguments and an interface name, so it is he...
 
 ### `udev` (src/udev.cyr)
 
@@ -268,21 +269,21 @@
 - `udev_devinfo_set_syspath(arg1, arg2)` → (no behavioral docs)
 - `udev_devinfo_subsystem(arg)` → (no behavioral docs)
 - `udev_devinfo_syspath(arg)` → (no behavioral docs)
-- `udev_get_device_info(arg)` → (no behavioral docs)
+- `udev_get_device_info(arg)` → Get one device's info. syspath: an absolute /sys/... path or devpath, the forms udev_devinfo hand...
 - `udev_list_devices(arg1, arg2, arg3)` → List all devices, optionally filtered by subsystem string. subsystem_filter: a null-terminated st...
 - `udev_parse_subsystem(arg)` → Parse a subsystem string into a constant
-- `udev_parse_udevadm_info(arg)` → Parse a block of udevadm info output (P:/N:/S:/E: prefixed lines). text: null-terminated string o...
+- `udev_parse_udevadm_info(arg)` → Parse a block of udevadm info output (P:/N:/U:/T:/V:/E: prefixed lines). text: null-terminated st...
 - `udev_starts_with(arg1, arg2)` → Check if a string starts with a given prefix. Thin wrapper over the shared single-pass predicate ...
 - `udev_validate_rule(arg1, arg2)` → Validate a udev rule. action_keys: array of string pointers to action key names. action_count: nu...
 
 ### `update` (src/update.cyr)
 
-- `update_apply(arg1, arg2)` → Write update image to the inactive slot's block device. Returns Result: Ok(0) or Err.
-- `update_atomic_copy(arg1, arg2)` → Atomically copy src to dst (via temp + rename). Returns Result: Ok(bytes_copied) or Err.
+- `update_apply(arg1, arg2)` → Write update image to the inactive slot's block device. Returns Result: Ok(0) or Err.  The manife...
+- `update_atomic_copy(arg1, arg2)` → Atomically copy src to dst (via temp + rename). As with cp, an existing dst keeps its permission ...
 - `update_atomic_write(arg1, arg2, arg3)` → Atomically write data to a file path. Writes to a temp file first, then renames to the target pat...
 - `update_channel_str(arg)` → (no behavioral docs)
 - `update_check(arg1, arg2)` → Check for available update by reading a local manifest file. url_or_path: path to manifest JSON f...
-- `update_compare_versions(arg1, arg2)` → Compare two CalVer version strings. Returns VER_LESS (-1), VER_EQUAL (0), or VER_GREATER (1). Fal...
+- `update_compare_versions(arg1, arg2)` → Compare two CalVer version strings. Returns VER_LESS (-1), VER_EQUAL (0), or VER_GREATER (1). Any...
 - `update_config_backup_dir(arg)` → (no behavioral docs)
 - `update_config_device_for_slot(arg1, arg2)` → (no behavioral docs)
 - `update_config_max_retries(arg)` → (no behavioral docs)
@@ -311,7 +312,7 @@
 - `update_file_sha256(arg)` → (no behavioral docs)
 - `update_file_size(arg)` → (no behavioral docs)
 - `update_get_current_slot()` → Detect current boot slot by reading /proc/cmdline for "agnos.slot=". Falls back to reading the st...
-- `update_load_state(arg)` → Load update state from a JSON file. Returns Result: Ok(state_ptr) or Err.
+- `update_load_state(arg)` → Load update state from a JSON file. Returns Result: Ok(state_ptr) or Err. A failed open keeps its...
 - `update_manifest_changelog(arg)` → (no behavioral docs)
 - `update_manifest_channel(arg)` → (no behavioral docs)
 - `update_manifest_files(arg)` → (no behavioral docs)
@@ -325,21 +326,24 @@
 - `update_manifest_set_release_date(arg1, arg2)` → (no behavioral docs)
 - `update_manifest_set_version(arg1, arg2)` → (no behavioral docs)
 - `update_manifest_version(arg)` → (no behavioral docs)
-- `update_mark_boot_successful(arg)` → Mark the current boot as successful. Increments boot counter, clears pending update flag. Returns...
-- `update_needs_rollback(arg1, arg2)` → Pure function: returns 1 if boot count exceeds max_attempts and there is a pending update (indica...
+- `update_mark_boot_attempt(arg)` → Count this boot against an image on trial. Call it once, early in every boot, then ask update_nee...
+- `update_mark_boot_successful(arg)` → Mark the current boot as successful: an image on trial becomes the current version, and the trial...
+- `update_needs_rollback(arg1, arg2)` → Pure function: returns 1 once `max_boot_attempts` boots of an image on trial have gone unconfirme...
 - `update_other_slot(arg)` → (no behavioral docs)
 - `update_parse_version(arg)` → Parse a version string into { year, month, day }. Returns pointer to 24-byte struct, or 0 on pars...
 - `update_phase_str(arg)` → (no behavioral docs)
-- `update_rollback(arg)` → Roll back to the previous slot. Returns Result: Ok(0) or Err.
-- `update_save_state(arg1, arg2)` → Save update state to a JSON file. Returns Result: Ok(0) or Err.
+- `update_rollback(arg)` → Roll back to the previous slot, or abandon an image nothing has switched to. Returns Result: Ok(0...
+- `update_save_state(arg1, arg2)` → Save update state to a JSON file. Returns Result: Ok(0) or Err. A slot that is neither A nor B, a...
 - `update_slot_str(arg)` → (no behavioral docs)
 - `update_slot_suffix(arg)` → (no behavioral docs)
 - `update_state_boot_count(arg)` → (no behavioral docs)
 - `update_state_new(arg1, arg2)` → (no behavioral docs)
 - `update_state_pending(arg)` → (no behavioral docs)
+- `update_state_previous(arg)` → (no behavioral docs)
 - `update_state_rollback_available(arg)` → (no behavioral docs)
 - `update_state_set_boot_count(arg1, arg2)` → (no behavioral docs)
 - `update_state_set_pending(arg1, arg2)` → (no behavioral docs)
+- `update_state_set_previous(arg1, arg2)` → (no behavioral docs)
 - `update_state_set_rollback(arg1, arg2)` → 1.0 API preservation — `set_rollback` (asymmetric) delegates through `set_rollback_available`.
 - `update_state_set_rollback_available(arg1, arg2)` → (no behavioral docs)
 - `update_state_set_slot(arg1, arg2)` → (no behavioral docs)
@@ -348,8 +352,8 @@
 - `update_state_to_json(arg1, arg2)` → Hand-rolled JSON serializer — cstring fields; see roadmap.md V1.1.12.
 - `update_state_version(arg)` → (no behavioral docs)
 - `update_switch_slot(arg1, arg2)` → Mark a slot as active for the next boot. Writes slot marker for argonaut and optionally sets EFI ...
-- `update_validate_version(arg)` → Validate a CalVer version string (YYYY.M.D). Returns Result: Ok(0) or Err.
-- `update_verify_manifest(arg)` → Validate structural integrity of an update manifest. Returns Result: Ok(0) or Err. Note: SHA-256 ...
+- `update_validate_version(arg)` → Validate a CalVer version string (YYYY.M.D): a real date in 2024-2100. Returns Result: Ok(0) or Err.
+- `update_verify_manifest(arg)` → Validate structural integrity of an update manifest. Returns Result: Ok(0) or Err. Structural che...
 
 ### `util` (src/util.cyr)
 

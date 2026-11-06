@@ -18,6 +18,8 @@
 # include-once, so includers pay nothing.
 include "lib/syscalls.cyr"
 include "lib/net.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
 
 # ================================================================
 # Constants
@@ -28,8 +30,9 @@ enum JournalConst {
     AF_UNIX = 1;
     # sockaddr_un: { family(2), path(108) } = 110 bytes
     SOCKADDR_UN_SIZE = 110;
-    # Journal socket path length (including null)
-    JOURNAL_SOCKET_PATH_LEN = 33;
+    # A query's first capture, and the most it will hold before it refuses.
+    JOURNAL_QUERY_CHUNK = 131072;
+    JOURNAL_QUERY_MAX = 33554432;
 }
 
 # Syslog priority levels
@@ -110,8 +113,10 @@ fn journald_filter_new(): i64 {
 }
 
 # ================================================================
-# Test seam, 0 outside tests/tcyr: a stub to run in place of /usr/bin/journalctl.
+# Test seams, 0 outside tests/tcyr: a stub to run in place of /usr/bin/journalctl, and a
+# socket to send to in place of the host's journal.
 var _journald_tool = 0;
+var _journald_socket = 0;
 
 # Build journalctl argv vec
 # ================================================================
@@ -122,11 +127,19 @@ var _journald_tool = 0;
 # (unit, grep, since, until, boot) are passed verbatim to journalctl as
 # argv[i]; an attacker controlling those values cannot escape into the
 # shell because there is no shell. See audit F-1 (2026-04-26).
+#
+# --unit, --since, --until, --priority and --grep take a required argument, so the next
+# word is the value whatever it looks like. --boot takes an optional one, so it must be
+# one word: as two, a value that does not parse as a boot id stays on the command line,
+# where "--vacuum-time=1s" is an option and "_UID=0" a match (audit F-20). --lines is
+# optional too, and only ever a formatted integer. --all keeps fields over 4096 bytes,
+# which journalctl otherwise prints as null.
 fn _journald_build_argv(filter): i64 {
     var args = vec_new();
     vec_push(args, "/usr/bin/journalctl");
     vec_push(args, "--output=json");
     vec_push(args, "--no-pager");
+    vec_push(args, "--all");
 
     var unit = journald_filter_unit(filter);
     if (unit != 0) {
@@ -170,8 +183,10 @@ fn _journald_build_argv(filter): i64 {
 
     var boot = journald_filter_boot(filter);
     if (boot != 0) {
-        vec_push(args, "--boot");
-        vec_push(args, str_cstr(boot));
+        var bsb = str_builder_new();
+        str_builder_add_cstr(bsb, "--boot=");
+        str_builder_add(bsb, boot);
+        vec_push(args, str_cstr(str_builder_build(bsb)));
     }
 
     return args;
@@ -189,17 +204,34 @@ fn journald_make_sockaddr(): i64 {
     store16(sa, AF_UNIX);  # sa_family = AF_UNIX
     # Copy socket path starting at offset 2
     var path = "/run/systemd/journal/socket";
+    if (_journald_socket != 0) { path = _journald_socket; }
     var plen = strlen(path);
+    if (plen > SOCKADDR_UN_SIZE - 3) { plen = SOCKADDR_UN_SIZE - 3; }
     memcpy(sa + 2, path, plen);
     return sa;
+}
+
+# The address, built once: a per-line alloc would grow the heap for as long as the
+# process logs. Two threads racing here build the same bytes twice, which is harmless.
+var _journald_sa = 0;
+
+fn _journald_sockaddr(): i64 {
+    if (_journald_sa == 0) { _journald_sa = journald_make_sockaddr(); }
+    return _journald_sa;
+}
+
+# Copy `n` bytes to buf + pos unless `buf` is 0, which only measures. Returns the new pos.
+fn _journald_put(buf, pos, data, n): i64 {
+    if (buf != 0) { memcpy(buf + pos, data, n); }
+    return pos + n;
 }
 
 # Append one field to a journal datagram. The native protocol is KEY=VALUE\n, so a
 # value holding a newline would end its field there and the rest would parse as new
 # fields: a message of "x\nPRIORITY=0\nSYSLOG_IDENTIFIER=sshd" could forge both
 # (audit F-9). Such a value goes in the protocol's other form, which keeps it whole:
-# KEY\n, its length as a little-endian u64, the bytes, \n.
-fn _journald_add_field(sb, key, value): i64 {
+# KEY\n, its length as a little-endian u64, the bytes, \n. Returns the new pos.
+fn _journald_put_field(buf, pos, key, value): i64 {
     var vlen = strlen(value);
     var newline = 0;
     var i = 0;
@@ -210,41 +242,28 @@ fn _journald_add_field(sb, key, value): i64 {
         }
         i = i + 1;
     }
-    str_builder_add_cstr(sb, key);
+    pos = _journald_put(buf, pos, key, strlen(key));
     if (newline == 0) {
-        str_builder_add_cstr(sb, "=");
-        str_builder_add_cstr(sb, value);
-        str_builder_add_cstr(sb, "\n");
-        return 0;
+        pos = _journald_put(buf, pos, "=", 1);
+    } else {
+        pos = _journald_put(buf, pos, "\n", 1);
+        if (buf != 0) { store64(buf + pos, vlen); }
+        pos = pos + 8;
     }
-    str_builder_add_cstr(sb, "\n");
-    var b = 0;
-    while (b < 8) {
-        str_builder_add_byte(sb, (vlen >> (b * 8)) & 255);
-        b = b + 1;
-    }
-    str_builder_add_cstr(sb, value);
-    str_builder_add_cstr(sb, "\n");
-    return 0;
-}
-
-# The fields every journal datagram starts with.
-fn _journald_add_base_fields(sb, message, priority, identifier): i64 {
-    str_builder_add_cstr(sb, "PRIORITY=");
-    str_builder_add_int(sb, priority);
-    str_builder_add_cstr(sb, "\n");
-    _journald_add_field(sb, "MESSAGE", message);
-    if (identifier != 0) {
-        _journald_add_field(sb, "SYSLOG_IDENTIFIER", identifier);
-    }
-    return 0;
+    pos = _journald_put(buf, pos, value, vlen);
+    return _journald_put(buf, pos, "\n", 1);
 }
 
 # 1 for a field name the journal accepts: 1-64 bytes of A-Z, 0-9 and _, not starting
 # with a digit or with _ (those are trusted fields). journald drops anything else, and
-# a name holding = or a newline would end up parsed as other fields (audit F-9).
+# a name holding = or a newline would end up parsed as other fields (audit F-9). The
+# base fields are refused too: a caller's extras must not restate a line's priority or
+# identifier, which would log a second value beside the real one (audit F-46).
 fn _journald_key_valid(key): i64 {
     if (key == 0) { return 0; }
+    if (streq(key, "MESSAGE") == 1) { return 0; }
+    if (streq(key, "PRIORITY") == 1) { return 0; }
+    if (streq(key, "SYSLOG_IDENTIFIER") == 1) { return 0; }
     var n = strlen(key);
     if (n == 0) { return 0; }
     if (n > 64) { return 0; }
@@ -270,13 +289,83 @@ fn _journald_key_valid(key): i64 {
     return 1;
 }
 
+# Lay out one datagram at `buf`: the base fields, then the extras whose names the journal
+# would accept and that have a value. With `buf` 0 this only measures. Returns its length.
+# fields_keys / fields_vals may be 0; a pair past the shorter vec is ignored.
+fn _journald_layout(buf, message, priority, identifier, fields_keys, fields_vals): i64 {
+    var pos = _journald_put(buf, 0, "PRIORITY=", 9);
+    if (buf != 0) { store8(buf + pos, 48 + priority); }
+    pos = _journald_put(buf, pos + 1, "\n", 1);
+    pos = _journald_put_field(buf, pos, "MESSAGE", message);
+    if (identifier != 0) {
+        pos = _journald_put_field(buf, pos, "SYSLOG_IDENTIFIER", identifier);
+    }
+    if (fields_keys == 0) { return pos; }
+    if (fields_vals == 0) { return pos; }
+    var nfields = vec_len(fields_keys);
+    if (vec_len(fields_vals) < nfields) { nfields = vec_len(fields_vals); }
+    var fi = 0;
+    while (fi < nfields) {
+        var fkey = vec_get(fields_keys, fi);
+        var fval = vec_get(fields_vals, fi);
+        if (_journald_key_valid(fkey) == 1) {
+            if (fval != 0) { pos = _journald_put_field(buf, pos, fkey, fval); }
+        }
+        fi = fi + 1;
+    }
+    return pos;
+}
+
+# Check, lay out and send one datagram. The buffer is scratch: from alloc(), every line
+# logged would stay in the heap for good, 442 MiB per million (audit F-40).
+fn _journald_deliver(message, priority, identifier, fields_keys, fields_vals): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return drm_err_not_supported("journald send (use sakshi on agnos)");
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    if (message == 0) {
+        return drm_err_invalid_argument("journal message cannot be null");
+    }
+    if (priority < 0) {
+        return drm_err_invalid_argument("journal priority must be 0-7");
+    }
+    if (priority > 7) {
+        return drm_err_invalid_argument("journal priority must be 0-7");
+    }
+
+    var len = _journald_layout(0, message, priority, identifier, fields_keys, fields_vals);
+    var buf = _agnodrm_scratch_new(len);
+    if (buf == 0) { return drm_err_io(ENOMEM, "no memory for a journal datagram"); }
+    _journald_layout(buf, message, priority, identifier, fields_keys, fields_vals);
+
+    # Create AF_UNIX SOCK_DGRAM socket
+    var fd = sys_socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (fd < 0) {
+        _agnodrm_scratch_free(buf, len);
+        return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
+    }
+
+    # sendto(fd, buf, len, flags, dest_addr, addrlen)
+    var ret = sys_sendto(fd, buf, len, 0, _journald_sockaddr(), SOCKADDR_UN_SIZE);
+    sys_close(fd);
+    _agnodrm_scratch_free(buf, len);
+    if (ret < 0) {
+        return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
+    }
+
+    return Ok(0);
+    #endif
+}
+
 # Send a structured log message to the journald socket.
 # message: C string — the log message text.
 # priority: integer 0-7 (JOURNAL_EMERG through JOURNAL_DEBUG).
 # identifier: C string — syslog identifier (e.g. "agnodrm").
 #
 # The journal native protocol uses newline-separated KEY=VALUE pairs
-# sent as a single datagram to /run/systemd/journal/socket.
+# sent as a single datagram to /run/systemd/journal/socket. A message too big for one
+# datagram, about 212 KB, comes back as an Err (EMSGSIZE): the protocol's sealed-memfd
+# path is not implemented (roadmap.md).
 #
 # Returns Result: Ok(0) on success, Err on failure.
 fn journald_send(message, priority, identifier): i64 {
@@ -287,59 +376,15 @@ fn journald_send(message, priority, identifier): i64 {
     return drm_err_not_supported("journald send (use sakshi on agnos)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    if (message == 0) {
-        return drm_err_invalid_argument("journal message cannot be null");
-    }
-    if (priority < 0) {
-        return drm_err_invalid_argument("journal priority must be 0-7");
-    }
-    if (priority > 7) {
-        return drm_err_invalid_argument("journal priority must be 0-7");
-    }
-
-    var sb = str_builder_new();
-    _journald_add_base_fields(sb, message, priority, identifier);
-    var payload = str_builder_build(sb);
-
-    # Create AF_UNIX SOCK_DGRAM socket
-    var fd = sys_socket(AF_UNIX, SOCK_DGRAM, 0);
-    if (fd < 0) {
-        return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
-    }
-
-    # Build sockaddr_un
-    var sa = journald_make_sockaddr();
-
-    # sendto(fd, buf, len, flags, dest_addr, addrlen)
-    var ret = sys_sendto(fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
-    sys_close(fd);
-    if (ret < 0) {
-        return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
-    }
-
-    return Ok(0);
+    return _journald_deliver(message, priority, identifier, 0, 0);
     #endif
-}
-
-# Append journald_send_fields' extra fields, skipping any whose name the journal would
-# not accept.
-fn _journald_add_extra_fields(sb, fields_keys, fields_vals): i64 {
-    var nfields = vec_len(fields_keys);
-    var fi = 0;
-    while (fi < nfields) {
-        var fkey = vec_get(fields_keys, fi);
-        var fval = vec_get(fields_vals, fi);
-        if (_journald_key_valid(fkey) == 1) {
-            if (fval != 0) { _journald_add_field(sb, fkey, fval); }
-        }
-        fi = fi + 1;
-    }
-    return 0;
 }
 
 # Send a structured log with extra key-value fields.
 # fields_keys: vec of C string pointers (field names).
 # fields_vals: vec of C string pointers (field values).
+# A field the journal would not accept, one restating a base field, or one with a null
+# value is skipped.
 # Returns Result: Ok(0) or Err.
 fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
@@ -349,34 +394,7 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
     return drm_err_not_supported("journald send (use sakshi on agnos)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    if (message == 0) {
-        return drm_err_invalid_argument("journal message cannot be null");
-    }
-    if (priority < 0) {
-        return drm_err_invalid_argument("journal priority must be 0-7");
-    }
-    if (priority > 7) {
-        return drm_err_invalid_argument("journal priority must be 0-7");
-    }
-
-    var sb = str_builder_new();
-    _journald_add_base_fields(sb, message, priority, identifier);
-    _journald_add_extra_fields(sb, fields_keys, fields_vals);
-    var payload = str_builder_build(sb);
-
-    var fd = sys_socket(AF_UNIX, SOCK_DGRAM, 0);
-    if (fd < 0) {
-        return drm_err_syscall_failed(0 - fd, "failed to create unix socket");
-    }
-
-    var sa = journald_make_sockaddr();
-    var ret = sys_sendto(fd, str_data(payload), str_len(payload), 0, sa, SOCKADDR_UN_SIZE);
-    sys_close(fd);
-    if (ret < 0) {
-        return drm_err_syscall_failed(0 - ret, "sendto journal socket failed");
-    }
-
-    return Ok(0);
+    return _journald_deliver(message, priority, identifier, fields_keys, fields_vals);
     #endif
 }
 
@@ -384,9 +402,137 @@ fn journald_send_fields(message, priority, identifier, fields_keys, fields_vals)
 # Parse a single JSON line from journalctl --output=json
 # ================================================================
 
-# Minimal JSON field extraction: find a key in a JSON object string
-# and extract the string value. Returns Str or 0 if not found.
-# This is a lightweight parser — handles flat JSON objects only.
+# The value of a hex digit, or -1.
+fn _journald_hex(c): i64 {
+    if (c >= 48 && c <= 57) { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70) { return c - 55; }
+    return 0 - 1;
+}
+
+# The four hex digits at `p` as a number, or -1.
+fn _journald_hex4(p): i64 {
+    var v = 0;
+    var i = 0;
+    while (i < 4) {
+        var d = _journald_hex(load8(p + i));
+        if (d < 0) { return 0 - 1; }
+        v = v * 16 + d;
+        i = i + 1;
+    }
+    return v;
+}
+
+# Store code point `v` (at most 0xFFFF) at out + o as UTF-8. Returns the new offset.
+fn _journald_put_utf8(out, o, v): i64 {
+    if (v < 0x80) {
+        store8(out + o, v);
+        return o + 1;
+    }
+    if (v < 0x800) {
+        store8(out + o, 0xC0 | (v >> 6));
+        store8(out + o + 1, 0x80 | (v & 63));
+        return o + 2;
+    }
+    store8(out + o, 0xE0 | (v >> 12));
+    store8(out + o + 1, 0x80 | ((v >> 6) & 63));
+    store8(out + o + 2, 0x80 | (v & 63));
+    return o + 3;
+}
+
+# A heap Str of the JSON string body at `p`, `n` bytes, escapes decoded. Always a copy:
+# the capture buffer it came from is gone once the query returns.
+fn _journald_unescape(p, n): i64 {
+    var out = alloc(n + 1);
+    var o = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(p + i);
+        i = i + 1;
+        if (c != 92) {
+            store8(out + o, c);
+            o = o + 1;
+            continue;
+        }
+        if (i >= n) { break; }
+        c = load8(p + i);
+        i = i + 1;
+        if (c == 117) {             # \u and four hex digits
+            var v = 0 - 1;
+            if (i + 4 <= n) { v = _journald_hex4(p + i); }
+            if (v >= 0) {
+                i = i + 4;
+                o = _journald_put_utf8(out, o, v);
+                continue;
+            }
+        }
+        if (c == 110) { c = 10; }   # \n
+        elif (c == 116) { c = 9; }  # \t
+        elif (c == 114) { c = 13; } # \r
+        elif (c == 98) { c = 8; }   # \b
+        elif (c == 102) { c = 12; } # \f
+        store8(out + o, c);
+        o = o + 1;
+    }
+    store8(out + o, 0);
+    return str_new(out, o);
+}
+
+# The end of the JSON string opening at `start`, the index of its closing quote, or
+# `jlen` if it has none. A line ending in a lone backslash stops at jlen, not past it.
+fn _journald_string_end(jd, jlen, start): i64 {
+    var end = start + 1;
+    while (end < jlen) {
+        var c = load8(jd + end);
+        if (c == 34) { return end; }
+        if (c == 92) { end = end + 1; }
+        end = end + 1;
+    }
+    return jlen;
+}
+
+# The value journalctl prints as an array, at `jd + pos`: bytes that are not valid UTF-8
+# or hold a control character, as numbers, or a field the entry has more than once, as
+# one element per value, of which the first is taken. Reading these as empty let a single
+# ESC byte hide a line from whatever reads the log (audit F-47). Returns a Str, or 0.
+fn _journald_array_value(jd, jlen, pos): i64 {
+    var i = pos + 1;
+    var depth = 0;
+    while (i < jlen) {
+        if (load8(jd + i) != 91) { break; }
+        if (depth >= 1) { return 0; }
+        depth = depth + 1;
+        i = i + 1;
+    }
+    if (i >= jlen) { return 0; }
+    var first = load8(jd + i);
+    if (first == 34) {
+        var end = _journald_string_end(jd, jlen, i);
+        return _journald_unescape(jd + i + 1, end - i - 1);
+    }
+    if (first < 48 || first > 57) { return 0; }
+    var out = alloc(jlen - i + 1);
+    var o = 0;
+    var v = 0;
+    while (i < jlen) {
+        var c = load8(jd + i);
+        i = i + 1;
+        if (c >= 48 && c <= 57) {
+            v = (v * 10 + (c - 48)) & 255;
+            continue;
+        }
+        store8(out + o, v);
+        o = o + 1;
+        v = 0;
+        if (c != 44) { break; }
+    }
+    store8(out + o, 0);
+    return str_new(out, o);
+}
+
+# Minimal JSON field extraction: find a key in a JSON object string and return its value
+# as a new Str, escapes decoded, or 0 if not found or null. This is a lightweight
+# parser — handles the flat objects journalctl prints, one level of arrays included.
 fn journald_json_get_str(json, key): i64 {
     # Search for "key" in the JSON
     var jlen = str_len(json);
@@ -417,19 +563,13 @@ fn journald_json_get_str(json, key): i64 {
                         if (wc == 10) { vpos = vpos + 1; continue; }
                         break;
                     }
-                    # Value should start with '"'
                     if (vpos < jlen) {
                         if (load8(jd + vpos) == 34) {
-                            # Find closing '"'
-                            var vstart = vpos + 1;
-                            var vend = vstart;
-                            while (vend < jlen) {
-                                if (load8(jd + vend) == 34) { break; }
-                                # Skip escaped characters
-                                if (load8(jd + vend) == 92) { vend = vend + 1; }  # '\'
-                                vend = vend + 1;
-                            }
-                            return str_new(jd + vstart, vend - vstart);
+                            var vend = _journald_string_end(jd, jlen, vpos);
+                            return _journald_unescape(jd + vpos + 1, vend - vpos - 1);
+                        }
+                        if (load8(jd + vpos) == 91) {  # '['
+                            return _journald_array_value(jd, jlen, vpos);
                         }
                     }
                 }
@@ -439,6 +579,16 @@ fn journald_json_get_str(json, key): i64 {
     }
 
     return 0;
+}
+
+# A journal PRIORITY field as a number, or JOURNAL_INFO for anything that is not 0-7:
+# str_to_int reads "abc" as 0, which is an emergency.
+fn _journald_priority_of(s): i64 {
+    if (s == 0) { return JOURNAL_INFO; }
+    if (str_len(s) != 1) { return JOURNAL_INFO; }
+    var c = load8(str_data(s));
+    if (c < 48 || c > 55) { return JOURNAL_INFO; }
+    return c - 48;
 }
 
 # Parse a single JSON line from journalctl output into a JournalEntry.
@@ -464,11 +614,7 @@ fn journald_parse_json(json_line): i64 {
     var unit = journald_json_get_str(json_line, "_SYSTEMD_UNIT");
     if (unit == 0) { unit = str_from(""); }
 
-    var prio_str = journald_json_get_str(json_line, "PRIORITY");
-    var priority = JOURNAL_INFO;  # default
-    if (prio_str != 0) {
-        priority = str_to_int(prio_str);
-    }
+    var priority = _journald_priority_of(journald_json_get_str(json_line, "PRIORITY"));
 
     var message = journald_json_get_str(json_line, "MESSAGE");
     if (message == 0) { message = str_from(""); }
@@ -487,15 +633,40 @@ fn journald_parse_json(json_line): i64 {
 # Query journal via journalctl subprocess
 # ================================================================
 
+# Parse `n` bytes of journalctl JSON lines into a vec of entries, every string a copy.
+# A line that does not parse is left out.
+fn _journald_parse_output(buf, n): i64 {
+    var entries = vec_new();
+    var pos = 0;
+    while (pos < n) {
+        var start = pos;
+        while (pos < n) {
+            if (load8(buf + pos) == 10) { break; }
+            pos = pos + 1;
+        }
+        var len = pos - start;
+        pos = pos + 1;
+        if (len == 0) { continue; }
+        var parse_res_t, parse_res_v = journald_parse_json(str_new(buf + start, len));
+        if (is_ok(parse_res_t) == 1) {
+            vec_push(entries, parse_res_v);
+        }
+    }
+    return entries;
+}
+
 # Query the systemd journal using journalctl and parse JSON output.
 # filter: JournalFilter pointer (from journald_filter_new).
 # Returns Result: Ok(vec_of_entry_ptrs) or Err.
 #
-# Argv-based exec via lib/process.cyr's exec_capture: every filter value
-# becomes its OWN argv entry. No shell. No metacharacter expansion.
-# A consumer that passes attacker-controlled input through filter setters
-# is safe — the value lands in argv[i] and is read verbatim by journalctl.
-# See audit F-1 (2026-04-26) and SECURITY-NOTES.md § journald.
+# Argv-based exec via lib/process.cyr: every filter value becomes its OWN argv entry. No
+# shell. No metacharacter expansion. See _journald_build_argv for why --boot is one word,
+# and SECURITY-NOTES.md § journald.
+#
+# The whole output is read or the call fails. Output that fills the buffer runs again
+# with a larger one, up to JOURNAL_QUERY_MAX: a cut query kept the oldest entries and a
+# last one made from half a line, and lost the newest, which is what "last N" is for
+# (audit F-21). A query that big should set lines or since.
 fn journald_query(filter): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     # agnos has no journalctl subprocess and no systemd journal to query — the
@@ -504,57 +675,43 @@ fn journald_query(filter): i64 {
     return drm_err_not_supported("journald query (no journalctl on agnos)");
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    if (filter == 0) { return drm_err_invalid_argument("journal filter is null"); }
     var args = _journald_build_argv(filter);
-    var cap = 131072;         # 128KB capture buffer
-    var buf = alloc(cap + 1);  # +1: the NUL below lands at index `cap` on a full read
+    if (_journald_tool != 0) { vec_set(args, 0, _journald_tool); }
     # Not agnodrm_run_capture: journalctl exits 1 when --grep matches nothing, which is
     # an empty result. Without --grep, 1 is bad input or a missing boot, so it fails, as
     # do a missing journalctl (127), a signal and an end never seen (negative). With
     # --grep, 1 cannot tell no match from a bad regex; those read as empty.
     # A full buffer proves nothing: the reader closed the pipe, so journalctl with more
-    # to say dies of SIGPIPE. The query keeps the entries it got, as it always has.
+    # to say dies of SIGPIPE. That capture is thrown away and run again.
     var status = alloc(16);
-    if (_journald_tool != 0) { vec_set(args, 0, _journald_tool); }
-    var nbytes = exec_capture_status(args, buf, cap, status);
-    if (nbytes < 0) {
-        return drm_err_unknown("failed to execute journalctl");
-    }
-    if (nbytes < cap) {
-        var code = load64(status);
-        if (code != 0) {
-            var no_match = 0;
+    var cap = JOURNAL_QUERY_CHUNK;
+    while (cap <= JOURNAL_QUERY_MAX) {
+        var buf = _agnodrm_scratch_new(cap);
+        if (buf == 0) { return drm_err_io(ENOMEM, "no memory for journalctl output"); }
+        var nbytes = exec_capture_status(args, buf, cap, status);
+        if (nbytes < 0) {
+            _agnodrm_scratch_free(buf, cap);
+            return drm_err_unknown("failed to execute journalctl");
+        }
+        if (nbytes < cap) {
+            var code = load64(status);
+            var failed = code != 0;
             if (code == 1) {
-                if (journald_filter_grep(filter) != 0) { no_match = 1; }
+                if (journald_filter_grep(filter) != 0) { failed = 0; }
             }
-            if (no_match == 0) { return drm_err_unknown("journalctl failed"); }
+            if (failed != 0) {
+                _agnodrm_scratch_free(buf, cap);
+                return drm_err_unknown("journalctl failed");
+            }
+            var entries = _journald_parse_output(buf, nbytes);
+            _agnodrm_scratch_free(buf, cap);
+            return Ok(entries);
         }
+        _agnodrm_scratch_free(buf, cap);
+        cap = cap * 4;
     }
-
-    store8(buf + nbytes, 0);
-    var output = str_new(buf, nbytes);
-
-    # Parse each JSON line
-    var entries = vec_new();
-    var lines = str_split(output, 10);  # '\n'
-    var idx = 0;
-
-    while (idx < vec_len(lines)) {
-        var line = str_trim(vec_get(lines, idx));
-        if (str_len(line) == 0) {
-            idx = idx + 1;
-            continue;
-        }
-
-        var parse_res_t, parse_res_v = journald_parse_json(line);
-        if (is_ok(parse_res_t) == 1) {
-            vec_push(entries, parse_res_v);
-        }
-        # Skip unparseable lines silently
-
-        idx = idx + 1;
-    }
-
-    return Ok(entries);
+    return drm_err_io(0, "journal query output is too large to read whole");
     #endif
 }
 

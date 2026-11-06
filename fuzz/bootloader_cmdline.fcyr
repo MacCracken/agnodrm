@@ -99,5 +99,58 @@ while (n < 500) {
     n = n + 1;
 }
 
+# --- a dangerous token stays dangerous however the kernel would let it be spelled:
+# quotes anywhere, either case, '-' for '_' in the name ---
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+var bad = vec_new();
+vec_push(bad, "init=/bin/sh");
+vec_push(bad, "init=/usr/bin/bash");
+vec_push(bad, "rdinit=/x");
+vec_push(bad, "init_on_alloc=0");
+vec_push(bad, "module.sig_enforce=off");
+vec_push(bad, "systemd.debug_shell");
+vec_push(bad, "nospectre_v2");
+vec_push(bad, "rd.break=pre-mount");
+vec_push(bad, "mitigations=off");
+var it = 0;
+while (it < 40000) {
+    var tok = vec_get(bad, fz_rand() % vec_len(bad));
+    var tl = strlen(tok);
+    var out = alloc(tl * 2 + 8);
+    var o = 0;
+    var inkey = 1;
+    var ti = 0;
+    while (ti < tl) {
+        var c = load8(tok + ti);
+        if (c == 61) { inkey = 0; }
+        if (fz_rand() % 4 == 0) {
+            store8(out + o, 34);
+            o = o + 1;
+        }
+        if (c >= 97 && c <= 122) {
+            if (fz_rand() % 2 == 0) { c = c - 32; }
+        }
+        if (inkey == 1) {
+            if (c == 95) {
+                if (fz_rand() % 2 == 0) { c = 45; }
+            }
+        }
+        store8(out + o, c);
+        o = o + 1;
+        ti = ti + 1;
+    }
+    store8(out + o, 0);
+    if (is_err_result(bootloader_validate_kernel_cmdline(out)) != 1) { sys_exit(95); }
+    it = it + 1;
+}
+
 sys_write(1, "bootloader_cmdline: ok\n", 23);
 sys_exit(0);

@@ -110,10 +110,10 @@ fn fz_name_model(p, n): i64 {
         i = i + 1;
     }
     if (load8(p + n - 5) != 46) { return 0; }
-    if (load8(p + n - 4) != 99) { return 0; }
-    if (load8(p + n - 3) != 111) { return 0; }
-    if (load8(p + n - 2) != 110) { return 0; }
-    if (load8(p + n - 1) != 102) { return 0; }
+    if ((load8(p + n - 4) | 32) != 99) { return 0; }
+    if ((load8(p + n - 3) | 32) != 111) { return 0; }
+    if ((load8(p + n - 2) | 32) != 110) { return 0; }
+    if ((load8(p + n - 1) | 32) != 102) { return 0; }
     return 1;
 }
 
@@ -252,7 +252,7 @@ if (_bootloader_entry_name_ok(str_from(".")) != 0) { fz_fail(173); }
 if (_bootloader_entry_name_ok(str_from("..")) != 0) { fz_fail(174); }
 if (_bootloader_entry_name_ok(str_from("a/b.conf")) != 0) { fz_fail(175); }
 if (_bootloader_entry_name_ok(str_from("a\tb.conf")) != 0) { fz_fail(176); }
-if (_bootloader_entry_name_ok(str_from("x.CONF")) != 0) { fz_fail(177); }
+if (_bootloader_entry_name_ok(str_from("x.CONF")) != 1) { fz_fail(177); }
 if (_bootloader_entry_name_ok(str_from("x.conf.bak")) != 0) { fz_fail(178); }
 if (_bootloader_entry_name_ok(str_from("")) != 0) { fz_fail(179); }
 memset(nbuf, 97, 300);

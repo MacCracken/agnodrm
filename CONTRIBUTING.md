@@ -4,7 +4,7 @@ Thank you for your interest in contributing.
 
 ## Prerequisites
 
-- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.7.18** at 1.7.1; consumers need ≥ 6.6.7; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
+- [Cyrius](https://github.com/MacCracken/cyrius) toolchain pinned in `cyrius.cyml` (currently **6.7.18** at 1.7.2; consumers need ≥ 6.6.10; install via `curl -sSfL https://raw.githubusercontent.com/MacCracken/cyrius/main/scripts/install.sh | sh`, then `cyriusly use $(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)`)
 - Linux x86_64 (primary host) or aarch64 (cross-build via `cycc_aarch64`, renamed from `cc5_aarch64` in Cyrius 6.0); macOS / Windows is a cyrius-side roadmap item
 - `./lib/` is gitignored — populated on first build by `cyrius deps` from the `[deps] stdlib` list
 
@@ -14,7 +14,7 @@ Thank you for your interest in contributing.
 2. Create a feature branch from `main`
 3. `cyrius deps` to populate `./lib/` from the pinned cyrius stdlib
 4. Make your changes under `src/`, `tests/`, `fuzz/`, or `docs/`
-5. **Run `scripts/audit.sh`** — 12 gates, same as CI (syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks)
+5. **Run `scripts/audit.sh`** — 14 gates, same as CI (syntax → API surface (snapshot + prose) → capability map → capacity → build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks → dist staleness → lockfile)
 6. If you renamed or removed a public function, update the snapshot intentionally: `scripts/check-api-surface.sh --update` and record the rename in `CHANGELOG.md` under `Breaking`
 7. If any `src/*.cyr` changed, regenerate both bundles: `cyrius distlib && cyrius distlib core`
 8. If `src/*.cyr` comments / public surface changed, regenerate the prose + capability map: `scripts/gen-api-surface-prose.sh && scripts/gen-capability-map.sh`

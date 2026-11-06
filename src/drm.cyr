@@ -8,12 +8,12 @@
 #
 # Requires: src/error.cyr, lib/syscalls.cyr
 
-#define LINUX
 include "lib/string.cyr"
 include "lib/alloc.cyr"
 include "lib/tagged.cyr"
 include "lib/syscalls.cyr"
 include "src/error.cyr"
+include "src/util.cyr"
 
 # ================================================================
 # DRM ioctl constants
@@ -22,16 +22,18 @@ include "src/error.cyr"
 # DRM ioctl type byte is 'd' (0x64)
 # _IOWR('d', nr, size) = (3 << 30) | (size << 16) | (0x64 << 8) | nr
 
-# DRM_IOCTL_VERSION: _IOWR('d', 0x00, 72)  [DrmVersion is 72 bytes]
-# = (3 << 30) | (72 << 16) | (0x64 << 8) | 0x00
-# = 0xC0486400
+# DRM_IOCTL_VERSION: _IOWR('d', 0x00, 64)  [struct drm_version is 64 bytes]
+# = (3 << 30) | (64 << 16) | (0x64 << 8) | 0x00
+# = 0xC0406400
+# Through 1.7.1 this encoded 72 bytes. drm_ioctl takes the caller's size, so real
+# kernels answered anyway, but qemu and an ioctl-number allowlist refuse it (audit F-35).
 
 # DRM_IOCTL_GET_CAP: _IOWR('d', 0x0C, 16)  [DrmGetCap is 16 bytes]
 # = (3 << 30) | (16 << 16) | (0x64 << 8) | 0x0C
 # = 0xC010640C
 
 enum DrmIoctl {
-    DRM_IOCTL_VERSION = 0xC0486400;
+    DRM_IOCTL_VERSION = 0xC0406400;
     DRM_IOCTL_GET_CAP = 0xC010640C;
 }
 
@@ -84,11 +86,36 @@ enum DrmConnStatus {
 # ioctl and getdents64 go through lib/syscalls.cyr's sys_ioctl /
 # sys_getdents64, which carry each target's own syscall number.
 
+# Linux flag, unnamed in the stdlib, the same value on x86_64 and aarch64. Opening a
+# tty by mistake must not make it this process's controlling terminal.
+enum DrmOpenFlags {
+    DRM_O_NOCTTY = 0x100;
+    DRM_IOCTL_MAX_TRIES = 64;
+}
+
+# sys_ioctl with the retry libdrm's drmIoctl does: a signal or a busy driver is not a
+# failure of the request. Bounded, so a driver stuck on EAGAIN cannot hold the caller.
+fn _drm_ioctl(fd, request, arg): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return 0 - ENOSYS;           # agnos has no DRM subsystem, and older stdlibs no sys_ioctl
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    var ret = sys_ioctl(fd, request, arg);
+    var tries = 1;
+    while (ret == 0 - EINTR || ret == 0 - EAGAIN) {
+        if (tries >= DRM_IOCTL_MAX_TRIES) { break; }
+        ret = sys_ioctl(fd, request, arg);
+        tries = tries + 1;
+    }
+    return ret;
+    #endif
+}
+
 # ================================================================
 # DRM Version struct (on-wire for ioctl)
 # ================================================================
 
-# DrmVersion layout (72 bytes):
+# struct drm_version layout on LP64 (64 bytes):
 #   +0:  version_major    (i32, 4 bytes)
 #   +4:  version_minor    (i32, 4 bytes)
 #   +8:  version_patchlevel (i32, 4 bytes)
@@ -99,10 +126,9 @@ enum DrmConnStatus {
 #   +40: date_ptr         (u64)
 #   +48: desc_len         (u64)
 #   +56: desc_ptr         (u64)
-# Total: 64 bytes (with packing)
 
 enum DrmVerOff {
-    DRM_VER_SIZE = 72;
+    DRM_VER_SIZE = 64;
     DRM_VER_MAJOR = 0;
     DRM_VER_MINOR = 4;
     DRM_VER_PATCH = 8;
@@ -161,24 +187,34 @@ fn drm_verinfo_to_json(v, sb): i64 {
 
 # List DRM card device paths under /dev/dri/.
 # result_arr: pre-allocated array of string pointers.
-# max_cards: capacity of result_arr.
-# Returns Result: Ok(count) or Err.
+# max_cards: capacity of result_arr. A count equal to it may mean there are more.
+# Returns Result: Ok(count); Err(not_supported) when there is no /dev/dri, or Err for
+# a directory that exists and could not be read.
 fn drm_list_devices(result_arr, max_cards): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return Ok(0);                # agnos has no DRM subsystem (/dev/dri) — no cards to enumerate
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    if (_agnodrm_out_ok(result_arr, max_cards) != 1) {
+        return drm_err_invalid_argument("result array is null or max_cards is negative");
+    }
     # Open /dev/dri/ directory
     var dri_path = "/dev/dri";
     # O_RDONLY | O_DIRECTORY. Spell the per-target symbol: the old raw 0x10000 is
     # O_DIRECTORY on x86_64 but O_DIRECT on arm64, so aarch64 got EINVAL (CHANGELOG 1.6.1).
-    var fd = sys_open(dri_path, O_DIRECTORY, 0);
+    var fd = sys_open(dri_path, O_DIRECTORY | O_CLOEXEC, 0);
     if (fd < 0) {
-        return drm_err_not_supported("DRM (/dev/dri not found)");
+        if (fd == 0 - ENOENT) { return drm_err_not_supported("DRM (/dev/dri not found)"); }
+        return drm_err_io(0 - fd, "failed to open /dev/dri");
     }
 
     # Read directory entries
-    var buf = alloc(4096);
+    var bufsz = 4096;
+    var buf = _agnodrm_scratch_new(bufsz);
+    if (buf == 0) {
+        sys_close(fd);
+        return drm_err_io(ENOMEM, "no memory to read /dev/dri");
+    }
     var count = 0;
 
     var nread = sys_getdents64(fd, buf, 4096);
@@ -230,6 +266,10 @@ fn drm_list_devices(result_arr, max_cards): i64 {
         nread = sys_getdents64(fd, buf, 4096);
     }
     sys_close(fd);
+    _agnodrm_scratch_free(buf, bufsz);
+    if (nread < 0) {
+        return drm_err_io(0 - nread, "failed to read /dev/dri");
+    }
 
     return Ok(count);
     #endif
@@ -239,7 +279,23 @@ fn drm_list_devices(result_arr, max_cards): i64 {
 # Open a DRM device
 # ================================================================
 
-# Open a DRM device by path. Returns Result: Ok(fd) or Err.
+# 1 if `fd` is a character device that answers DRM_IOCTL_VERSION. The answer is what
+# makes it DRM, on every target: no st_rdev offset is named by the stdlib, and major 226
+# would say less than the driver saying so.
+fn _drm_is_device(fd): i64 {
+    var st = alloc(STAT_BUFSZ);
+    if (sys_fstat(fd, st) != 0) { return 0; }
+    if ((load32(st + STAT_MODE) & 0xF000) != 0x2000) { return 0; }  # S_IFCHR
+    var ver = alloc(DRM_VER_SIZE);
+    memset(ver, 0, DRM_VER_SIZE);
+    if (_drm_ioctl(fd, DRM_IOCTL_VERSION, ver) < 0) { return 0; }
+    return 1;
+}
+
+# Open a DRM device by path. Returns Result: Ok(fd) or Err. Anything that is not a DRM
+# device is closed and refused, so a regular file, /dev/ptmx or /dev/kvm cannot come
+# back as an Ok fd (audit F-38). Opening a card node takes DRM master when none is held;
+# a caller that only queries should open a render node, which answers both ioctls here.
 fn drm_open(path): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("open DRM device (no DRM subsystem)");  # agnos: display via bhumi scanout
@@ -249,18 +305,21 @@ fn drm_open(path): i64 {
         return drm_err_invalid_argument("drm device path is null");
     }
     # Per-target O_* names, as drm_list_devices spells O_DIRECTORY.
-    var fd = sys_open(path, O_RDWR | O_CLOEXEC, 0);
+    var fd = sys_open(path, O_RDWR | O_CLOEXEC | DRM_O_NOCTTY, 0);
     if (fd < 0) {
         return drm_err_io(0 - fd, "failed to open DRM device");
+    }
+    if (_drm_is_device(fd) != 1) {
+        sys_close(fd);
+        return drm_err_invalid_argument("path is not a DRM device");
     }
     return Ok(fd);
     #endif
 }
 
-# Close a DRM device fd.
+# Close a DRM device fd. Returns 0 or a negative errno, so a double close shows.
 fn drm_close(fd): i64 {
-    sys_close(fd);
-    return 0;
+    return sys_close(fd);
 }
 
 # ================================================================
@@ -278,7 +337,7 @@ fn drm_get_driver_version(fd): i64 {
     var ver = alloc(DRM_VER_SIZE);
     memset(ver, 0, DRM_VER_SIZE);
 
-    var ret = sys_ioctl(fd, DRM_IOCTL_VERSION, ver);
+    var ret = _drm_ioctl(fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
         return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (lengths) failed");
     }
@@ -313,7 +372,7 @@ fn drm_get_driver_version(fd): i64 {
     store64(ver + DRM_VER_DESC_LEN, desc_len);
     store64(ver + DRM_VER_DESC_PTR, desc_buf);
 
-    ret = sys_ioctl(fd, DRM_IOCTL_VERSION, ver);
+    ret = _drm_ioctl(fd, DRM_IOCTL_VERSION, ver);
     if (ret < 0) {
         return drm_err_syscall_failed(0 - ret, "DRM_IOCTL_VERSION (fill) failed");
     }
@@ -331,9 +390,17 @@ fn drm_get_driver_version(fd): i64 {
 # Query capability
 # ================================================================
 
+# 1 for the errnos that mean the driver has no such capability: EINVAL for one it does
+# not know, EOPNOTSUPP for a KMS capability on a render-only driver.
+fn _drm_cap_absent(errno): i64 {
+    if (errno == EINVAL) { return 1; }
+    if (errno == EOPNOTSUPP) { return 1; }
+    return 0;
+}
+
 # Query a DRM capability value for an open device fd.
 # cap: one of the DRM_CAP_* constants.
-# Returns Result: Ok(value) or Err.
+# Returns Result: Ok(value), Ok(0) if the driver has no such capability, or Err.
 fn drm_get_capability(fd, cap): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("DRM capability ioctl (no DRM subsystem)");
@@ -344,11 +411,10 @@ fn drm_get_capability(fd, cap): i64 {
     store64(getcap, cap);
     store64(getcap + 8, 0);
 
-    var ret = sys_ioctl(fd, DRM_IOCTL_GET_CAP, getcap);
+    var ret = _drm_ioctl(fd, DRM_IOCTL_GET_CAP, getcap);
     if (ret < 0) {
         var errno = 0 - ret;
-        # EINVAL means capability not supported, return 0
-        if (errno == EINVAL) { return Ok(0); }
+        if (_drm_cap_absent(errno) == 1) { return Ok(0); }
         return drm_err_syscall_failed(errno, "DRM_IOCTL_GET_CAP failed");
     }
 

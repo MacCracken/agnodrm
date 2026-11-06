@@ -109,14 +109,11 @@ fn test_update() {
     str_builder_add_cstr(sb_expp, "\"rollback_available\":0,\"boot_count\":7}");
     assert(str_eq(str_builder_build(sbp), str_builder_build(sb_expp)) == 1, "us_json_pending");
 
-    # Regression (1.3.0): update_check on a manifest larger than the
-    # 16384-byte read buffer must not overflow. The old read loop let
-    # `total` reach 16384, so the trailing `store8(buf+total,0)` wrote
-    # one byte past a full buffer. Manifest is >16383 bytes with the
-    # version field near the front so it still parses after truncation.
+    # Regression (1.3.0): update_check on a manifest larger than the old
+    # 16384-byte read buffer must not overflow it, and is now read whole.
     var mpath = "/tmp/agnos-update-bigmanifest.json";
     var mbuf = alloc(20000);
-    var mhdr = "{\"version\":\"9999.1.0\",\"pad\":\"";
+    var mhdr = "{\"version\":\"2099.1.1\",\"pad\":\"";
     var mp = strlen(mhdr);
     memcpy(mbuf, mhdr, mp);
     memset(mbuf + mp, 65, 18000);  # 'A' padding past the 16KB buffer
@@ -244,14 +241,14 @@ fn test_bootloader_entries() {
     # Missing title and linux; a key that merely starts with a known key; an
     # empty value; no trailing newline.
     _blfx_write(dir, "d-partial.conf", "linuxefi /not-linux\ntitlefoo bar\nlinux   \noptions quiet splash", files);
-    # Not entries: hidden, wrong/extra suffix, bare ".conf", no suffix, a
-    # suffix of the wrong case.
+    # Not entries: hidden, wrong/extra suffix, bare ".conf", no suffix.
     _blfx_write(dir, ".hidden.conf", "title Hidden\n", files);
     _blfx_write(dir, "README", "title Readme\n", files);
     _blfx_write(dir, "x.conf.bak", "title Backup\n", files);
     _blfx_write(dir, ".conf", "title Dotconf\n", files);
+    # systemd-boot folds the suffix, so this boots and must be seen.
     _blfx_write(dir, "upper.CONF", "title Upper\n", files);
-    # A NUL byte: not a text entry.
+    # A NUL byte: systemd-boot stops there, so what follows it does not exist.
     var nulname = "e-nul.conf";
     var nulbuf = alloc(32);
     memcpy(nulbuf, "title Nul\n", 10);
@@ -260,9 +257,8 @@ fn test_bootloader_entries() {
     vec_push(files, nulname);
     file_write_all(_blfx_path(dir, nulname), nulbuf, 20);
     # Exactly at the cap parses (the terminator lands at buf[cap], inside the
-    # cap + 1 buffer); one byte over is skipped, not truncated.
+    # cap + 1 buffer).
     _blfx_write_sized(dir, "f-atcap.conf", BOOTLOADER_ENTRY_FILE_MAX, files);
-    _blfx_write_sized(dir, "g-overcap.conf", BOOTLOADER_ENTRY_FILE_MAX + 1, files);
     # A directory named like an entry: not a regular file, skipped.
     var subdir = _blfx_path(dir, "h-dir.conf");
     xmkdir(subdir, 0x1C0);
@@ -270,12 +266,14 @@ fn test_bootloader_entries() {
     var arr = alloc(8 * 16);
     var r_t, r_v = bootloader_list_loader_entries(dir, arr, 16);
     assert(is_ok(r_t) == 1, "bls_ok");
-    assert_eq(r_v, 5, "bls_count");
+    assert_eq(r_v, 7, "bls_count");
     assert(streq(bootloader_entry_id(load64(arr)), "a-first.conf") == 1, "bls_order_0");
     assert(streq(bootloader_entry_id(load64(arr + 8)), "b-crlf.conf") == 1, "bls_order_1");
     assert(streq(bootloader_entry_id(load64(arr + 16)), "c-third.conf") == 1, "bls_order_2");
     assert(streq(bootloader_entry_id(load64(arr + 24)), "d-partial.conf") == 1, "bls_order_3");
-    assert(streq(bootloader_entry_id(load64(arr + 32)), "f-atcap.conf") == 1, "bls_order_4");
+    assert(streq(bootloader_entry_id(load64(arr + 32)), "e-nul.conf") == 1, "bls_order_4");
+    assert(streq(bootloader_entry_id(load64(arr + 40)), "f-atcap.conf") == 1, "bls_order_5");
+    assert(streq(bootloader_entry_id(load64(arr + 48)), "upper.CONF") == 1, "bls_order_6");
 
     var a = _blfx_find(arr, r_v, "a-first.conf");
     assert(streq(bootloader_entry_title(a), "Arch Linux") == 1, "bls_title");
@@ -298,15 +296,38 @@ fn test_bootloader_entries() {
 
     var f = _blfx_find(arr, r_v, "f-atcap.conf");
     assert(streq(bootloader_entry_title(f), "Big") == 1, "bls_at_cap");
-    assert_eq(_blfx_find(arr, r_v, "g-overcap.conf"), 0, "bls_over_cap_skipped");
-    assert_eq(_blfx_find(arr, r_v, "e-nul.conf"), 0, "bls_nul_skipped");
+    var n = _blfx_find(arr, r_v, "e-nul.conf");
+    assert(streq(bootloader_entry_title(n), "Nul") == 1, "bls_nul_before");
+    assert_eq(bootloader_entry_linux(n), 0, "bls_nul_stops");
 
-    # max_entries truncates AFTER sorting, so it is always the same prefix.
+    # audit F-28: a list that cannot be complete is an Err, because the bootloader would
+    # still boot what it left out.
     var arr2 = alloc(8 * 2);
     var t_t, t_v = bootloader_list_loader_entries(dir, arr2, 2);
-    assert(is_ok(t_t) == 1, "bls_trunc_ok");
-    assert_eq(t_v, 2, "bls_trunc_count");
-    assert(streq(bootloader_entry_id(load64(arr2 + 8)), "b-crlf.conf") == 1, "bls_trunc_prefix");
+    assert(is_err_result(t_t) == 1, "bls_too_many_err");
+    var ov_dir = _blfx_path(root, "over");
+    xmkdir(ov_dir, 0x1C0);
+    var ov_files = vec_new();
+    _blfx_write(ov_dir, "a.conf", "title A\n", ov_files);
+    var ok_t, ok_v = bootloader_list_loader_entries(ov_dir, arr, 16);
+    assert_eq(ok_v, 1, "bls_over_fx");
+    _blfx_write_sized(ov_dir, "b-overcap.conf", BOOTLOADER_ENTRY_FILE_MAX + 1, ov_files);
+    var ov_t, ov_v = bootloader_list_loader_entries(ov_dir, arr, 16);
+    assert(is_err_result(ov_t) == 1, "bls_over_cap_err");
+    # audit F-27: CR ends a line, as it does for systemd-boot.
+    _blfx_write(ov_dir, "b-overcap.conf", "title Linux\roptions init=/bin/sh\rlinux /vmlinuz\n", ov_files);
+    var cr_t, cr_v = bootloader_list_loader_entries(ov_dir, arr, 16);
+    var cr = _blfx_find(arr, cr_v, "b-overcap.conf");
+    assert(streq(bootloader_entry_title(cr), "Linux") == 1, "bls_cr_title");
+    assert(streq(bootloader_entry_options(cr), "init=/bin/sh") == 1, "bls_cr_options");
+    assert(streq(bootloader_entry_linux(cr), "/vmlinuz") == 1, "bls_cr_linux");
+    _blfx_write(ov_dir, "b-overcap.conf", "# x\roptions init=/bin/sh\n", ov_files);
+    var cc_t, cc_v = bootloader_list_loader_entries(ov_dir, arr, 16);
+    cr = _blfx_find(arr, cc_v, "b-overcap.conf");
+    assert(streq(bootloader_entry_options(cr), "init=/bin/sh") == 1, "bls_cr_after_comment");
+    xunlink(_blfx_path(ov_dir, "a.conf"));
+    xunlink(_blfx_path(ov_dir, "b-overcap.conf"));
+    xrmdir(ov_dir);
     var z_t, z_v = bootloader_list_loader_entries(dir, 0, 0);
     assert(is_ok(z_t) == 1, "bls_max0_ok");
     assert_eq(z_v, 0, "bls_max0_count");
@@ -332,6 +353,8 @@ fn test_bootloader_entries() {
     assert_eq(_bootloader_entry_name_ok(str_from("a/b.conf")), 0, "bls_name_slash");
     assert_eq(_bootloader_entry_name_ok(str_from("a\tb.conf")), 0, "bls_name_ctrl");
     assert_eq(_bootloader_entry_name_ok(str_from("ok-1.conf")), 1, "bls_name_ok");
+    assert_eq(_bootloader_entry_name_ok(str_from("Mixed.Conf")), 1, "bls_name_mixed_case");
+    assert_eq(_bootloader_entry_name_ok(str_from("x.conf.bak")), 0, "bls_name_extra_suffix");
 
     # Cleanup.
     var fi = 0;
@@ -456,8 +479,7 @@ fn test_netns() {
 
     # F-6 (1.5.3): rule ports were never range-checked and were rendered with
     # fmt_int_buf into an alloc(8) scratch — an 8+ digit port wrote past it.
-    # In-range ports still render; out-of-range ones are skipped rather than
-    # emitted as an unloadable nft rule.
+    # An out-of-range port now refuses the policy (audit F-18).
     var rules = alloc(8 * 2);
     var rok = netns_fw_rule_new(TRAFFIC_INBOUND, PROTO_TCP, 443, "0.0.0.0", FW_ACCEPT, "https");
     var rbad = netns_fw_rule_new(TRAFFIC_INBOUND, PROTO_TCP, 999999999, "0.0.0.0", FW_ACCEPT, "oob");
@@ -465,9 +487,9 @@ fn test_netns() {
     store64(rules + 8, rbad);
     var pol = netns_fw_policy_new(FW_DROP, FW_ACCEPT);
     netns_fw_policy_set_rules(pol, rules, 2);
-    var rs = netns_render_nftables_ruleset(pol);
-    assert(strstr(rs, "dport 443") >= 0, "nft_port_inrange");
-    assert(strstr(rs, "999999999") < 0, "nft_port_oob_skipped");
+    assert_eq(netns_render_nftables_ruleset(pol), 0, "nft_port_oob_refused");
+    netns_fw_policy_set_rules(pol, rules, 1);
+    assert(strstr(netns_render_nftables_ruleset(pol), "dport 443") >= 0, "nft_port_inrange");
 
     # Regression (1.3.0): netns command exec was broken — the argv array was
     # passed as a single argument to run_capture/_exec3 (cmd + 2 args max),
@@ -596,10 +618,10 @@ fn test_bootctl_parse() {
     assert_eq(h_v, 1, "bctl_header_dropped");
     assert(streq(bootloader_entry_title(load64(arr)), "X") == 1, "bctl_id_first_title");
 
-    # max_entries still caps the result; bad arguments are errors, not crashes.
+    # More entries than the array holds is refused (audit F-28); bad arguments are
+    # errors, not crashes.
     var m_t, m_v = bootloader_parse_bootctl_list(text, arr, 1);
-    assert(is_ok(m_t) == 1, "bctl_max_ok");
-    assert_eq(m_v, 1, "bctl_max_entries");
+    assert(is_err_result(m_t) == 1, "bctl_max_refused");
     var n_t, n_v = bootloader_parse_bootctl_list(0, arr, 8);
     assert(is_err_result(n_t) == 1, "bctl_null_text_err");
     var a_t, a_v = bootloader_parse_bootctl_list(text, 0, 8);
@@ -642,7 +664,7 @@ fn test_fd_hygiene() {
     var man = _blfx_path(root, "manifest.json");
     var nover = _blfx_path(root, "noversion.json");
     file_write_all(empty, "", 0);
-    file_write_all(man, "{\"version\":\"9999.1.0\"}", 22);
+    file_write_all(man, "{\"version\":\"2099.1.1\"}", 22);
     file_write_all(nover, "{\"channel\":\"stable\"}", 20);
     var arr = alloc(64 * 8);
 
@@ -804,6 +826,18 @@ fn _updfx_rm(root, rel) {
     return xunlink(str_data(str_builder_build(sb)));
 }
 
+# sha256 of "NEWIMAGE", the fixture image's bytes.
+var _UPDFX_SHA = "a1fd16012676b0b9aab1acc3efa9f545365649533f409630ed617d6fd3641b9a";
+# Runs under /bin/sh with the empty env exec_vec passes, so the path is absolute.
+var _UPDFX_SHATOOL = "#!/bin/sh\nexec /usr/bin/sha256sum \"$@\"\n";
+
+# A manifest for one 8-byte raw image holding "NEWIMAGE".
+fn _updfx_manifest(image) {
+    var m = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
+    vec_push(update_manifest_files(m), update_file_new(image, _UPDFX_SHA, 8));
+    return m;
+}
+
 # What _update_cmdline_slot makes of `text`: the slot, 0 for none, -1 for an Err.
 fn _updfx_cmdline_slot(root, text) {
     _updfx_write(root, "/proc/cmdline", text);
@@ -842,6 +876,7 @@ fn test_update_slots() {
     var slot_a = _blfx_path(root, "rootfs_a");
     var slot_b = _blfx_path(root, "rootfs_b");
     _updfx_tool(root, "/usr/bin/argonaut", "#!/bin/sh\nexit 0\n");
+    _updfx_tool(root, "/usr/bin/sha256sum", _UPDFX_SHATOOL);
     var efi_tail = "\n  exit 0\nfi\necho \"$*\" > \"$0.log\"\n";
     var efi_head = "#!/bin/sh\nif [ $# -eq 0 ]; then\n  ";
     var efi_list = "printf 'BootCurrent: 0003\\nBoot0003* AGNOS-B\\tHD(1)\\nBoot0004* AGNOS-A\\tHD(2)\\n'";
@@ -853,8 +888,7 @@ fn test_update_slots() {
     update_config_set_state_file(cfg, sf);
     update_config_set_slot_a(cfg, slot_a);
     update_config_set_slot_b(cfg, slot_b);
-    var man = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
-    vec_push(update_manifest_files(man), update_file_new(image, "00", 8));
+    var man = _updfx_manifest(image);
 
     # F-3: a rollback from B must leave the state saying A, with no cmdline slot
     # for update_get_current_slot to prefer.
@@ -952,8 +986,7 @@ fn test_update_slots() {
     # The file exists, so only that check can stop dd.
     var elsewhere = _blfx_path(root, "elsewhere.img");
     assert_eq(file_write_all(elsewhere, "ELSEWHERE", 9), 9, "upd_fx_elsewhere");
-    var outside = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
-    vec_push(update_manifest_files(outside), update_file_new(elsewhere, "00", 9));
+    var outside = _updfx_manifest(elsewhere);
     var st_t, st_v = update_apply(cfg, outside);
     assert(is_err_result(st_t) == 1, "upd_apply_outside_staging_refused");
     assert(_tmpx_holds(slot_b, "OLD-B") == 1, "upd_apply_outside_staging_intact");
@@ -1039,6 +1072,7 @@ fn test_update_slots() {
     _updfx_rm(root, "/var/lib/agnos/next-slot");
     _updfx_rm(root, "/var/lib/agnos/updates/image.img");
     _updfx_rm(root, "/usr/bin/argonaut");
+    _updfx_rm(root, "/usr/bin/sha256sum");
     _updfx_rm(root, "/usr/bin/efibootmgr");
     _updfx_rm(root, "/usr/bin/efibootmgr.log");
     xunlink(slot_a);
@@ -1051,6 +1085,1399 @@ fn test_update_slots() {
         assert_eq(xrmdir(str_data(str_builder_build(usb))), 0, "upd_fx_rmdir");
     }
     assert_eq(xrmdir(root), 0, "upd_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# core: error, util, drm, udev (audit F-34 to F-39, F-49, F-57, F-58)
+# ================================================================
+
+# Write `text` where a stub udevadm prints it, and install the stub.
+fn _udfx_stub(dir, text) {
+    _blfx_write(dir, "out", text, vec_new());
+    var tool = _blfx_path(dir, "udevadm");
+    xunlink(tool);
+    var fd = file_create_exclusive(tool, 0x1ED);  # mode 0755
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "#!/bin/sh\necho \"$*\" > \"$0.args\"\nexec /usr/bin/cat ");
+    str_builder_add_cstr(sb, _blfx_path(dir, "out"));
+    str_builder_add_cstr(sb, "\n");
+    var body = str_builder_build(sb);
+    sys_write(fd, str_data(body), str_len(body));
+    sys_close(fd);
+    _udev_tool = tool;
+    return 0;
+}
+
+fn _udfx_rule(key) {
+    var keys = alloc(8);
+    store64(keys, key);
+    var t, v = udev_validate_rule(keys, 1);
+    return is_err_result(t);
+}
+
+fn test_core_hardening() {
+    println("-- core hardening (audit F-34 to F-39, F-49, F-57, F-58) --");
+    # F-49: the packed form keeps errno in its 16 bits, and an Err never returns 0.
+    var pk = drm_syserr_pack(DRM_ERR_IO, 0xF0005);
+    assert_eq(drm_syserr_kind(pk), DRM_ERR_IO, "err_pack_kind_masked");
+    assert_eq(drm_syserr_errno(pk), 5, "err_pack_errno_masked");
+    var wt, wv = wrap_syscall(0 - 0x100000);
+    assert(is_err_result(wt) == 1, "err_wrap_huge");
+    assert_eq(drm_syserr_kind(wv), DRM_ERR_SYSCALL_FAILED, "err_wrap_huge_kind");
+    var et, ev = drm_err_io(0, "");
+    assert(result_print_err(et, ev) != 0, "err_print_no_errno_nonzero");
+    var ot, ov = Ok(5);
+    assert_eq(result_print_err(ot, ov), 0, "err_print_ok_zero");
+
+    # F-58: a read keeps going past a short one, and a negative cap is no cap.
+    var rp = "/tmp/agnodrm-rd.tmp";
+    file_write_all(rp, "0123456789", 10);
+    var rfd = sys_open(rp, O_RDONLY, 0);
+    assert(str_eq(agnodrm_read_fd_to_str(rfd, 4), str_from("0123")) == 1, "util_read_cap");
+    assert(str_eq(agnodrm_read_fd_to_str(rfd, 100), str_from("456789")) == 1, "util_read_rest");
+    assert_eq(str_len(agnodrm_read_fd_to_str(rfd, 0 - 5)), 0, "util_read_negative_cap");
+    sys_close(rfd);
+    var wfd = sys_open(rp, O_RDONLY, 0);
+    var rbuf = alloc(16);
+    assert_eq(_agnodrm_read_all(wfd, rbuf, 16), 10, "util_read_all");
+    assert_eq(_agnodrm_write_all(wfd, "x", 1), 0 - EBADF, "util_write_all_errno");
+    assert_eq(_agnodrm_write_all(wfd, "x", 0), 0, "util_write_all_nothing");
+    sys_close(wfd);
+    var dfd = sys_open("/tmp", O_RDONLY, 0);
+    assert_eq(_agnodrm_read_all(dfd, rbuf, 16), 0 - EISDIR, "util_read_all_eisdir");
+    sys_close(dfd);
+    xunlink(rp);
+    assert_eq(_agnodrm_out_ok(0, 0), 1, "util_out_zero");
+    assert_eq(_agnodrm_out_ok(0, 1), 0, "util_out_null");
+    assert_eq(_agnodrm_out_ok(rbuf, 0 - 1), 0, "util_out_negative");
+    var sc = _agnodrm_scratch_new(8192);
+    assert(sc != 0, "util_scratch");
+    store8(sc + 8191, 7);
+    assert_eq(load8(sc + 8191), 7, "util_scratch_rw");
+    _agnodrm_scratch_free(sc, 8192);
+
+    # A temp is born with the mode it is asked for.
+    var mpath = 0;
+    var mfd = _agnodrm_tmp_open("/tmp/agnodrm-mode", &mpath, 0x180);  # mode 0600
+    assert(mfd >= 0, "util_tmp_mode_fd");
+    assert_eq(_agnodrm_file_mode(mpath), 0x180, "util_tmp_mode_born");
+    sys_close(mfd);
+    xunlink(mpath);
+
+    # A temp fd must not outlive an exec.
+    var tpath = 0;
+    var tfd = agnodrm_tmp_create("/tmp/agnodrm-cloexec", &tpath);
+    assert(tfd >= 0, "util_tmp_fd");
+    assert_eq(sys_fcntl(tfd, 1, 0) & 1, 1, "util_tmp_cloexec");  # F_GETFD, FD_CLOEXEC
+    sys_close(tfd);
+    xunlink(tpath);
+
+    # F-35: the ABI's number, and the struct it encodes.
+    assert_eq(DRM_IOCTL_VERSION, 0xC0406400, "drm_version_ioctl");
+    assert_eq((DRM_IOCTL_VERSION >> 16) & 0x3FFF, DRM_VER_SIZE, "drm_version_size");
+    assert_eq(DRM_VER_SIZE, 64, "drm_version_size_abi");
+    assert_eq((DRM_IOCTL_GET_CAP >> 16) & 0x3FFF, 16, "drm_getcap_size");
+
+    # F-38: what is not a DRM device does not come back as an open fd.
+    var before = _open_fd_count();
+    var o1_t, o1_v = drm_open("/dev/null");
+    assert(is_err_result(o1_t) == 1, "drm_open_chardev_refused");
+    var nf = "/tmp/agnodrm-notdrm.tmp";
+    file_write_all(nf, "x", 1);
+    var o2_t, o2_v = drm_open(nf);
+    assert(is_err_result(o2_t) == 1, "drm_open_file_refused");
+    xunlink(nf);
+    var o3_t, o3_v = drm_open(0);
+    assert(is_err_result(o3_t) == 1, "drm_open_null");
+    var o4_t, o4_v = drm_open("/dev/dri/no-such-node");
+    assert(is_err_result(o4_t) == 1, "drm_open_missing");
+    assert_eq(_open_fd_count(), before, "drm_open_refused_closes");
+
+    # F-39: both spellings of "no such capability".
+    assert_eq(_drm_cap_absent(EINVAL), 1, "drm_cap_einval");
+    assert_eq(_drm_cap_absent(EOPNOTSUPP), 1, "drm_cap_eopnotsupp");
+    assert_eq(_drm_cap_absent(EBADF), 0, "drm_cap_ebadf");
+    var c_t, c_v = drm_get_capability(0 - 1, DRM_CAP_DUMB_BUFFER);
+    assert(is_err_result(c_t) == 1, "drm_cap_bad_fd_err");
+    assert(drm_close(0 - 1) < 0, "drm_close_reports");
+
+    # F-57: arguments and a real walk, when this host has DRM.
+    var dl_t, dl_v = drm_list_devices(0, 1);
+    assert(is_err_result(dl_t) == 1, "drm_list_null_arr");
+    var cards = alloc(8 * 16);
+    var ll_t, ll_v = drm_list_devices(cards, 16);
+    if (is_ok(ll_t) == 1) {
+        var ci = 0;
+        while (ci < ll_v) {
+            assert(agnodrm_cstr_starts_with(load64(cards + ci * 8), "/dev/dri/card") == 1, "drm_list_path");
+            ci = ci + 1;
+        }
+    } else {
+        assert_eq(drm_syserr_kind(ll_v), DRM_ERR_NOT_SUPPORTED, "drm_list_no_dri");
+    }
+    # A render node, if one opens: the real ioctls, read only. Skipped on a host without.
+    var rn_t, rn_v = drm_open("/dev/dri/renderD128");
+    if (is_ok(rn_t) == 1) {
+        var gv_t, gv_v = drm_get_driver_version(rn_v);
+        assert(is_ok(gv_t) == 1, "drm_real_version");
+        assert(strlen(drm_verinfo_name(gv_v)) > 0, "drm_real_name");
+        # qemu-user translates VERSION but not GET_CAP, and answers ENOTTY; a DRM fd never does.
+        var gc_t, gc_v = drm_supports_dumb_buffer(rn_v);
+        if (is_err_result(gc_t) == 1) {
+            assert_eq(drm_syserr_errno(gc_v), ENOTTY, "drm_real_cap_only_emulated");
+        }
+        assert_eq(drm_close(rn_v), 0, "drm_real_close");
+    }
+
+    # F-34: the spellings real rules use.
+    assert_eq(_udfx_rule("RUN"), 1, "udr_run");
+    assert_eq(_udfx_rule("RUN{program}"), 1, "udr_run_program");
+    assert_eq(_udfx_rule("RUN{builtin}"), 1, "udr_run_builtin");
+    assert_eq(_udfx_rule("RUN+"), 1, "udr_run_op");
+    assert_eq(_udfx_rule("  RUN"), 1, "udr_run_blank");
+    assert_eq(_udfx_rule("PROGRAM"), 1, "udr_program");
+    assert_eq(_udfx_rule("IMPORT{program}"), 1, "udr_import_program");
+    assert_eq(_udfx_rule("IMPORT{builtin}"), 1, "udr_import_builtin");
+    assert_eq(_udfx_rule("SYSCTL{kernel.core_pattern}"), 1, "udr_sysctl");
+    assert_eq(_udfx_rule("ENV{SYSTEMD_WANTS}"), 1, "udr_wants");
+    assert_eq(_udfx_rule("ENV{SYSTEMD_USER_WANTS}"), 1, "udr_user_wants");
+    assert_eq(_udfx_rule("MODE"), 0, "udr_mode_ok");
+    assert_eq(_udfx_rule("IMPORT{file}"), 0, "udr_import_file_ok");
+    assert_eq(_udfx_rule("ENV{ID_FOO}"), 0, "udr_env_ok");
+    assert_eq(_udfx_rule("RUNNER"), 0, "udr_not_the_key");
+    assert_eq(_udfx_rule(0), 1, "udr_null_key");
+    var vk = alloc(8);
+    store64(vk, "RUN");
+    assert(is_err_result(udev_validate_rule(vk, 0 - 1)) == 1, "udr_negative_count");
+    assert(is_err_result(udev_validate_rule(0, 1)) == 1, "udr_null_array");
+    assert(is_ok(udev_validate_rule(0, 0)) == 1, "udr_empty_ok");
+
+    # F-36: udevadm's own lines outrank a forged property, and the first line stands.
+    var ud_own = "P: /devices/a\nU: block\nT: disk\nV: nvme\nN: sda\n";
+    var ud_forged = "E: SUBSYSTEM=drm\nE: DEVTYPE=x\nE: DRIVER=y\nE: DEVNAME=/dev/z\n\n";
+    var d_t, d_v = udev_parse_udevadm_info(netns_concat2(ud_own, ud_forged));
+    assert(is_ok(d_t) == 1, "ud_parse_ok");
+    assert(streq(udev_devinfo_subsystem(d_v), "block") == 1, "ud_u_outranks_e");
+    assert(streq(udev_devinfo_devtype(d_v), "disk") == 1, "ud_t_outranks_e");
+    assert(streq(udev_devinfo_driver(d_v), "nvme") == 1, "ud_v_outranks_e");
+    assert(streq(udev_devinfo_devnode(d_v), "/dev/sda") == 1, "ud_n_outranks_e");
+    assert(streq(udev_devinfo_syspath(d_v), "/sys/devices/a") == 1, "ud_syspath");
+    assert_eq(udev_devinfo_prop_count(d_v), 4, "ud_props");
+    var two_t, two_v = udev_parse_udevadm_info("P: /devices/a\nP: /devices/forged\n");
+    assert(is_err_result(two_t) == 1, "ud_second_p_refused");
+    var n2_t, n2_v = udev_parse_udevadm_info("P: /devices/a\nN: sda\nN: forged\n");
+    assert(streq(udev_devinfo_devnode(n2_v), "/dev/sda") == 1, "ud_first_n_stands");
+    var e2_t, e2_v = udev_parse_udevadm_info("P: /devices/a\nE: SUBSYSTEM=block\nE: SUBSYSTEM=drm\n");
+    assert(streq(udev_devinfo_subsystem(e2_v), "block") == 1, "ud_first_e_stands");
+    var up_t, up_v = udev_parse_udevadm_info("P: /devices/a\nN: ../etc/shadow\n");
+    assert(is_err_result(up_t) == 1, "ud_n_climbs");
+    var mid_t, mid_v = udev_parse_udevadm_info("P: /devices/a\nN: dri/../../etc/shadow\n");
+    assert(is_err_result(mid_t) == 1, "ud_n_climbs_mid");
+    var dots_t, dots_v = udev_parse_udevadm_info("P: /devices/a\nN: a..b\n");
+    assert(is_ok(dots_t) == 1, "ud_n_dots_in_name_ok");
+    var pd_t, pd_v = udev_parse_udevadm_info("P: /devices/../../etc\n");
+    assert(is_err_result(pd_t) == 1, "ud_p_climbs");
+    var ev_t, ev_v = udev_parse_udevadm_info("P: /devices/a\nE: DEVNAME=/dev/../etc/shadow\n");
+    assert_eq(udev_devinfo_devnode(ev_v), 0, "ud_devname_climbs");
+    var eo_t, eo_v = udev_parse_udevadm_info("P: /devices/a\nE: DEVNAME=/etc/shadow\n");
+    assert_eq(udev_devinfo_devnode(eo_v), 0, "ud_devname_outside_dev");
+    var eq_t, eq_v = udev_parse_udevadm_info("P: /devices/a\nE: K=a=b\nE: =novalue\nE: nokey\n");
+    assert_eq(udev_devinfo_prop_count(eq_v), 1, "ud_prop_shapes");
+    assert(streq(load64(udev_devinfo_prop_vals(eq_v)), "a=b") == 1, "ud_prop_value_keeps_eq");
+    assert(is_err_result(udev_parse_udevadm_info("N: sda\n")) == 1, "ud_no_devpath");
+    assert(is_err_result(udev_parse_udevadm_info(0)) == 1, "ud_null");
+    # No property is lost past the old cap of 128, wherever it sits.
+    var psb = str_builder_new();
+    str_builder_add_cstr(psb, "P: /devices/many\n");
+    var pi = 0;
+    while (pi < 300) {
+        str_builder_add_cstr(psb, "E: K=v\n");
+        pi = pi + 1;
+    }
+    str_builder_add_cstr(psb, "E: SUBSYSTEM=block\n");
+    var mp_t, mp_v = udev_parse_udevadm_info(str_data(str_builder_build(psb)));
+    assert_eq(udev_devinfo_prop_count(mp_v), 301, "ud_many_props");
+    assert(streq(udev_devinfo_subsystem(mp_v), "block") == 1, "ud_subsystem_past_cap");
+
+    # udevadm itself is a stub from here.
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-ud-");
+    str_builder_add_int(sbd, sys_getpid());
+    var dir = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(dir, 0x1C0), 0, "ud_fx_mkdir");
+    var devs = alloc(8 * 8);
+    var db_good = "P: /devices/one\nU: block\nN: sda\n\nP: /devices/two\nU: drm\nN: dri/card0\n\n";
+    _udfx_stub(dir, netns_concat2(db_good, "P: /devices/forged\nP: /devices/twice\n\n"));
+    var l_t, l_v = udev_list_devices(0, devs, 8);
+    assert(is_ok(l_t) == 1, "ud_list_ok");
+    assert_eq(l_v, 2, "ud_list_skips_bad_block");
+    var lf_t, lf_v = udev_list_devices("drm", devs, 8);
+    assert_eq(lf_v, 1, "ud_list_filter");
+    assert(streq(udev_devinfo_devnode(load64(devs)), "/dev/dri/card0") == 1, "ud_list_filter_node");
+    var lm_t, lm_v = udev_list_devices(0, devs, 1);
+    assert_eq(lm_v, 1, "ud_list_max");
+    var lz_t, lz_v = udev_list_devices(0, 0, 0);
+    assert(is_ok(lz_t) == 1, "ud_list_zero");
+    assert_eq(lz_v, 0, "ud_list_zero_count");
+    var ln_t, ln_v = udev_list_devices(0, 0, 4);
+    assert(is_err_result(ln_t) == 1, "ud_list_null");
+
+    # F-37: a database past the first buffer is read whole.
+    var bsb = str_builder_new();
+    var di = 0;
+    while (di < 30000) {
+        str_builder_add_cstr(bsb, "P: /devices/pad/0123456789\nU: pad\n");
+        str_builder_add_cstr(bsb, "E: PAD=0123456789012345678901234567890123456789\n\n");
+        di = di + 1;
+    }
+    str_builder_add_cstr(bsb, "P: /devices/last\nU: drm\nN: nvme0n1p2\n\n");
+    var blob = str_builder_build(bsb);
+    assert(str_len(blob) > 1048576 * 2, "ud_big_fx");
+    _udfx_stub(dir, str_data(blob));
+    var b_t, b_v = udev_list_devices("drm", devs, 8);
+    assert(is_ok(b_t) == 1, "ud_big_ok");
+    assert_eq(b_v, 1, "ud_big_reaches_last");
+    assert(streq(udev_devinfo_devnode(load64(devs)), "/dev/nvme0n1p2") == 1, "ud_big_whole_node");
+
+    # F-40: a filter that matches nothing leaves nothing on the heap, however large the db.
+    _udfx_stub(dir, str_data(blob));
+    var fu0 = alloc_used();
+    var fp_t, fp_v = udev_list_devices("nosuchsubsystem", devs, 8);
+    assert(is_ok(fp_t) == 1, "ud_filter_ok");
+    assert_eq(fp_v, 0, "ud_filter_none");
+    assert((alloc_used() - fu0) < 4096, "ud_filter_no_heap");
+
+    # The quick filter agrees with what the parser would have said.
+    assert_eq(_udev_block_on_subsystem("U: drm\nE: SUBSYSTEM=block\n", 25, "drm"), 1, "ud_f_u_wins");
+    assert_eq(_udev_block_on_subsystem("U: drm\nE: SUBSYSTEM=block\n", 25, "block"), 0, "ud_f_u_outranks");
+    assert_eq(_udev_block_on_subsystem("E: SUBSYSTEM=block\nU: drm\n", 25, "drm"), 1, "ud_f_u_after_e");
+    assert_eq(_udev_block_on_subsystem("E: SUBSYSTEM=block\nE: SUBSYSTEM=drm\n", 35, "block"), 1, "ud_f_first_e");
+    assert_eq(_udev_block_on_subsystem("E: SUBSYSTEM=block\nE: SUBSYSTEM=drm\n", 35, "drm"), 0, "ud_f_second_e");
+    assert_eq(_udev_block_on_subsystem("P: /x\n", 6, "drm"), 0, "ud_f_none");
+    assert_eq(_udev_block_on_subsystem("U: drmx\n", 8, "drm"), 0, "ud_f_prefix");
+
+    # F-40: polling does not grow the heap by a capture buffer each call.
+    _udfx_stub(dir, "P: /devices/one\nU: block\nN: sda\n\n");
+    var used0 = alloc_used();
+    var pc = 0;
+    while (pc < 32) {
+        var pl_t, pl_v = udev_list_devices(0, devs, 8);
+        pc = pc + 1;
+    }
+    assert((alloc_used() - used0) < 1048576, "ud_poll_no_buffer_growth");
+
+    # A failing tool is an Err, not an empty list.
+    var fail = _blfx_path(dir, "fail");
+    var ffd = file_create_exclusive(fail, 0x1ED);
+    sys_write(ffd, "#!/bin/sh\nexit 3\n", 17);
+    sys_close(ffd);
+    _udev_tool = fail;
+    var fl_t, fl_v = udev_list_devices(0, devs, 8);
+    assert(is_err_result(fl_t) == 1, "ud_list_tool_fail");
+    var fg_t, fg_v = udev_get_device_info("/sys/devices/a");
+    assert(is_err_result(fg_t) == 1, "ud_get_tool_fail");
+
+    # udev_get_device_info: the two path forms, and nothing else reaches udevadm.
+    _udfx_stub(dir, "P: /devices/one\nU: block\nN: sda\n");
+    var g_t, g_v = udev_get_device_info("/sys/devices/one");
+    assert(is_ok(g_t) == 1, "ud_get_sys");
+    assert(streq(udev_devinfo_devnode(g_v), "/dev/sda") == 1, "ud_get_node");
+    assert(_tmpx_holds(_blfx_path(dir, "udevadm.args"), "info --path=/sys/devices/one\n") == 1, "ud_get_argv");
+    var g2_t, g2_v = udev_get_device_info("/devices/one");
+    assert(is_ok(g2_t) == 1, "ud_get_devpath");
+    xunlink(_blfx_path(dir, "udevadm.args"));
+    var g3_t, g3_v = udev_get_device_info("/sys/../etc/passwd");
+    assert(is_err_result(g3_t) == 1, "ud_get_dotdot");
+    var g4_t, g4_v = udev_get_device_info("etc/passwd");
+    assert(is_err_result(g4_t) == 1, "ud_get_relative");
+    var g5_t, g5_v = udev_get_device_info("-h");
+    assert(is_err_result(g5_t) == 1, "ud_get_option_shaped");
+    assert_eq(file_exists(_blfx_path(dir, "udevadm.args")), 0, "ud_get_refused_never_ran");
+    # Output too long to read whole fails rather than parse part of a device. One device,
+    # so nothing but the size can refuse it.
+    var osb = str_builder_new();
+    str_builder_add_cstr(osb, "P: /devices/one\n");
+    var oi = 0;
+    while (oi < 7000) {
+        str_builder_add_cstr(osb, "E: KEY=0123456789\n");
+        oi = oi + 1;
+    }
+    var oversized = str_builder_build(osb);
+    assert(str_len(oversized) > UDEV_INFO_MAX, "ud_get_too_long_fx");
+    _udfx_stub(dir, str_data(oversized));
+    var g6_t, g6_v = udev_get_device_info("/sys/devices/one");
+    assert(is_err_result(g6_t) == 1, "ud_get_too_long");
+
+    _udev_tool = 0;
+    xunlink(_blfx_path(dir, "out"));
+    xunlink(_blfx_path(dir, "udevadm"));
+    xunlink(_blfx_path(dir, "udevadm.args"));
+    xunlink(fail);
+    assert_eq(xrmdir(dir), 0, "ud_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# bootloader: the whole boot tree (audit F-27, F-28, F-50, F-51, F-56)
+# ================================================================
+
+fn _clfx(text) { return is_err_result(bootloader_validate_kernel_cmdline(text)); }
+
+fn test_bootloader_tree() {
+    println("-- bootloader tree (audit F-28, F-50, F-51, F-56) --");
+    # F-51: read as the kernel reads them.
+    assert_eq(_clfx("\"init=/bin/sh\""), 1, "cl_quoted_token");
+    assert_eq(_clfx("init=\"/bin/sh\""), 1, "cl_quoted_value");
+    assert_eq(_clfx("\"rdinit=/x\""), 1, "cl_quoted_rdinit");
+    assert_eq(_clfx("init-on-alloc=0"), 1, "cl_dash_init_on_alloc");
+    assert_eq(_clfx("init_on_alloc=off"), 1, "cl_off_value");
+    assert_eq(_clfx("init_on_free=n"), 1, "cl_n_value");
+    assert_eq(_clfx("module.sig-enforce=0"), 1, "cl_dash_sig_enforce");
+    assert_eq(_clfx("module.sig_enforce=false"), 1, "cl_false_value");
+    assert_eq(_clfx("nospectre-v2"), 1, "cl_dash_nospectre");
+    assert_eq(_clfx("systemd.debug_shell"), 1, "cl_underscore_debug_shell");
+    assert_eq(_clfx("systemd.debug-shell"), 1, "cl_dash_debug_shell");
+    assert_eq(_clfx("rd.break=pre-mount"), 1, "cl_rd_break_value");
+    assert_eq(_clfx("rd.break"), 1, "cl_rd_break");
+    assert_eq(_clfx("audit=off"), 1, "cl_audit_off");
+    assert_eq(_clfx("audit=no"), 1, "cl_audit_no");
+    assert_eq(_clfx("selinux=0"), 1, "cl_selinux_0");
+    assert_eq(_clfx("lockdown=none"), 1, "cl_lockdown");
+    assert_eq(_clfx("mitigations=off"), 1, "cl_mitigations");
+    assert_eq(_clfx("spectre_v2=off"), 1, "cl_spectre_v2");
+    assert_eq(_clfx("intel_iommu=off"), 1, "cl_iommu");
+    assert_eq(_clfx("systemd.run=/bin/sh"), 1, "cl_systemd_run");
+    assert_eq(_clfx("rd.systemd.unit=emergency.target"), 1, "cl_rd_unit");
+    assert_eq(_clfx("systemd.unit=rescue"), 1, "cl_unit_short");
+    assert_eq(_clfx("ro 1"), 1, "cl_runlevel_1");
+    assert_eq(_clfx("ro S"), 1, "cl_runlevel_s");
+    # An init= shell by file name, in any directory.
+    assert_eq(_clfx("init=/usr/bin/bash"), 1, "cl_init_usr_bash");
+    assert_eq(_clfx("init=/usr/bin/sh"), 1, "cl_init_usr_sh");
+    assert_eq(_clfx("init=/opt/x/busybox"), 1, "cl_init_opt_busybox");
+    assert_eq(_clfx("init=sh"), 1, "cl_init_bare");
+    assert_eq(_clfx("init=/usr/bin/fish"), 1, "cl_init_fish");
+    # What must still pass.
+    assert_eq(_clfx("init=/sbin/init"), 0, "cl_init_real");
+    assert_eq(_clfx("init=/usr/lib/systemd/systemd"), 0, "cl_init_systemd");
+    assert_eq(_clfx("init=/bin/shell-less"), 0, "cl_init_prefix_of_shell");
+    assert_eq(_clfx("root=UUID=abc rw quiet splash"), 0, "cl_ordinary");
+    assert_eq(_clfx("audit=1 selinux=1"), 0, "cl_on_values");
+    assert_eq(_clfx("audit"), 0, "cl_off_key_bare");
+    assert_eq(_clfx("console=ttyS0,115200n8 root=/dev/nvme0n1p2"), 0, "cl_console");
+    assert_eq(_clfx("foo=bar-baz x-y=z"), 0, "cl_dashes_elsewhere");
+    # Quotes hold a parameter together, as next_arg holds them.
+    assert_eq(_clfx("dm-mod.create=\"vroot,,,ro,0 1 verity 1 /dev/sda1\""), 0, "cl_quoted_dm_table");
+    assert_eq(_clfx("systemd.setenv=FOO=\"a 1 b\""), 0, "cl_quoted_setenv");
+    # An initramfs may split what the kernel holds together, so a real parameter inside
+    # quotes is still refused. Only the words as common as "1" are exempt there.
+    assert_eq(_clfx("foo=\"x rd.break y\""), 1, "cl_quoted_word_refused");
+    assert_eq(_clfx("foo=\"bar init=/bin/sh\""), 1, "cl_quoted_init_refused");
+    assert_eq(_clfx("foo=\"a b\" init=/bin/sh"), 1, "cl_after_quoted");
+    assert_eq(_clfx("foo=\"open init=/bin/sh"), 1, "cl_unterminated_quote");
+    assert_eq(_clfx("foo=\"a b\" 1"), 1, "cl_bare_after_quoted");
+    assert_eq(_clfx("\"1\""), 1, "cl_balanced_quotes_stand_alone");
+    assert_eq(_clfx("foo=\"1 s\" x"), 0, "cl_quoted_start_and_end");
+    assert_eq(_clfx("rdinitfoo=1"), 0, "cl_rdinit_prefix");
+    assert_eq(_clfx("init_on_alloc=1"), 0, "cl_init_on_alloc_on");
+    assert_eq(_clfx(""), 0, "cl_empty");
+
+    # F-56: loader.conf.
+    var lc = bootloader_parse_loader_conf("timeout menu-force\ndefault arch.conf\r\n");
+    assert_eq(load64(lc), 5, "lcf_word_keeps_default");
+    assert(streq(load64(lc + 8), "arch") == 1, "lcf_trailing_cr");
+    lc = bootloader_parse_loader_conf("timeoutx 9\ndefaultfoo bar\n");
+    assert_eq(load64(lc), 5, "lcf_key_is_a_word");
+    lc = bootloader_parse_loader_conf("timeout9\n");
+    assert_eq(load64(lc), 5, "lcf_key_glued_to_value");
+    assert_eq(load64(lc + 8), 0, "lcf_default_is_a_word");
+    lc = bootloader_parse_loader_conf("# timeout 3\n  timeout   7  \n");
+    assert_eq(load64(lc), 7, "lcf_timeout");
+    lc = bootloader_parse_loader_conf("timeout 3\rdefault evil.conf\n");
+    assert_eq(load64(lc), 3, "lcf_cr_ends_line");
+    assert(streq(load64(lc + 8), "evil") == 1, "lcf_cr_second_key");
+    lc = bootloader_parse_loader_conf("timeout -1\n");
+    assert_eq(load64(lc), 5, "lcf_negative");
+    lc = bootloader_parse_loader_conf("timeout 99999999999999999999\n");
+    assert_eq(load64(lc), 5, "lcf_overlong");
+    lc = bootloader_parse_loader_conf(0);
+    assert_eq(load64(lc), 5, "lcf_null");
+
+    # The bootctl path refuses what it cannot return, too.
+    var two = "id: a.conf\n\nid: b.conf\n\n";
+    var arr = alloc(8 * 4);
+    var bc1_t, bc1_v = bootloader_parse_bootctl_list(two, arr, 2);
+    assert_eq(bc1_v, 2, "bct_fits");
+    var bc2_t, bc2_v = bootloader_parse_bootctl_list(two, arr, 1);
+    assert(is_err_result(bc2_t) == 1, "bct_too_many");
+    var bc3_t, bc3_v = bootloader_parse_bootctl_list("id: a.conf\n", arr, 1);
+    assert_eq(bc3_v, 1, "bct_last_fits");
+    var bc4_t, bc4_v = bootloader_parse_bootctl_list(two, 0, 0);
+    assert(is_ok(bc4_t) == 1, "bct_max0_ok");
+
+    # A boot tree of its own. bootctl is a stub that fails, so the fallback runs.
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-bt-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "bt_fx_mkdir");
+    _bootloader_root = root;
+    var fail = _blfx_path(root, "bootctl");
+    var ffd = file_create_exclusive(fail, 0x1ED);  # mode 0755
+    sys_write(ffd, "#!/bin/sh\nexit 1\n", 17);
+    sys_close(ffd);
+    _bootloader_bootctl = fail;
+
+    # F-50: every root an ESP is mounted on.
+    var d0_t, d0_v = bootloader_detect();
+    assert_eq(d0_v, BOOT_UNKNOWN, "bt_detect_none");
+    var mk = vec_new();
+    vec_push(mk, "/boot");
+    vec_push(mk, "/boot/EFI");
+    vec_push(mk, "/boot/EFI/systemd");
+    vec_push(mk, "/boot/loader");
+    vec_push(mk, "/boot/loader/entries");
+    vec_push(mk, "/boot/grub2");
+    vec_push(mk, "/efi");
+    vec_push(mk, "/efi/loader");
+    vec_push(mk, "/efi/loader/entries");
+    var mi = 0;
+    while (mi < vec_len(mk)) {
+        xmkdir(_bootloader_path(vec_get(mk, mi)), 0x1C0);
+        mi = mi + 1;
+    }
+    var d1_t, d1_v = bootloader_detect();
+    assert_eq(d1_v, BOOT_SYSTEMD_BOOT, "bt_detect_boot_esp");
+    xrmdir(_bootloader_path("/boot/EFI/systemd"));
+    var d2_t, d2_v = bootloader_detect();
+    assert_eq(d2_v, BOOT_UNKNOWN, "bt_detect_gone");
+    var gcfg = _bootloader_path("/boot/grub2/grub.cfg");
+    file_write_all(gcfg, "x", 1);
+    var d3_t, d3_v = bootloader_detect();
+    assert_eq(d3_v, BOOT_GRUB2, "bt_detect_grub2");
+    xunlink(gcfg);
+
+    # F-28: an empty /boot does not hide /efi, and an id in both directories is listed
+    # from both, since hiding one could hide what boots.
+    var a = _bootloader_path("/efi/loader/entries/a.conf");
+    file_write_all(a, "title From efi\n", 15);
+    var l1_t, l1_v = bootloader_list_boot_entries(arr, 4);
+    assert(is_ok(l1_t) == 1, "bt_list_ok");
+    assert_eq(l1_v, 1, "bt_empty_first_dir");
+    var b = _bootloader_path("/boot/loader/entries/b.conf");
+    file_write_all(b, "title From boot\n", 16);
+    var dup = _bootloader_path("/boot/loader/entries/a.conf");
+    file_write_all(dup, "title First wins\n", 17);
+    var l2_t, l2_v = bootloader_list_boot_entries(arr, 4);
+    assert_eq(l2_v, 3, "bt_merged");
+    assert(streq(bootloader_entry_title(load64(arr)), "First wins") == 1, "bt_merged_boot_a");
+    assert(streq(bootloader_entry_title(load64(arr + 8)), "From boot") == 1, "bt_merged_boot_b");
+    assert(streq(bootloader_entry_title(load64(arr + 16)), "From efi") == 1, "bt_merged_efi_a");
+    var l3_t, l3_v = bootloader_list_boot_entries(arr, 1);
+    assert(is_err_result(l3_t) == 1, "bt_too_many_across_dirs");
+    var l4_t, l4_v = bootloader_list_boot_entries(0, 4);
+    assert(is_err_result(l4_t) == 1, "bt_null_arr");
+    # Nothing readable at all.
+    _bootloader_root = "/nonexistent-agnodrm-root";
+    var l5_t, l5_v = bootloader_list_boot_entries(arr, 4);
+    assert(is_err_result(l5_t) == 1, "bt_no_source");
+    assert_eq(drm_syserr_kind(l5_v), DRM_ERR_NOT_SUPPORTED, "bt_no_source_kind");
+    _bootloader_root = root;
+
+    # A dangling link is nothing. A link to what cannot be reached may be an entry, and
+    # must not be left out. Root reaches through a mode of 000.
+    var lnk = _bootloader_path("/boot/loader/entries/z.conf");
+    assert_eq(sys_symlink("/no/such/entry", lnk), 0, "bt_fx_dangling");
+    var dg_t, dg_v = bootloader_list_boot_entries(arr, 4);
+    assert(is_ok(dg_t) == 1, "bt_dangling_is_absent");
+    xunlink(lnk);
+    if (sys_geteuid() != 0) {
+        var hdir = _bootloader_path("/boot/hidden");
+        var hid = _bootloader_path("/boot/hidden/target.conf");
+        xmkdir(hdir, 0x1C0);
+        file_write_all(hid, "options init=/bin/sh\n", 21);
+        assert_eq(sys_symlink(hid, lnk), 0, "bt_fx_hidden_link");
+        sys_chmod(hdir, 0);
+        var hl_t, hl_v = bootloader_list_boot_entries(arr, 4);
+        assert(is_err_result(hl_t) == 1, "bt_unreachable_link_refused");
+        sys_chmod(hdir, 0x1C0);
+        xunlink(lnk);
+        xunlink(hid);
+        xrmdir(hdir);
+    }
+
+    # A link that loops, or runs through a file, is nothing to read either.
+    var lp = _bootloader_path("/boot/loader/entries/loop.conf");
+    assert_eq(sys_symlink("loop.conf", lp), 0, "bt_fx_loop");
+    var lp2 = _bootloader_path("/boot/loader/entries/notdir.conf");
+    assert_eq(sys_symlink("b.conf/x", lp2), 0, "bt_fx_notdir");
+    var lo_t, lo_v = bootloader_list_boot_entries(arr, 4);
+    assert(is_ok(lo_t) == 1, "bt_link_loop_is_absent");
+    assert_eq(lo_v, 3, "bt_link_loop_count");
+    xunlink(lp);
+    xunlink(lp2);
+
+    # Two paths to one directory are read once.
+    xunlink(_bootloader_path("/efi/loader/entries/a.conf"));
+    xrmdir(_bootloader_path("/efi/loader/entries"));
+    var ln_to = _bootloader_path("/boot/loader/entries");
+    assert_eq(sys_symlink(ln_to, _bootloader_path("/efi/loader/entries")), 0, "bt_fx_link");
+    var ln_t, ln_v = bootloader_list_boot_entries(arr, 4);
+    assert_eq(ln_v, 2, "bt_same_dir_once");
+    xunlink(_bootloader_path("/efi/loader/entries"));
+    xmkdir(_bootloader_path("/efi/loader/entries"), 0x1C0);
+    # An unreadable entry or directory fails the list. Root reads through a mode of 000.
+    if (sys_geteuid() != 0) {
+        sys_chmod(dup, 0);
+        var ur_t, ur_v = bootloader_list_boot_entries(arr, 4);
+        assert(is_err_result(ur_t) == 1, "bt_unreadable_entry");
+        sys_chmod(dup, 0x180);
+        sys_chmod(_bootloader_path("/efi/loader/entries"), 0);
+        var ud_t, ud_v = bootloader_list_boot_entries(arr, 4);
+        assert(is_err_result(ud_t) == 1, "bt_unreadable_dir");
+        sys_chmod(_bootloader_path("/efi/loader/entries"), 0x1C0);
+    }
+
+    _bootloader_bootctl = 0;
+    _bootloader_root = 0;
+    xunlink(a);
+    xunlink(b);
+    xunlink(dup);
+    xunlink(fail);
+    var rmp = vec_new();
+    vec_push(rmp, "/efi/loader/entries");
+    vec_push(rmp, "/efi/loader");
+    vec_push(rmp, "/efi");
+    vec_push(rmp, "/boot/grub2");
+    vec_push(rmp, "/boot/loader/entries");
+    vec_push(rmp, "/boot/loader");
+    vec_push(rmp, "/boot/EFI");
+    vec_push(rmp, "/boot");
+    var ri = 0;
+    while (ri < vec_len(rmp)) {
+        assert_eq(xrmdir(netns_concat2(root, vec_get(rmp, ri))), 0, "bt_fx_rmdir");
+        ri = ri + 1;
+    }
+    assert_eq(xrmdir(root), 0, "bt_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# update: the slot lifecycle end to end (audit F-15 to F-17, F-25 to F-33, F-52 to F-55)
+# ================================================================
+
+fn _lcfx_load(sf) {
+    var t, v = update_load_state(sf);
+    if (is_err_result(t) == 1) { return 0; }
+    return v;
+}
+
+fn _lcfx_is_err(t, v) { return is_err_result(t); }
+
+# 1 if a state file holding `text` loads, 0 if it is refused.
+fn _lcfx_parses(sf, text) {
+    xunlink(sf);
+    file_write_all(sf, text, strlen(text));
+    return _lcfx_load(sf) != 0;
+}
+
+fn _lcfx_mode(path) { return _agnodrm_file_mode(path); }
+
+# Save `s` to `sf` and reload it.
+fn _lcfx_put(s, sf) {
+    var t, v = update_save_state(s, sf);
+    assert(is_ok(t) == 1, "lc_put_saved");
+    return 0;
+}
+
+# A state: running `slot`, an image pending, a good slot behind.
+fn _lcfx_trial(slot, sf) {
+    var s = update_state_new(slot, "2026.1.1");
+    update_state_set_pending(s, "2026.2.1");
+    update_state_set_rollback(s, 1);
+    return _lcfx_put(s, sf);
+}
+
+fn test_update_lifecycle() {
+    println("-- update slot lifecycle (audit F-15 to F-17, F-25 to F-33) --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-lc-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    xmkdir(root, 0x1C0);
+    var dirs = vec_new();
+    vec_push(dirs, "/proc");
+    vec_push(dirs, "/var");
+    vec_push(dirs, "/var/lib");
+    vec_push(dirs, "/var/lib/agnos");
+    vec_push(dirs, "/var/lib/agnos/updates");
+    vec_push(dirs, "/usr");
+    vec_push(dirs, "/usr/bin");
+    var di = 0;
+    while (di < vec_len(dirs)) {
+        xmkdir(netns_concat2(root, vec_get(dirs, di)), 0x1C0);
+        di = di + 1;
+    }
+    _update_root = root;
+    var sf = _update_path("/var/lib/agnos/update-state.json");
+    var marker = _update_path("/var/lib/agnos/next-slot");
+    var image = _update_path("/var/lib/agnos/updates/image.img");
+    var slot_a = _blfx_path(root, "rootfs_a");
+    var slot_b = _blfx_path(root, "rootfs_b");
+    var ar_log = _update_path("/usr/bin/argonaut.log");
+    _updfx_tool(root, "/usr/bin/argonaut", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 0\n");
+    _updfx_tool(root, "/usr/bin/sha256sum", _UPDFX_SHATOOL);
+    file_write_all(image, "NEWIMAGE", 8);
+    file_write_all(slot_a, "OLD-A", 5);
+    file_write_all(slot_b, "OLD-B", 5);
+    var cfg = update_config_new();
+    update_config_set_state_file(cfg, sf);
+    update_config_set_slot_a(cfg, slot_a);
+    update_config_set_slot_b(cfg, slot_b);
+    var man = _updfx_manifest(image);
+
+    # An applied image is pending, and nothing can roll back to anything yet.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+    var a1_t, a1_v = update_apply(cfg, man);
+    assert(is_ok(a1_t) == 1, "lc_apply_ok");
+    assert(_tmpx_holds(slot_b, "NEWIMAGE") == 1, "lc_apply_wrote_b");
+    var st = _lcfx_load(sf);
+    assert_eq(update_state_slot(st), SLOT_A, "lc_apply_slot");
+    assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_apply_pending");
+    assert_eq(update_state_rollback_available(st), 0, "lc_apply_no_rollback_yet");
+
+    # F-17: boots of the running slot do not count against an image no switch reached.
+    update_state_set_boot_count(st, 99);
+    assert_eq(update_needs_rollback(st, 3), 0, "lc_needs_not_on_trial");
+    var at0_t, at0_v = update_mark_boot_attempt(cfg);
+    assert(is_ok(at0_t) == 1, "lc_attempt_idle_ok");
+    assert_eq(at0_v, 0, "lc_attempt_idle_no_count");
+
+    # F-15: rolling back before any switch abandons the image and stays on A.
+    file_write_all(ar_log, "", 0);
+    var r0_t, r0_v = update_rollback(cfg);
+    assert(is_ok(r0_t) == 1, "lc_abandon_ok");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "a") == 1, "lc_abandon_stays_on_a");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_slot(st), SLOT_A, "lc_abandon_stays_a");
+    assert_eq(update_state_pending(st), 0, "lc_abandon_pending_gone");
+    assert_eq(_tmpx_holds(ar_log, "stop daimon\n"), 0, "lc_abandon_services_left_alone");
+    var r1_t, r1_v = update_rollback(cfg);
+    assert(is_err_result(r1_t) == 1, "lc_nothing_to_abandon");
+
+    # Apply, switch, boot it: the switch is what leaves a good slot behind.
+    var a2_t, a2_v = update_apply(cfg, man);
+    assert(is_ok(a2_t) == 1, "lc_apply2_ok");
+    var sw_t, sw_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(sw_t) == 1, "lc_switch_ok");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_slot(st), SLOT_B, "lc_switch_slot");
+    assert_eq(update_state_rollback_available(st), 1, "lc_switch_rollback");
+    assert_eq(update_state_boot_count(st), 0, "lc_switch_count_zero");
+
+    # F-17: every boot that goes unconfirmed counts.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    var bt1, bv1 = update_mark_boot_attempt(cfg);
+    assert_eq(bv1, 1, "lc_attempt_1");
+    assert_eq(update_needs_rollback(_lcfx_load(sf), 2), 0, "lc_needs_under_max");
+    var bt2, bv2 = update_mark_boot_attempt(cfg);
+    assert_eq(bv2, 2, "lc_attempt_2");
+    assert_eq(update_needs_rollback(_lcfx_load(sf), 2), 1, "lc_needs_at_max");
+
+    # F-26: confirming promotes the version, so it is not offered again.
+    var ok_t, ok_v = update_mark_boot_successful(cfg);
+    assert(is_ok(ok_t) == 1, "lc_confirm_ok");
+    st = _lcfx_load(sf);
+    assert(streq(update_state_version(st), "2026.2.1") == 1, "lc_confirm_promotes");
+    assert_eq(update_state_pending(st), 0, "lc_confirm_clears_pending");
+    assert_eq(update_needs_rollback(st, 2), 0, "lc_needs_after_confirm");
+    var mf = _blfx_path(root, "manifest.json");
+    _blfx_write(root, "manifest.json", "{\"version\":\"2026.2.1\"}", vec_new());
+    var chk = update_config_new();
+    update_config_set_url(chk, _file_url(mf));
+    var ck_t, ck_v = update_check(chk, update_state_version(st));
+    assert(is_ok(ck_t) == 1, "lc_check_ok");
+    assert_eq(ck_v, 0, "lc_check_not_offered_again");
+
+    # F-16: the slot being overwritten holds the rollback image, so a write that dies
+    # must not leave a rollback aimed at it. A is the good slot behind B here.
+    var dead = update_config_new();
+    update_config_set_state_file(dead, sf);
+    # A directory: it exists, so the check before dd passes, and dd cannot write it.
+    var dead_dev = _blfx_path(root, "rootfs_dead");
+    xmkdir(dead_dev, 0x1C0);
+    update_config_set_slot_a(dead, dead_dev);
+    update_config_set_slot_b(dead, slot_b);
+    assert_eq(update_state_rollback_available(_lcfx_load(sf)), 1, "lc_dead_fx_rollback");
+    var dd_t, dd_v = update_apply(dead, man);
+    assert(is_err_result(dd_t) == 1, "lc_dead_write_err");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_rollback_available(st), 0, "lc_dead_write_no_rollback");
+    assert_eq(update_state_pending(st), 0, "lc_dead_write_no_pending");
+    var dr_t, dr_v = update_rollback(cfg);
+    assert(is_err_result(dr_t) == 1, "lc_dead_write_rollback_refused");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "b") == 1, "lc_dead_write_marker_kept");
+    # And nothing may switch to what it left. A missing device never gets as far as dd,
+    # which would have made it a plain file and called that a success.
+    var ds_t, ds_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_err_result(ds_t) == 1, "lc_dead_write_switch_refused");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "b") == 1, "lc_dead_write_switch_left_marker");
+    xrmdir(dead_dev);
+    var nodev = _blfx_path(root, "no-such-device");
+    update_config_set_slot_a(dead, nodev);
+    var md_t, md_v = update_apply(dead, man);
+    assert(is_err_result(md_t) == 1, "lc_missing_device_refused");
+    assert_eq(file_exists(nodev), 0, "lc_missing_device_not_created");
+
+    # A switch made but never booted, then an apply over that slot: the next boot is
+    # held on the running slot before the write begins.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+    file_write_all(marker, "b", 1);
+    var hold_t, hold_v = update_apply(cfg, man);
+    assert(is_ok(hold_t) == 1, "lc_hold_ok");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "a") == 1, "lc_hold_marker");
+    assert_eq(update_state_slot(_lcfx_load(sf)), SLOT_A, "lc_hold_state");
+
+    # F-25: the firmware fell back to A, so the image was never confirmed.
+    _lcfx_trial(SLOT_B, sf);
+    var fb_t, fb_v = update_mark_boot_successful(cfg);
+    assert(is_err_result(fb_t) == 1, "lc_fallback_refused");
+    st = _lcfx_load(sf);
+    assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_fallback_keeps_pending");
+    assert(streq(update_state_version(st), "2026.1.1") == 1, "lc_fallback_not_promoted");
+    # And rollback squares the state with where the host is.
+    file_write_all(ar_log, "", 0);
+    var fr_t, fr_v = update_rollback(cfg);
+    assert(is_ok(fr_t) == 1, "lc_fallback_rollback_ok");
+    assert_eq(update_state_slot(_lcfx_load(sf)), SLOT_A, "lc_fallback_rollback_slot");
+    assert(_tmpx_holds(ar_log, "stop daimon\n") == 1, "lc_rollback_stops_services");
+    # No agnos.slot= proves nothing, so a trial stays a trial.
+    _updfx_write(root, "/proc/cmdline", "ro\n");
+    _lcfx_trial(SLOT_B, sf);
+    var nc_t, nc_v = update_mark_boot_successful(cfg);
+    assert(is_err_result(nc_t) == 1, "lc_confirm_no_token_refused");
+    assert(streq(update_state_pending(_lcfx_load(sf)), "2026.2.1") == 1, "lc_confirm_no_token_kept");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=x\n");
+    var bc_t, bc_v = update_mark_boot_successful(cfg);
+    assert(is_err_result(bc_t) == 1, "lc_confirm_bad_token");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+
+    # A pending image nothing switched to is not what booted, so confirming leaves it.
+    var pa = update_state_new(SLOT_A, "2026.1.1");
+    update_state_set_pending(pa, "2026.2.1");
+    _lcfx_put(pa, sf);
+    var cp_t, cp_v = update_mark_boot_successful(cfg);
+    assert(is_ok(cp_t) == 1, "lc_confirm_untried_ok");
+    st = _lcfx_load(sf);
+    assert(streq(update_state_version(st), "2026.1.1") == 1, "lc_confirm_untried_not_promoted");
+    assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_confirm_untried_pending_kept");
+
+    # With no trial, a boot of either slot is fine and writes nothing.
+    var cl = update_state_new(SLOT_B, "2026.1.1");
+    _lcfx_put(cl, sf);
+    var cn_t, cn_v = update_mark_boot_successful(cfg);
+    assert(is_ok(cn_t) == 1, "lc_confirm_no_trial_ok");
+
+    # No state file at all: a boot before any update.
+    xunlink(sf);
+    var na_t, na_v = update_mark_boot_attempt(cfg);
+    assert(is_ok(na_t) == 1, "lc_attempt_no_state_ok");
+    assert_eq(na_v, 0, "lc_attempt_no_state_zero");
+    var nm_t, nm_v = update_mark_boot_successful(cfg);
+    assert(is_ok(nm_t) == 1, "lc_confirm_no_state_ok");
+    assert_eq(file_exists(sf), 0, "lc_no_state_stays_none");
+
+    # Going back to the good slot during a trial is a rollback, whichever call asks.
+    _lcfx_trial(SLOT_B, sf);
+    var ba = _lcfx_load(sf);
+    update_state_set_boot_count(ba, 1);
+    _lcfx_put(ba, sf);
+    file_write_all(marker, "b", 1);
+    var bk_t, bk_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_ok(bk_t) == 1, "lc_switch_back_ok");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_slot(st), SLOT_A, "lc_switch_back_slot");
+    assert_eq(update_state_pending(st), 0, "lc_switch_back_ends_trial");
+    assert_eq(update_state_rollback_available(st), 0, "lc_switch_back_no_rollback");
+    assert_eq(update_needs_rollback(st, 0), 0, "lc_switch_back_not_armed");
+
+    # An image on trial on the running slot: the target is the one good slot left.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    _lcfx_trial(SLOT_B, sf);
+    file_write_all(slot_a, "GOOD-A", 6);
+    var tr_t, tr_v = update_apply(cfg, man);
+    assert(is_err_result(tr_t) == 1, "lc_apply_on_trial_refused");
+    assert(_tmpx_holds(slot_a, "GOOD-A") == 1, "lc_apply_on_trial_good_slot_intact");
+    assert(streq(update_state_pending(_lcfx_load(sf)), "2026.2.1") == 1, "lc_apply_on_trial_kept");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+
+    # A trial the firmware fell back from: the host runs A, so the failed image on B can
+    # be overwritten. Only a trial on the running slot refuses.
+    _lcfx_trial(SLOT_B, sf);
+    var ft_t, ft_v = update_apply(cfg, man);
+    assert(is_ok(ft_t) == 1, "lc_apply_over_failed_trial_ok");
+    assert_eq(update_state_slot(_lcfx_load(sf)), SLOT_A, "lc_apply_over_failed_trial_slot");
+
+    # A confirm records what it replaced, and a rollback puts it back.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    _lcfx_trial(SLOT_B, sf);
+    file_write_all(marker, "b", 1);
+    var pc_t, pc_v = update_mark_boot_successful(cfg);
+    assert(is_ok(pc_t) == 1, "lc_prev_confirm");
+    st = _lcfx_load(sf);
+    assert(streq(update_state_version(st), "2026.2.1") == 1, "lc_prev_version");
+    assert(streq(update_state_previous(st), "2026.1.1") == 1, "lc_prev_recorded");
+    var rc_t, rc_v = update_rollback(cfg);
+    assert(is_ok(rc_t) == 1, "lc_rollback_confirmed_ok");
+    st = _lcfx_load(sf);
+    assert(streq(update_state_version(st), "2026.1.1") == 1, "lc_rollback_confirmed_version");
+    assert_eq(update_state_previous(st), 0, "lc_rollback_confirmed_previous_gone");
+    # A host updated from nothing has an empty version on record, and that is still a
+    # record: a rollback must not leave the new version on the old slot.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    var em = update_state_new(SLOT_B, "");
+    update_state_set_pending(em, "2026.2.1");
+    update_state_set_rollback(em, 1);
+    _lcfx_put(em, sf);
+    file_write_all(marker, "b", 1);
+    update_mark_boot_successful(cfg);
+    assert_eq(load8(update_state_previous(_lcfx_load(sf))), 0, "lc_prev_empty_recorded");
+    var er_t, er_v = update_rollback(cfg);
+    assert(is_ok(er_t) == 1, "lc_prev_empty_rollback_ok");
+    assert_eq(load8(update_state_version(_lcfx_load(sf))), 0, "lc_prev_empty_restored");
+    # A plain switch between two confirmed images carries the versions across.
+    _lcfx_trial(SLOT_B, sf);
+    file_write_all(marker, "b", 1);
+    update_mark_boot_successful(cfg);
+    var sv_t, sv_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_ok(sv_t) == 1, "lc_prev_switch_ok");
+    st = _lcfx_load(sf);
+    assert(streq(update_state_version(st), "2026.1.1") == 1, "lc_prev_switch_version");
+    assert(streq(update_state_previous(st), "2026.2.1") == 1, "lc_prev_switch_previous");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+
+    # A rollback cut short after its marker booted the image anyway. Confirmed, the host
+    # stays, and the marker must not send the next boot away.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    _lcfx_trial(SLOT_B, sf);
+    file_write_all(marker, "a", 1);
+    var cu_t, cu_v = update_mark_boot_successful(cfg);
+    assert(is_ok(cu_t) == 1, "lc_cut_confirm_ok");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "b") == 1, "lc_cut_confirm_marker_back");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+
+    # Repeating a switch cannot disarm a trial.
+    _lcfx_trial(SLOT_B, sf);
+    var tb = _lcfx_load(sf);
+    update_state_set_boot_count(tb, 3);
+    _lcfx_put(tb, sf);
+    var rp_t, rp_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(rp_t) == 1, "lc_repeat_switch_ok");
+    assert_eq(update_state_boot_count(_lcfx_load(sf)), 3, "lc_repeat_switch_keeps_count");
+
+    # Switched and never booted, then back: the verified image can still be switched to.
+    _lcfx_trial(SLOT_B, sf);
+    var ub_t, ub_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_ok(ub_t) == 1, "lc_unbooted_back_ok");
+    st = _lcfx_load(sf);
+    assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_unbooted_back_pending_kept");
+    assert_eq(update_state_rollback_available(st), 0, "lc_unbooted_back_no_rollback");
+    assert_eq(update_needs_rollback(st, 0), 0, "lc_unbooted_back_not_armed");
+    var ua_t, ua_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(ua_t) == 1, "lc_unbooted_again_ok");
+    assert_eq(update_state_rollback_available(_lcfx_load(sf)), 1, "lc_unbooted_again_trial");
+
+    # A slot the cmdline says is running needs no record to prove it boots, and leaves
+    # no slot behind.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    var rn = update_state_new(SLOT_A, "2026.1.1");
+    _lcfx_put(rn, sf);
+    var rs_t, rs_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(rs_t) == 1, "lc_switch_to_running_ok");
+    assert_eq(update_state_rollback_available(_lcfx_load(sf)), 0, "lc_switch_to_running_no_rollback");
+    # A pending image booted by hand is still on trial once switched to, so the good slot
+    # behind it cannot be overwritten.
+    var hb = update_state_new(SLOT_A, "2026.1.1");
+    update_state_set_pending(hb, "2026.2.1");
+    _lcfx_put(hb, sf);
+    var hb_t, hb_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(hb_t) == 1, "lc_hand_booted_ok");
+    assert_eq(update_state_rollback_available(_lcfx_load(sf)), 1, "lc_hand_booted_on_trial");
+    file_write_all(slot_a, "GOOD-A", 6);
+    var ha_t, ha_v = update_apply(cfg, man);
+    assert(is_err_result(ha_t) == 1, "lc_hand_booted_apply_refused");
+    assert(_tmpx_holds(slot_a, "GOOD-A") == 1, "lc_hand_booted_good_slot_intact");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+
+    # A manifest from update_check carries no release date, and still applies.
+    xunlink(sf);
+    xunlink(marker);
+    var chk2 = update_config_new();
+    update_config_set_url(chk2, _file_url(mf));
+    var ch_t, ch_v = update_check(chk2, "2026.1.1");
+    assert(ch_v != 0, "lc_check_offers");
+    vec_push(update_manifest_files(ch_v), update_file_new(image, _UPDFX_SHA, 8));
+    var ca2_t, ca2_v = update_apply(cfg, ch_v);
+    assert(is_ok(ca2_t) == 1, "lc_check_then_apply");
+
+    # The firmware outranks the marker, and an EFI host must answer for it.
+    var efi_dir = _update_path("/sys");
+    xmkdir(efi_dir, 0x1C0);
+    xmkdir(_update_path("/sys/firmware"), 0x1C0);
+    xmkdir(_update_path("/sys/firmware/efi"), 0x1C0);
+    var fw_log = _update_path("/usr/bin/efibootmgr.log");
+    var fw_if_top = "#!/bin/sh\nif [ $# -eq 0 ]; then printf '";
+    var fw_head = "#!/bin/sh\nif [ $# -eq 0 ]; then\n  printf 'BootNext: 0003\\nBoot0003* AGNOS-B\\tHD(1)\\n";
+    var fw_ok = "Boot0004* AGNOS-A\\tHD(2)\\n'\n  exit 0\nfi\necho \"$*\" >> \"$0.log\"\nexit 0\n";
+    # BootNext aimed at B while the marker agrees with the running slot: an apply to B
+    # must move it first, and the marker alone says nothing.
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_head, fw_ok));
+    xunlink(fw_log);
+    xunlink(sf);
+    file_write_all(marker, "a", 1);
+    var h1_t, h1_v = update_apply(cfg, man);
+    assert(is_ok(h1_t) == 1, "lc_hold_stale_bootnext_ok");
+    assert(_tmpx_holds(fw_log, "--bootnext 0004\n") == 1, "lc_hold_moves_bootnext");
+    # BootNext on someone else's entry is theirs, and it is not the slot being written.
+    var fw_other = netns_concat2(fw_if_top, "BootNext: 0007\\nBoot0003* AGNOS-B\\tHD(1)\\n");
+    fw_other = netns_concat2(fw_other, "Boot0004* AGNOS-A\\tHD(2)\\n'; exit 0; fi\n");
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_other, "echo \"$*\" >> \"$0.log\"\nexit 0\n"));
+    xunlink(fw_log);
+    xunlink(sf);
+    var hf_t, hf_v = update_apply(cfg, man);
+    assert(is_ok(hf_t) == 1, "lc_hold_foreign_ok");
+    assert_eq(file_exists(fw_log), 0, "lc_hold_foreign_left_alone");
+    # Nothing to fear: BootNext already at the running slot, so no NVRAM write.
+    var fw_set = netns_concat2(fw_if_top, "BootNext: 0004\\nBoot0004* AGNOS-A\\tHD(2)\\n'; exit 0; fi\n");
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_set, "echo \"$*\" >> \"$0.log\"\nexit 0\n"));
+    xunlink(fw_log);
+    xunlink(sf);
+    var h2_t, h2_v = update_apply(cfg, man);
+    assert(is_ok(h2_t) == 1, "lc_hold_settled_ok");
+    assert_eq(file_exists(fw_log), 0, "lc_hold_settled_no_write");
+    # Cannot clear what is aimed the wrong way: no write, and the record stays.
+    var fw_stuck = netns_concat2(fw_if_top, "BootNext: 0003\\nBoot0004* AGNOS-A\\tHD(2)\\n");
+    fw_stuck = netns_concat2(fw_stuck, "Boot0003* AGNOS-B\\tHD(1)\\n");
+    fw_stuck = netns_concat2(fw_stuck, "'; exit 0; fi\n");
+    _updfx_tool(root, "/usr/bin/efibootmgr", netns_concat2(fw_stuck, "exit 1\n"));
+    _lcfx_trial(SLOT_B, sf);
+    file_write_all(slot_b, "OLD-B", 5);
+    var h3_t, h3_v = update_apply(cfg, man);
+    assert(is_err_result(h3_t) == 1, "lc_hold_unclearable_refused");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_hold_unclearable_slot_intact");
+    assert(streq(update_state_pending(_lcfx_load(sf)), "2026.2.1") == 1, "lc_hold_unclearable_record_kept");
+    # efibootmgr failing on an EFI host: where the firmware goes next is unknown.
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 2\n");
+    var h4_t, h4_v = update_apply(cfg, man);
+    assert(is_err_result(h4_t) == 1, "lc_hold_list_failed_refused");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_hold_list_failed_slot_intact");
+    assert(streq(update_state_pending(_lcfx_load(sf)), "2026.2.1") == 1, "lc_hold_list_failed_record_kept");
+    # The same failure on a rollback: the marker moved, the record stays, and a retry
+    # once the firmware answers finishes the job.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    file_write_all(ar_log, "", 0);
+    var rb1_t, rb1_v = update_rollback(cfg);
+    assert(is_err_result(rb1_t) == 1, "lc_rollback_firmware_err");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_rollback_available(st), 1, "lc_rollback_firmware_record_kept");
+    assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_rollback_firmware_pending_kept");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "a") == 1, "lc_rollback_marker_first");
+    assert_eq(_tmpx_holds(ar_log, "stop daimon\n"), 0, "lc_rollback_firmware_services_left");
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 0\n");
+    var rb2_t, rb2_v = update_rollback(cfg);
+    assert(is_ok(rb2_t) == 1, "lc_rollback_retry_ok");
+    assert_eq(update_state_slot(_lcfx_load(sf)), SLOT_A, "lc_rollback_retry_slot");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+    # Running the target is not enough. A switch made this boot, before any reboot, runs it
+    # too, with BootNext armed, so with no boot counted the record must stay.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+    _lcfx_trial(SLOT_B, sf);
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 2\n");
+    var ru_t, ru_v = update_rollback(cfg);
+    assert(is_err_result(ru_t) == 1, "lc_rollback_unbooted_firmware_err");
+    assert_eq(update_state_rollback_available(_lcfx_load(sf)), 1, "lc_rollback_unbooted_record_kept");
+    # The same via switching back.
+    var us_t, us_v = update_switch_slot(cfg, SLOT_A);
+    assert(is_err_result(us_t) == 1, "lc_switch_back_unbooted_firmware_err");
+    # A counted boot proves no reboot either: this one ran in the same boot, and a BootNext
+    # may still be armed. The rollback waits for the firmware, and loses nothing by waiting.
+    var uc1_t, uc1_v = update_mark_boot_attempt(cfg);
+    assert_eq(uc1_v, 1, "lc_rollback_boot_counted");
+    var rh_t, rh_v = update_rollback(cfg);
+    assert(is_err_result(rh_t) == 1, "lc_rollback_counted_firmware_err");
+    assert_eq(update_state_rollback_available(_lcfx_load(sf)), 1, "lc_rollback_counted_record_kept");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "a") == 1, "lc_rollback_counted_marker_moved");
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 0\n");
+    var rw_t, rw_v = update_rollback(cfg);
+    assert(is_ok(rw_t) == 1, "lc_rollback_waited_ok");
+    assert_eq(update_state_slot(_lcfx_load(sf)), SLOT_A, "lc_rollback_waited_slot");
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 2\n");
+    # A firmware that cannot answer stops an apply, even with everything on disk agreeing:
+    # a best-effort switch can leave a BootNext nothing records.
+    file_write_all(marker, "a", 1);
+    var sa = update_state_new(SLOT_A, "2026.1.1");
+    _lcfx_put(sa, sf);
+    file_write_all(slot_b, "OLD-B", 5);
+    var hs_t, hs_v = update_apply(cfg, man);
+    assert(is_err_result(hs_t) == 1, "lc_hold_settled_list_failed_refused");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_hold_settled_slot_intact");
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 0\n");
+    # No EFI at all, no BootNext to fear.
+    xrmdir(_update_path("/sys/firmware/efi"));
+    xrmdir(_update_path("/sys/firmware"));
+    xrmdir(efi_dir);
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 2\n");
+    xunlink(sf);
+    var h5_t, h5_v = update_apply(cfg, man);
+    assert(is_ok(h5_t) == 1, "lc_hold_no_efi_ok");
+    # A marker that cannot be aimed stops the write.
+    xunlink(marker);
+    xunlink(sf);
+    xmkdir(marker, 0x1C0);
+    file_write_all(slot_b, "OLD-B", 5);
+    var h6_t, h6_v = update_apply(cfg, man);
+    assert(is_err_result(h6_t) == 1, "lc_hold_unwritable_marker_refused");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_hold_unwritable_marker_slot_intact");
+    xrmdir(marker);
+    _updfx_tool(root, "/usr/bin/efibootmgr", "#!/bin/sh\nexit 0\n");
+
+    # F-54: a rollback that cannot stand leaves services running and the state as it was.
+    _lcfx_trial(SLOT_B, sf);
+    xunlink(marker);
+    xmkdir(marker, 0x1C0);
+    file_write_all(ar_log, "", 0);
+    var mk_t, mk_v = update_rollback(cfg);
+    assert(is_err_result(mk_t) == 1, "lc_marker_fail_err");
+    assert_eq(_tmpx_holds(ar_log, "stop daimon\n"), 0, "lc_marker_fail_services_left_alone");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_slot(st), SLOT_B, "lc_marker_fail_slot_restored");
+    assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_marker_fail_pending_restored");
+    assert_eq(update_state_rollback_available(st), 1, "lc_marker_fail_rollback_restored");
+    # And forward: the marker is what commits a switch, so a failed one puts the state back.
+    var fw = update_state_new(SLOT_A, "2026.1.1");
+    update_state_set_pending(fw, "2026.2.1");
+    update_state_set_boot_count(fw, 4);
+    _lcfx_put(fw, sf);
+    var mf_t, mf_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_err_result(mf_t) == 1, "lc_forward_marker_fail_err");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_slot(st), SLOT_A, "lc_forward_marker_fail_slot");
+    assert_eq(update_state_rollback_available(st), 0, "lc_forward_marker_fail_rollback");
+    assert_eq(update_state_boot_count(st), 4, "lc_forward_marker_fail_boots");
+    assert(streq(update_state_pending(st), "2026.2.1") == 1, "lc_forward_marker_fail_pending");
+    xrmdir(marker);
+
+    # No marker at all: the next boot is whatever the bootloader defaults to, which is not
+    # known to be the running slot, so the hold writes one before the slot is touched.
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=b\n");
+    xunlink(marker);
+    xunlink(sf);
+    file_write_all(slot_a, "OLD-A", 5);
+    var nm2_t, nm2_v = update_apply(cfg, man);
+    assert(is_ok(nm2_t) == 1, "lc_hold_no_marker_ok");
+    assert(_updfx_holds(root, "/var/lib/agnos/next-slot", "b") == 1, "lc_hold_no_marker_written");
+    _updfx_write(root, "/proc/cmdline", "agnos.slot=a\n");
+    xunlink(marker);
+    xunlink(sf);
+
+    # F-29: what update_apply refuses leaves the slot alone.
+    file_write_all(slot_b, "OLD-B", 5);
+    var bad = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
+    vec_push(update_manifest_files(bad), update_file_new(image, "00", 8));
+    var bm_t, bm_v = update_apply(cfg, bad);
+    assert(is_err_result(bm_t) == 1, "lc_refuse_structural");
+    var two = _updfx_manifest(image);
+    vec_push(update_manifest_files(two), update_file_new(image, _UPDFX_SHA, 8));
+    var tw_t, tw_v = update_apply(cfg, two);
+    assert(is_err_result(tw_t) == 1, "lc_refuse_two_files");
+    var cmp = _updfx_manifest(image);
+    update_file_set_compressed(vec_get(update_manifest_files(cmp), 0), 1);
+    var cm_t, cm_v = update_apply(cfg, cmp);
+    assert(is_err_result(cm_t) == 1, "lc_refuse_compressed");
+    var dlt = _updfx_manifest(image);
+    update_file_set_delta_from(vec_get(update_manifest_files(dlt), 0), "2026.1.1");
+    var dl_t, dl_v = update_apply(cfg, dlt);
+    assert(is_err_result(dl_t) == 1, "lc_refuse_delta");
+    var bsz = _updfx_manifest(image);
+    update_file_set_size(vec_get(update_manifest_files(bsz), 0), 9);
+    var sz_t, sz_v = update_apply(cfg, bsz);
+    assert(is_err_result(sz_t) == 1, "lc_refuse_size");
+    var wrong = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
+    var wh = "0000000000000000000000000000000000000000000000000000000000000000";
+    vec_push(update_manifest_files(wrong), update_file_new(image, wh, 8));
+    var wr_t, wr_v = update_apply(cfg, wrong);
+    assert(is_err_result(wr_t) == 1, "lc_refuse_digest");
+    var nodir = _updfx_manifest(_update_path("/var/lib/agnos/updates"));
+    update_file_set_path(vec_get(update_manifest_files(nodir), 0), _update_path("/var/lib/agnos/updates/d"));
+    xmkdir(_update_path("/var/lib/agnos/updates/d"), 0x1C0);
+    update_file_set_size(vec_get(update_manifest_files(nodir), 0), 0);
+    var nd_t, nd_v = update_apply(cfg, nodir);
+    assert(is_err_result(nd_t) == 1, "lc_refuse_not_regular");
+    xrmdir(_update_path("/var/lib/agnos/updates/d"));
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_refused_slot_intact");
+    # A link in the staging directory to a device: with verify off only this stops it.
+    var dev_link = _update_path("/var/lib/agnos/updates/devlink");
+    assert_eq(sys_symlink("/dev/null", dev_link), 0, "lc_devlink_fx");
+    var dl2 = _updfx_manifest(dev_link);
+    update_file_set_size(vec_get(update_manifest_files(dl2), 0), 0);
+    update_config_set_verify(cfg, 0);
+    var dv_t, dv_v = update_apply(cfg, dl2);
+    update_config_set_verify(cfg, 1);
+    assert(is_err_result(dv_t) == 1, "lc_refuse_link_to_device");
+    xunlink(dev_link);
+    # A digest off a bad tool is no digest; verify off skips the tool.
+    _updfx_rm(root, "/usr/bin/sha256sum");
+    var nt_t, nt_v = update_apply(cfg, man);
+    assert(is_err_result(nt_t) == 1, "lc_refuse_no_tool");
+    assert(_tmpx_holds(slot_b, "OLD-B") == 1, "lc_no_tool_slot_intact");
+    update_config_set_verify(cfg, 0);
+    var nv_t, nv_v = update_apply(cfg, wrong);
+    assert(is_ok(nv_t) == 1, "lc_verify_off");
+    update_config_set_verify(cfg, 1);
+    _updfx_tool(root, "/usr/bin/sha256sum", _UPDFX_SHATOOL);
+    # Either hex case matches.
+    var up = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
+    var uph = "A1FD16012676B0B9AAB1ACC3EFA9F545365649533F409630ED617D6FD3641B9A";
+    vec_push(update_manifest_files(up), update_file_new(image, uph, 8));
+    var uc_t, uc_v = update_apply(cfg, up);
+    assert(is_ok(uc_t) == 1, "lc_digest_upper_ok");
+
+    # F-30: a state that cannot be read is not a state that does not exist.
+    var keep = "{\"current_slot\":3,\"rollback_available\":true}\n";
+    assert_eq(_lcfx_parses(sf, keep), 0, "lc_corrupt_fx");
+    var cs_t, cs_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_err_result(cs_t) == 1, "lc_corrupt_switch_refused");
+    var ca_t, ca_v = update_apply(cfg, man);
+    assert(is_err_result(ca_t) == 1, "lc_corrupt_apply_refused");
+    assert(_tmpx_holds(sf, keep) == 1, "lc_corrupt_state_kept");
+    xunlink(sf);
+    xmkdir(sf, 0x1C0);
+    var ds_t, ds_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_err_result(ds_t) == 1, "lc_unreadable_switch_refused");
+    xrmdir(sf);
+    # A missing file is the one that starts fresh.
+    var fs_t, fs_v = update_switch_slot(cfg, SLOT_B);
+    assert(is_ok(fs_t) == 1, "lc_missing_state_fresh");
+
+    # F-31, F-53: what is saved reads back unchanged, or is not saved.
+    var qs = update_state_new(SLOT_A, "2026.1.1");
+    update_state_set_pending(qs, "x\",\"rollback_available\":true,\"y\":\"");
+    var q_t, q_v = update_save_state(qs, sf);
+    assert(is_err_result(q_t) == 1, "lc_save_refuses_quote");
+    update_state_set_pending(qs, "back\\slash");
+    var qb_t, qb_v = update_save_state(qs, sf);
+    assert(is_err_result(qb_t) == 1, "lc_save_refuses_backslash");
+    update_state_set_pending(qs, "line\nbreak");
+    var qn_t, qn_v = update_save_state(qs, sf);
+    assert(is_err_result(qn_t) == 1, "lc_save_refuses_newline");
+    update_state_set_pending(qs, 0);
+    update_state_set_slot(qs, 3);
+    var sl_t, sl_v = update_save_state(qs, sf);
+    assert(is_err_result(sl_t) == 1, "lc_save_refuses_slot");
+    update_state_set_slot(qs, SLOT_B);
+    update_state_set_boot_count(qs, 0 - 1);
+    var nb_t, nb_v = update_save_state(qs, sf);
+    assert(is_err_result(nb_t) == 1, "lc_save_refuses_negative_boots");
+    update_state_set_boot_count(qs, UPDATE_BOOTS_MAX);
+    var nh_t, nh_v = update_save_state(qs, sf);
+    assert(is_err_result(nh_t) == 1, "lc_save_refuses_unreadable_boots");
+    update_state_set_boot_count(qs, UPDATE_BOOTS_MAX - 1);
+    _lcfx_put(qs, sf);
+    assert_eq(update_state_boot_count(_lcfx_load(sf)), UPDATE_BOOTS_MAX - 1, "lc_round_boots_max");
+    update_state_set_boot_count(qs, 7);
+    update_state_set_rollback(qs, 1);
+    update_state_set_pending(qs, "2026.3.1");
+    _lcfx_put(qs, sf);
+    st = _lcfx_load(sf);
+    assert_eq(update_state_slot(st), SLOT_B, "lc_round_slot");
+    assert(streq(update_state_version(st), "2026.1.1") == 1, "lc_round_version");
+    assert(streq(update_state_pending(st), "2026.3.1") == 1, "lc_round_pending");
+    assert_eq(update_state_rollback_available(st), 1, "lc_round_rollback");
+    assert_eq(update_state_boot_count(st), 7, "lc_round_boots");
+    var sw0_t, sw0_v = update_switch_slot(cfg, 0);
+    assert(is_err_result(sw0_t) == 1, "lc_switch_slot_0");
+    var sw3_t, sw3_v = update_switch_slot(cfg, 3);
+    assert(is_err_result(sw3_t) == 1, "lc_switch_slot_3");
+
+    # The strict reader.
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1}"), 1, "lc_p_minimal");
+    assert_eq(_lcfx_parses(sf, " {\n \"current_slot\" : 2 ,\t\"x\":[1,{\"y\":\"}\"}]\n}\n"), 1, "lc_p_spaced");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":0}"), 0, "lc_p_slot_0");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":12}"), 0, "lc_p_slot_12");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":\"1\"}"), 0, "lc_p_slot_string");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1"), 0, "lc_p_cut");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1}x"), 0, "lc_p_trailing");
+    assert_eq(_lcfx_parses(sf, "garbage"), 0, "lc_p_garbage");
+    assert_eq(_lcfx_parses(sf, ""), 0, "lc_p_empty");
+    assert_eq(_lcfx_parses(sf, "{}"), 0, "lc_p_no_slot");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1,\"rollback_available\":null}"), 0, "lc_p_rb_null");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1,\"boot_count\":\"3\"}"), 0, "lc_p_boots_string");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1,\"boot_count\":-1}"), 0, "lc_p_boots_negative");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1,\"pending_update\":5}"), 0, "lc_p_pending_number");
+    assert_eq(_lcfx_parses(sf, "{\"current_slot\":1,\"current_version\":\"a\\\"b\"}"), 0, "lc_p_escape");
+    # Text inside a string is never read as a key.
+    var hidden = "{\"current_slot\":1,\"note\":\"\\\"rollback_available\\\":true\",\"boot_count\":4}";
+    assert_eq(_lcfx_parses(sf, hidden), 1, "lc_p_hidden_fx");
+    st = _lcfx_load(sf);
+    assert_eq(update_state_rollback_available(st), 0, "lc_p_hidden_key");
+    assert_eq(update_state_boot_count(st), 4, "lc_p_hidden_after");
+
+    # F-55: too long to read whole is an Err, not a cut.
+    var lsb = str_builder_new();
+    var li = 0;
+    while (li < 800) {
+        str_builder_add_cstr(lsb, "param=val ");
+        li = li + 1;
+    }
+    str_builder_add_cstr(lsb, "agnos.slot=b ");
+    assert_eq(_updfx_cmdline_slot(root, str_data(str_builder_build(lsb))), SLOT_B, "lc_cmdline_fits");
+    while (li < 830) {
+        str_builder_add_cstr(lsb, "param=val ");
+        li = li + 1;
+    }
+    assert_eq(_updfx_cmdline_slot(root, str_data(str_builder_build(lsb))), 0 - 1, "lc_cmdline_too_long");
+
+    # F-32: atomic replacement never widens.
+    var hidden_key = _blfx_path(root, "secret");
+    file_write_all(hidden_key, "old", 3);
+    sys_chmod(hidden_key, 0x180);  # mode 0600
+    var ws_t, ws_v = update_atomic_write(hidden_key, "new", 3);
+    assert(is_ok(ws_t) == 1, "lc_mode_write_ok");
+    assert_eq(_lcfx_mode(hidden_key), 0x180, "lc_mode_write_kept");
+    var key = _blfx_path(root, "key");
+    var kc_t, kc_v = update_atomic_copy(hidden_key, key);
+    assert(is_ok(kc_t) == 1, "lc_mode_copy_ok");
+    assert_eq(_lcfx_mode(key), 0x180, "lc_mode_copy_from_src");
+    var tool = _blfx_path(root, "tool");
+    file_write_all(tool, "x", 1);
+    sys_chmod(tool, 0x1C0);  # mode 0700
+    var kt_t, kt_v = update_atomic_copy(hidden_key, tool);
+    assert(is_ok(kt_t) == 1, "lc_mode_copy_exists_ok");
+    assert_eq(_lcfx_mode(tool), 0x1C0, "lc_mode_copy_keeps_dst");
+    # Exactly the target's mode, past the umask that narrows the temp on the way in.
+    sys_chmod(hidden_key, 0x1B6);  # mode 0666
+    var wu_t, wu_v = update_atomic_write(hidden_key, "new", 3);
+    assert(is_ok(wu_t) == 1, "lc_mode_umask_ok");
+    assert_eq(_lcfx_mode(hidden_key), 0x1B6, "lc_mode_umask_kept");
+    xunlink(hidden_key);
+    xunlink(key);
+    xunlink(tool);
+
+    # F-33: the directory flush.
+    assert_eq(_agnodrm_fsync_parent(sf), 0, "lc_fsync_dir");
+    assert_eq(_agnodrm_fsync_parent("no-such-dir-here"), 0, "lc_fsync_dir_relative");
+    assert(_agnodrm_fsync_parent(_blfx_path(root, "no/such/file")) < 0, "lc_fsync_dir_missing");
+
+    _update_root = 0;
+    _updfx_rm(root, "/proc/cmdline");
+    xunlink(sf);
+    xunlink(marker);
+    xunlink(image);
+    xunlink(mf);
+    xunlink(ar_log);
+    _updfx_rm(root, "/usr/bin/argonaut");
+    _updfx_rm(root, "/usr/bin/sha256sum");
+    _updfx_rm(root, "/usr/bin/efibootmgr");
+    xunlink(slot_a);
+    xunlink(slot_b);
+    while (di > 0) {
+        di = di - 1;
+        assert_eq(xrmdir(netns_concat2(root, vec_get(dirs, di))), 0, "lc_fx_rmdir");
+    }
+    assert_eq(xrmdir(root), 0, "lc_fx_cleanup");
+    return 0;
+}
+
+# What update_check does with a manifest holding `text`: -1 Err, 0 up to date, 1 offered.
+fn _ckfx(path, text, current) {
+    xunlink(path);
+    file_write_all(path, text, strlen(text));
+    var cfg = update_config_new();
+    update_config_set_url(cfg, path);
+    var t, v = update_check(cfg, current);
+    if (is_err_result(t) == 1) { return 0 - 1; }
+    return v != 0;
+}
+
+fn test_update_versions() {
+    println("-- update versions and manifests (audit F-52) --");
+    # The wrap: 2^64 + 2026 parsed as 2026.
+    assert(is_err_result(update_validate_version("18446744073709553642.1.1")) == 1, "ver_wrap_validate");
+    assert_eq(update_compare_versions("18446744073709553642.1.1", "2026.1.1"), VER_LESS, "ver_wrap_compare");
+    assert_eq(update_compare_versions("2026.1.9223372036854775808", "2026.1.1"), VER_LESS, "ver_wrap_day");
+    assert_eq(update_parse_version("18446744073709553642.1.1"), 0, "ver_wrap_parse");
+    # Shape.
+    assert_eq(update_parse_version("2026.1."), 0, "ver_empty_day");
+    assert_eq(update_parse_version("2026..1"), 0, "ver_empty_month");
+    assert_eq(update_parse_version(".1.1"), 0, "ver_empty_year");
+    assert_eq(update_parse_version("1.2.3.4"), 0, "ver_four_parts");
+    assert_eq(update_parse_version("1.2"), 0, "ver_two_parts");
+    assert_eq(update_parse_version("2026.1.1x"), 0, "ver_trailing");
+    assert_eq(update_parse_version("-2026.1.1"), 0, "ver_sign");
+    assert_eq(update_parse_version(0), 0, "ver_null");
+    var pv = update_parse_version("2026.12.31");
+    assert_eq(load64(pv), 2026, "ver_year");
+    assert_eq(load64(pv + 8), 12, "ver_month");
+    assert_eq(load64(pv + 16), 31, "ver_day");
+    assert(update_parse_version("999999.999999.999999") != 0, "ver_field_max");
+    assert_eq(update_parse_version("1000000.1.1"), 0, "ver_field_over");
+    # The day is a real day.
+    assert(is_err_result(update_validate_version("2026.1.0")) == 1, "ver_day_0");
+    assert(is_ok(update_validate_version("2026.1.31")) == 1, "ver_day_31");
+    assert(is_err_result(update_validate_version("2026.1.32")) == 1, "ver_day_32");
+    assert(is_err_result(update_validate_version("2026.4.31")) == 1, "ver_april_31");
+    assert(is_err_result(update_validate_version("2026.2.29")) == 1, "ver_feb_29_plain");
+    assert(is_ok(update_validate_version("2028.2.29")) == 1, "ver_feb_29_leap");
+    assert(is_err_result(update_validate_version("2100.2.29")) == 1, "ver_feb_29_century");
+    assert(is_err_result(update_validate_version("2026.13.1")) == 1, "ver_month_13");
+    assert(is_err_result(update_validate_version("2101.1.1")) == 1, "ver_year_over");
+    # Order, and the fallback for what does not parse.
+    assert_eq(update_compare_versions("2026.1.10", "2026.1.9"), VER_GREATER, "ver_numeric_order");
+    assert_eq(update_compare_versions("2026.10.1", "2026.9.30"), VER_GREATER, "ver_month_outranks_day");
+    assert_eq(update_compare_versions("2027.1.1", "2026.12.31"), VER_GREATER, "ver_year_outranks");
+    assert_eq(update_compare_versions("bad", "2026.1.1"), VER_LESS, "ver_bad_left");
+    assert_eq(update_compare_versions("2026.1.1", "bad"), VER_GREATER, "ver_bad_right");
+    assert_eq(update_compare_versions("abc", "abd"), VER_LESS, "ver_text_less");
+    assert_eq(update_compare_versions("abcd", "abc"), VER_GREATER, "ver_text_longer");
+    assert_eq(update_compare_versions("abc", "abc"), VER_EQUAL, "ver_text_equal");
+    assert_eq(update_compare_versions(0, 0), VER_EQUAL, "ver_null_both");
+    assert_eq(update_compare_versions(0, "2026.1.1"), VER_LESS, "ver_null_left");
+
+    # Null arguments.
+    assert_eq(update_needs_rollback(0, 3), 0, "upd_needs_null");
+    var nu = update_config_new();
+    update_config_set_url(nu, 0);
+    var nu_t, nu_v = update_check(nu, "2026.1.1");
+    assert(is_err_result(nu_t) == 1, "upd_check_null_url");
+    var nf = update_manifest_new("2026.2.1", CHAN_STABLE, "2026-02-01");
+    vec_push(update_manifest_files(nf), 0);
+    assert(is_err_result(update_verify_manifest(nf)) == 1, "upd_verify_null_file");
+
+    # update_check takes the top-level version, validated, from a whole document.
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-ck-");
+    str_builder_add_int(sbd, sys_getpid());
+    var mp = str_data(str_builder_build(sbd));
+    assert_eq(_ckfx(mp, "{\"version\":\"2026.2.1\"}", "2026.1.1"), 1, "ck_newer");
+    assert_eq(_ckfx(mp, "{\"version\":\"2026.2.1\"}", "2026.2.1"), 0, "ck_same");
+    assert_eq(_ckfx(mp, "{\"version\":\"2026.1.1\"}", "2026.2.1"), 0, "ck_older");
+    assert_eq(_ckfx(mp, "{\"version\":\"9999.99.99\"}", "2026.1.1"), 0 - 1, "ck_invalid");
+    assert_eq(_ckfx(mp, "{\"version\":\"zzz\"}", ""), 0 - 1, "ck_text");
+    assert_eq(_ckfx(mp, "{\"name\":\"x\"}", "2026.1.1"), 0 - 1, "ck_missing");
+    assert_eq(_ckfx(mp, "{\"version\":5}", "2026.1.1"), 0 - 1, "ck_number");
+    assert_eq(_ckfx(mp, "{\"version\":\"2026.2.1\"", "2026.1.1"), 0 - 1, "ck_cut");
+    assert_eq(_ckfx(mp, "", "2026.1.1"), 0 - 1, "ck_empty");
+    var nest = "{\"channel\":\"version\",\"files\":[{\"version\":\"2099.9.9\"}],\"version\":\"2026.1.2\"}";
+    assert_eq(_ckfx(mp, nest, "2026.1.1"), 1, "ck_top_level_newer");
+    assert_eq(_ckfx(mp, nest, "2026.1.2"), 0, "ck_top_level_not_nested");
+    # Past the cap is an Err, not a cut.
+    var big = alloc(UPDATE_JSON_MAX + 2);
+    memset(big, 32, UPDATE_JSON_MAX + 1);
+    store8(big + UPDATE_JSON_MAX + 1, 0);
+    assert_eq(_ckfx(mp, big, "2026.1.1"), 0 - 1, "ck_too_large");
+    xunlink(mp);
     return 0;
 }
 
@@ -1181,13 +2608,12 @@ fn test_run_capture_status() {
     assert_eq(seen, 0, "cap_bootctl_failed_not_parsed");
     _bootloader_bootctl = 0;
 
-    # journald_query keeps what fits when journalctl has more to say.
+    # Output past every buffer is an Err: part of a query is not what was asked for.
     _journald_tool = stub;
     var f = journald_filter_new();
-    _updfx_tool(root, "/tool", "#!/bin/sh\nexec yes '{\"MESSAGE\":\"hi\",\"PRIORITY\":\"6\"}'\n");
+    _updfx_tool(root, "/tool", "#!/bin/sh\nexec /usr/bin/yes '{\"MESSAGE\":\"hi\",\"PRIORITY\":\"6\"}'\n");
     var j1_t, j1_v = journald_query(f);
-    assert(is_ok(j1_t) == 1, "jq_full_buffer_ok");
-    assert(vec_len(j1_v) > 0, "jq_full_buffer_entries");
+    assert(is_err_result(j1_t) == 1, "jq_too_large_err");
     # Exit 1 is bad input without --grep, and no match with it.
     _updfx_tool(root, "/tool", "#!/bin/sh\nexit 1\n");
     var j2_t, j2_v = journald_query(f);
@@ -1256,17 +2682,24 @@ fn _jfx_keys(payload) {
     return keys;
 }
 
+# One datagram as journald_send would lay it out.
+fn _jfx_datagram(message, priority, identifier, keys, vals) {
+    var n = _journald_layout(0, message, priority, identifier, keys, vals);
+    var buf = alloc(n + 1);
+    assert_eq(_journald_layout(buf, message, priority, identifier, keys, vals), n, "jp_measure_matches_fill");
+    store8(buf + n, 0);
+    return str_new(buf, n);
+}
+
 fn test_journald_payload() {
     println("-- journal datagrams (audit F-9) --");
-    var sb = str_builder_new();
-    _journald_add_base_fields(sb, "hello", 6, "agnodrm");
-    var plain = str_builder_build(sb);
+    var plain = _jfx_datagram("hello", 6, "agnodrm", 0, 0);
     assert(streq(str_data(plain), "PRIORITY=6\nMESSAGE=hello\nSYSLOG_IDENTIFIER=agnodrm\n") == 1, "jp_plain");
+    var noid = _jfx_datagram("hello", 0, 0, 0, 0);
+    assert(streq(str_data(noid), "PRIORITY=0\nMESSAGE=hello\n") == 1, "jp_no_identifier");
 
     # A forged field stays inside MESSAGE, and the protocol reads three fields.
-    var sb2 = str_builder_new();
-    _journald_add_base_fields(sb2, "x\nPRIORITY=0\nSYSLOG_IDENTIFIER=sshd", 6, "agnodrm");
-    var forged = str_builder_build(sb2);
+    var forged = _jfx_datagram("x\nPRIORITY=0\nSYSLOG_IDENTIFIER=sshd", 6, "agnodrm", 0, 0);
     var keys = _jfx_keys(forged);
     assert(keys != 0 - 1, "jp_forged_wellformed");
     assert_eq(vec_len(keys), 3, "jp_forged_three_fields");
@@ -1275,13 +2708,12 @@ fn test_journald_payload() {
     assert(streq(vec_get(keys, 2), "SYSLOG_IDENTIFIER") == 1, "jp_forged_k2");
 
     # The binary form's bytes: KEY\n, a little-endian u64, the value, \n.
-    var sb3 = str_builder_new();
-    _journald_add_field(sb3, "K", "a\nb");
-    var bin = str_builder_build(sb3);
-    assert_eq(str_len(bin), 2 + 8 + 3 + 1, "jp_bin_len");
-    assert_eq(load8(str_data(bin) + 1), 10, "jp_bin_key_end");
-    assert_eq(load64(str_data(bin) + 2), 3, "jp_bin_size");
-    assert(memeq(str_data(bin) + 10, "a\nb\n", 4) == 1, "jp_bin_value");
+    var binbuf = alloc(64);
+    var binlen = _journald_put_field(binbuf, 0, "K", "a\nb");
+    assert_eq(binlen, 2 + 8 + 3 + 1, "jp_bin_len");
+    assert_eq(load8(binbuf + 1), 10, "jp_bin_key_end");
+    assert_eq(load64(binbuf + 2), 3, "jp_bin_size");
+    assert(memeq(binbuf + 10, "a\nb\n", 4) == 1, "jp_bin_value");
 
     # Field names the journal accepts, and no others.
     assert_eq(_journald_key_valid("CODE_FILE"), 1, "jk_ok");
@@ -1311,20 +2743,576 @@ fn test_journald_payload() {
     vec_push(fvals, "PRIORITY=0\nB");
     vec_push(fkeys, "NULL_VALUE");
     vec_push(fvals, 0);
-    var sbf = str_builder_new();
-    _journald_add_base_fields(sbf, "m", 6, "agnodrm");
-    _journald_add_extra_fields(sbf, fkeys, fvals);
-    var fkv = _jfx_keys(str_builder_build(sbf));
+    var fkv = _jfx_keys(_jfx_datagram("m", 6, "agnodrm", fkeys, fvals));
     assert(fkv != 0 - 1, "jp_fields_wellformed");
     assert_eq(vec_len(fkv), 4, "jp_fields_count");
     assert(streq(vec_get(fkv, 3), "GOOD_KEY") == 1, "jp_fields_kept");
 
     # The identifier and extra-field values take the same path.
-    var sb4 = str_builder_new();
-    _journald_add_base_fields(sb4, "m", 6, "id\nPRIORITY=0");
-    _journald_add_field(sb4, "EXTRA", "v\nMESSAGE=forged");
-    var keys2 = _jfx_keys(str_builder_build(sb4));
+    var okeys = vec_new();
+    var ovals = vec_new();
+    vec_push(okeys, "EXTRA");
+    vec_push(ovals, "v\nMESSAGE=forged");
+    var keys2 = _jfx_keys(_jfx_datagram("m", 6, "id\nPRIORITY=0", okeys, ovals));
     assert_eq(vec_len(keys2), 4, "jp_other_fields");
+
+    # F-46: extras cannot restate a base field, and uneven or null vecs are no crash.
+    assert_eq(_journald_key_valid("PRIORITY"), 0, "jk_reserved_priority");
+    assert_eq(_journald_key_valid("MESSAGE"), 0, "jk_reserved_message");
+    assert_eq(_journald_key_valid("SYSLOG_IDENTIFIER"), 0, "jk_reserved_identifier");
+    var rk = vec_new();
+    var rv = vec_new();
+    vec_push(rk, "PRIORITY");
+    vec_push(rv, "0");
+    vec_push(rk, "KEPT");
+    vec_push(rv, "1");
+    vec_push(rk, "NO_VALUE_PAIR");
+    assert_eq(vec_len(_jfx_keys(_jfx_datagram("m", 6, "x", rk, rv))), 4, "jp_reserved_and_uneven");
+    assert_eq(vec_len(_jfx_keys(_jfx_datagram("m", 6, "x", rk, 0))), 3, "jp_null_vals");
+    assert_eq(vec_len(_jfx_keys(_jfx_datagram("m", 6, "x", 0, rv))), 3, "jp_null_keys");
+    return 0;
+}
+
+# ================================================================
+# journald: the wire, the argv and the JSON (audit F-20, F-21, F-40, F-46, F-47)
+# ================================================================
+
+fn _jsfx(line, key) {
+    return journald_json_get_str(str_from(line), key);
+}
+
+fn _jsfx_is(line, key, want) {
+    var got = _jsfx(line, key);
+    if (got == 0) { return 0; }
+    return str_eq(got, str_from(want));
+}
+
+fn test_journald_io() {
+    println("-- journald io (audit F-20, F-21, F-40, F-46, F-47) --");
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-jr-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "jr_fx_mkdir");
+
+    # A socket of our own, so nothing reaches this host's journal.
+    var sock = _blfx_path(root, "s");
+    _journald_socket = sock;
+    _journald_sa = 0;
+    var rx = sys_socket(AF_UNIX, SOCK_DGRAM, 0);
+    assert(rx >= 0, "jr_fx_socket");
+    assert_eq(sys_bind(rx, journald_make_sockaddr(), SOCKADDR_UN_SIZE), 0, "jr_fx_bind");
+    var rbuf = alloc(8192);
+    var s_t, s_v = journald_send("hello", JOURNAL_WARNING, "agnodrm-test");
+    assert(is_ok(s_t) == 1, "jr_send_ok");
+    var got = sys_recvfrom(rx, rbuf, 8191, 0, 0, 0);
+    assert(got > 0, "jr_send_received");
+    store8(rbuf + got, 0);
+    assert(streq(rbuf, "PRIORITY=4\nMESSAGE=hello\nSYSLOG_IDENTIFIER=agnodrm-test\n") == 1, "jr_send_bytes");
+
+    var fk = vec_new();
+    var fv = vec_new();
+    vec_push(fk, "CODE_FILE");
+    vec_push(fv, "x.cyr");
+    var f_t, f_v = journald_send_fields("m", JOURNAL_ERR, "t", fk, fv);
+    assert(is_ok(f_t) == 1, "jr_fields_ok");
+    got = sys_recvfrom(rx, rbuf, 8191, 0, 0, 0);
+    store8(rbuf + got, 0);
+    assert(strstr(rbuf, "CODE_FILE=x.cyr\n") >= 0, "jr_fields_received");
+    var f0_t, f0_v = journald_send_fields("m", JOURNAL_ERR, "t", 0, 0);
+    assert(is_ok(f0_t) == 1, "jr_fields_null_vecs");
+    got = sys_recvfrom(rx, rbuf, 8191, 0, 0, 0);
+
+    var i_t, i_v = journald_info("i");
+    assert(is_ok(i_t) == 1, "jr_info_ok");
+    got = sys_recvfrom(rx, rbuf, 8191, 0, 0, 0);
+    store8(rbuf + got, 0);
+    assert(strstr(rbuf, "PRIORITY=6\n") >= 0, "jr_info_priority");
+    assert(strstr(rbuf, "SYSLOG_IDENTIFIER=agnodrm\n") >= 0, "jr_info_identifier");
+
+    # F-40: a process logging for days must not grow by a line's worth each line.
+    var before = alloc_used();
+    var li = 0;
+    while (li < 200) {
+        var ln_t, ln_v = journald_send("line", 6, "t");
+        assert(is_ok(ln_t) == 1, "jr_loop_send");
+        got = sys_recvfrom(rx, rbuf, 8191, 0, 0, 0);
+        li = li + 1;
+    }
+    assert_eq(alloc_used() - before, 0, "jr_send_path_no_heap");
+
+    # Bad arguments, and a journal that is not there, are an Err.
+    var bm_t, bm_v = journald_send(0, 6, "t");
+    assert(is_err_result(bm_t) == 1, "jr_null_message");
+    var bp_t, bp_v = journald_send("m", 8, "t");
+    assert(is_err_result(bp_t) == 1, "jr_bad_priority");
+    var bn_t, bn_v = journald_send("m", 0 - 1, "t");
+    assert(is_err_result(bn_t) == 1, "jr_negative_priority");
+    sys_close(rx);
+    xunlink(sock);
+    var gone_t, gone_v = journald_send("m", 6, "t");
+    assert(is_err_result(gone_t) == 1, "jr_no_socket");
+    _journald_socket = 0;
+    _journald_sa = 0;
+
+    # F-20: --boot is one word, whatever its value holds.
+    var fb = journald_filter_new();
+    journald_filter_set_boot(fb, str_from("--vacuum-time=1s"));
+    var av = _journald_build_argv(fb);
+    var seen = 0;
+    var ai = 0;
+    while (ai < vec_len(av)) {
+        if (streq(vec_get(av, ai), "--boot") == 1) { seen = seen + 100; }
+        if (streq(vec_get(av, ai), "--boot=--vacuum-time=1s") == 1) { seen = seen + 1; }
+        if (streq(vec_get(av, ai), "--vacuum-time=1s") == 1) { seen = seen + 100; }
+        ai = ai + 1;
+    }
+    assert_eq(seen, 1, "jq_boot_one_word");
+    assert(streq(vec_get(_journald_build_argv(journald_filter_new()), 3), "--all") == 1, "jq_all_fields");
+
+    # F-21: output past the first buffer is read whole, newest entry included.
+    var out = _blfx_path(root, "out");
+    var sb = str_builder_new();
+    var ei = 0;
+    while (ei < 4000) {
+        str_builder_add_cstr(sb, "{\"MESSAGE\":\"line-");
+        str_builder_add_int(sb, ei);
+        str_builder_add_cstr(sb, "\",\"PRIORITY\":\"6\",\"PAD\":\"0123456789012345678901234567890123456789\"}\n");
+        ei = ei + 1;
+    }
+    var blob = str_builder_build(sb);
+    assert(str_len(blob) > 131072, "jq_big_fx");
+    file_write_all(out, str_data(blob), str_len(blob));
+    var cat = netns_concat3("#!/bin/sh\nexec /usr/bin/cat ", out, "\n");
+    _updfx_tool(root, "/jc", cat);
+    _journald_tool = _blfx_path(root, "jc");
+    var q_t, q_v = journald_query(journald_filter_new());
+    assert(is_ok(q_t) == 1, "jq_big_ok");
+    assert_eq(vec_len(q_v), 4000, "jq_big_all");
+    var last = vec_get(q_v, 3999);
+    assert(str_eq(journald_entry_message(last), str_from("line-3999")) == 1, "jq_big_newest_kept");
+    var nf_t, nf_v = journald_query(0);
+    assert(is_err_result(nf_t) == 1, "jq_null_filter");
+    _journald_tool = 0;
+    xunlink(out);
+    xunlink(_blfx_path(root, "jc"));
+
+    # F-47: what journalctl actually prints.
+    assert_eq(_jsfx_is("{\"MESSAGE\":\"plain\"}", "MESSAGE", "plain"), 1, "js_plain");
+    assert_eq(_jsfx_is("{\"MESSAGE\":\"a\\nb\\t\\\"c\\\"\\\\\"}", "MESSAGE", "a\nb\t\"c\"\\"), 1, "js_escapes");
+    assert_eq(_jsfx_is("{\"MESSAGE\":\"\\u0041\\u00e9\\u20ac\"}", "MESSAGE", "A\xc3\xa9\xe2\x82\xac"), 1, "js_unicode");
+    assert_eq(_jsfx_is("{\"MESSAGE\":\"\\uZZZZ\"}", "MESSAGE", "uZZZZ"), 1, "js_bad_unicode");
+    assert_eq(_jsfx_is("{\"MESSAGE\":[104,105]}", "MESSAGE", "hi"), 1, "js_bytes");
+    assert_eq(_jsfx_is("{\"MESSAGE\":[27,91,50,74]}", "MESSAGE", "\x1b[2J"), 1, "js_esc_byte");
+    assert_eq(_jsfx_is("{\"MESSAGE\":[\"first\",\"second\"]}", "MESSAGE", "first"), 1, "js_repeated");
+    assert_eq(_jsfx_is("{\"MESSAGE\":[[104,105],[106]]}", "MESSAGE", "hi"), 1, "js_repeated_bytes");
+    assert_eq(_jsfx("{\"MESSAGE\":null}", "MESSAGE"), 0, "js_null");
+    assert_eq(_jsfx("{\"MESSAGE\":[null]}", "MESSAGE"), 0, "js_array_null");
+    assert_eq(_jsfx("{\"MESSAGE\":[[[1]]]}", "MESSAGE"), 0, "js_too_deep");
+    assert_eq(_jsfx("{\"OTHER\":\"x\"}", "MESSAGE"), 0, "js_absent");
+    # A value that is the key's name does not stand in for the key.
+    assert_eq(_jsfx_is("{\"A\":\"MESSAGE\",\"MESSAGE\":\"real\"}", "MESSAGE", "real"), 1, "js_value_named_key");
+    # A line ending in a lone backslash stays inside the line.
+    var cut = alloc(32);
+    var ctext = "{\"MESSAGE\":\"ab\\";
+    memcpy(cut, ctext, strlen(ctext));
+    var cs = journald_json_get_str(str_new(cut, strlen(ctext)), "MESSAGE");
+    assert(cs != 0, "js_trailing_backslash");
+    assert_eq(str_len(cs), 2, "js_trailing_backslash_len");
+
+    var pe_t, pe_v = journald_parse_json(str_from("{\"PRIORITY\":\"abc\"}"));
+    assert_eq(journald_entry_priority(pe_v), JOURNAL_INFO, "jp_priority_text");
+    var p9_t, p9_v = journald_parse_json(str_from("{\"PRIORITY\":\"99\"}"));
+    assert_eq(journald_entry_priority(p9_v), JOURNAL_INFO, "jp_priority_range");
+    var p8_t, p8_v = journald_parse_json(str_from("{\"PRIORITY\":\"8\"}"));
+    assert_eq(journald_entry_priority(p8_v), JOURNAL_INFO, "jp_priority_8");
+    var px_t, px_v = journald_parse_json(str_from("{\"PRIORITY\":\"x\"}"));
+    assert_eq(journald_entry_priority(px_v), JOURNAL_INFO, "jp_priority_letter");
+    var p0_t, p0_v = journald_parse_json(str_from("{\"PRIORITY\":\"0\"}"));
+    assert_eq(journald_entry_priority(p0_v), 0, "jp_priority_0");
+    var p7_t, p7_v = journald_parse_json(str_from("{\"PRIORITY\":\"7\"}"));
+    assert_eq(journald_entry_priority(p7_v), 7, "jp_priority_7");
+    var p3_line = "{\"PRIORITY\":\"3\",\"_PID\":\"42\",\"__REALTIME_TIMESTAMP\":\"1700\"}";
+    var p3_t, p3_v = journald_parse_json(str_from(p3_line));
+    assert_eq(journald_entry_priority(p3_v), 3, "jp_priority_ok");
+    assert_eq(journald_entry_pid(p3_v), 42, "jp_pid");
+    assert_eq(journald_entry_timestamp(p3_v), 1700, "jp_timestamp");
+    var pb_t, pb_v = journald_parse_json(str_from("not json"));
+    assert(is_err_result(pb_t) == 1, "jp_not_object");
+    var pz_t, pz_v = journald_parse_json(str_from(""));
+    assert(is_err_result(pz_t) == 1, "jp_empty");
+
+    assert_eq(xrmdir(root), 0, "jr_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# netns: names, addresses and the firewall (audit F-18, F-19, F-22, F-24, F-42 to F-45)
+# ================================================================
+
+fn _fwfx_rule(dir, proto, port, addr, action, comment) {
+    var pol = netns_fw_policy_new(FW_DROP, FW_ACCEPT);
+    var rules = alloc(8);
+    store64(rules, netns_fw_rule_new(dir, proto, port, addr, action, comment));
+    netns_fw_policy_set_rules(pol, rules, 1);
+    return netns_render_nftables_ruleset(pol);
+}
+
+fn _nsfx_valid(name, aip, hip) {
+    return is_ok(netns_validate_config(netns_config_new(name, aip, hip, 30, 1)));
+}
+
+fn test_netns_firewall() {
+    println("-- netns firewall (audit F-18, F-19, F-22, F-24, F-42 to F-45) --");
+    # F-18: one rule is one line, and everything it names matches together.
+    var r = _fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, "10.0.0.5", FW_ACCEPT, "ssh");
+    assert(strstr(r, "    ip saddr 10.0.0.5 tcp dport 22 accept comment \"ssh\"\n") >= 0, "fw_and_not_or");
+    assert(strstr(r, "\n    tcp dport 22") < 0, "fw_no_open_port");
+    assert(strstr(r, "\n    ip saddr 10.0.0.5 accept") < 0, "fw_no_open_host");
+    r = _fwfx_rule(TRAFFIC_OUTBOUND, PROTO_UDP, 53, "1.1.1.1/32", FW_ACCEPT, 0);
+    assert(strstr(r, "    ip daddr 1.1.1.1/32 udp dport 53 accept\n") >= 0, "fw_outbound_daddr");
+    r = _fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 443, "", FW_ACCEPT, "");
+    assert(strstr(r, "    tcp dport 443 accept\n") >= 0, "fw_port_only");
+    r = _fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "192.168.1.0/24", FW_DROP, 0);
+    assert(strstr(r, "    ip saddr 192.168.1.0/24 drop\n") >= 0, "fw_addr_only");
+    r = _fwfx_rule(TRAFFIC_INBOUND, PROTO_UDP, 0, 0, FW_DROP, 0);
+    assert(strstr(r, "    meta l4proto udp drop\n") >= 0, "fw_proto_only");
+    r = _fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 0, "10.0.0.1", FW_DROP, 0);
+    assert(strstr(r, "    ip saddr 10.0.0.1 meta l4proto tcp drop\n") >= 0, "fw_addr_proto");
+    r = _fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, 0, FW_DROP, "all");
+    assert(strstr(r, "    drop comment \"all\"\n") >= 0, "fw_match_all");
+    r = _fwfx_rule(TRAFFIC_OUTBOUND, PROTO_TCP, 443, "2001:db8::1", FW_ACCEPT, 0);
+    assert(strstr(r, "    ip6 daddr 2001:db8::1 tcp dport 443 accept\n") >= 0, "fw_ipv6");
+    r = _fwfx_rule(TRAFFIC_OUTBOUND, PROTO_TCP, 443, "2001:db8::/32", FW_ACCEPT, 0);
+    assert(strstr(r, "ip6 daddr 2001:db8::/32 ") >= 0, "fw_ipv6_prefix");
+
+    # F-18: what cannot be said is refused, not left out.
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 22, 0, FW_DROP, 0), 0, "fw_port_no_proto");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 70000, 0, FW_DROP, 0), 0, "fw_port_high");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 0 - 1, 0, FW_DROP, 0), 0, "fw_port_negative");
+    assert_eq(_fwfx_rule(9, PROTO_TCP, 22, 0, FW_DROP, 0), 0, "fw_bad_direction");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, 9, 22, 0, FW_DROP, 0), 0, "fw_bad_proto");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, 0, 9, 0), 0, "fw_bad_action");
+    var np = netns_fw_policy_new(FW_DROP, FW_ACCEPT);
+    assert(is_ok(netns_fw_policy_validate(np)) == 1, "fw_empty_ok");
+    netns_fw_policy_set_rules(np, 0, 1);
+    assert(is_err_result(netns_fw_policy_validate(np)) == 1, "fw_null_rules");
+    assert(is_err_result(netns_fw_policy_validate(0)) == 1, "fw_null_policy");
+    assert_eq(netns_render_nftables_ruleset(0), 0, "fw_render_null");
+    var nr = alloc(8);
+    store64(nr, 0);
+    netns_fw_policy_set_rules(np, nr, 1);
+    assert(is_err_result(netns_fw_policy_validate(np)) == 1, "fw_null_rule");
+
+    # F-19: policy data stays data.
+    var inj = "x\"\n    meta l4proto tcp accept comment \"y";
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, 0, FW_DROP, inj), 0, "fw_comment_quote");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, 0, FW_DROP, "back\\slash"), 0, "fw_comment_backslash");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, 0, FW_DROP, "new\nline"), 0, "fw_comment_newline");
+    var longc = alloc(130);
+    memset(longc, 97, 129);
+    store8(longc + 129, 0);
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, 0, FW_DROP, longc), 0, "fw_comment_long");
+    store8(longc + 128, 0);
+    assert(_fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, 0, FW_DROP, longc) != 0, "fw_comment_at_limit");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "0.0.0.0/0 accept", FW_DROP, 0), 0, "fw_addr_syntax");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "10.0.0.256", FW_DROP, 0), 0, "fw_addr_octet");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "10.0.0.1/33", FW_DROP, 0), 0, "fw_addr_prefix");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "10.0.0.1/", FW_DROP, 0), 0, "fw_addr_empty_prefix");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "10.0.0.1/x", FW_DROP, 0), 0, "fw_addr_word_prefix");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "::1/129", FW_DROP, 0), 0, "fw_addr_v6_prefix");
+    assert_eq(_fwfx_rule(TRAFFIC_INBOUND, PROTO_ANY, 0, "host.example", FW_DROP, 0), 0, "fw_addr_name");
+    # `ip` and nft read a leading zero as octal: 010.0.0.1 is 8.0.0.1 to them.
+    assert_eq(_netns_addr_family("010.0.0.1"), 0, "fw_octal_octet");
+    assert_eq(_netns_addr_family("10.0.0.01"), 0, "fw_octal_last");
+    assert_eq(_netns_addr_family("1.2.3.4/024"), 0, "fw_octal_prefix");
+    assert_eq(_netns_addr_family("10.0.0.0"), 4, "fw_zero_octet_ok");
+    assert_eq(_netns_addr_family("0.0.0.0/0"), 4, "fw_zero_prefix_ok");
+    assert_eq(_nsfx_valid("a", "010.0.0.2", "10.0.0.1"), 0, "ns_v_octal");
+    # IPv6 shapes.
+    assert_eq(_netns_addr_family("2001:db8:0:0:0:0:0:1"), 6, "fw_v6_full");
+    assert_eq(_netns_addr_family("::"), 6, "fw_v6_all");
+    assert_eq(_netns_addr_family("::1"), 6, "fw_v6_loop");
+    assert_eq(_netns_addr_family("fe80::"), 6, "fw_v6_tail");
+    assert_eq(_netns_addr_family("a:b:c"), 0, "fw_v6_short");
+    assert_eq(_netns_addr_family(":::::"), 0, "fw_v6_colons");
+    assert_eq(_netns_addr_family("12345::"), 0, "fw_v6_long_group");
+    assert_eq(_netns_addr_family("1::2::3"), 0, "fw_v6_two_gaps");
+    assert_eq(_netns_addr_family(":1:2:3:4:5:6:7:8"), 0, "fw_v6_lead_colon");
+    assert_eq(_netns_addr_family("1:2:3:4:5:6:7:8:"), 0, "fw_v6_trail_colon");
+    assert_eq(_netns_addr_family("1:2:3:4:5:6:7:8:9"), 0, "fw_v6_nine");
+    assert_eq(_netns_addr_family("1:2:3:4:5:6:7::8"), 0, "fw_v6_full_with_gap");
+    assert_eq(_netns_addr_family("1:::2"), 0, "fw_v6_triple_mid");
+    assert_eq(_netns_addr_family(":::"), 0, "fw_v6_triple");
+    assert_eq(_netns_addr_family("::1:"), 0, "fw_v6_gap_trailing");
+    assert_eq(_netns_addr_family("1::"), 6, "fw_v6_group_gap");
+    assert_eq(_netns_addr_family("1::2:3:4:5:6:7"), 6, "fw_v6_gap_seven");
+    assert_eq(_netns_addr_family("10.1.2.3"), 4, "fw_family_4");
+    assert_eq(_netns_addr_family("fe80::1"), 6, "fw_family_6");
+
+    # F-24: a re-apply replaces the table, in the same transaction.
+    r = _fwfx_rule(TRAFFIC_INBOUND, PROTO_TCP, 22, 0, FW_DROP, 0);
+    var fw_head = "table inet kavach\ndelete table inet kavach\ntable inet kavach {\n";
+    assert(agnodrm_cstr_starts_with(r, fw_head) == 1, "fw_replaces_table");
+    # F-43: past the old 16 KiB, every rule and the close of the table.
+    var big = alloc(8 * 600);
+    var bi = 0;
+    while (bi < 600) {
+        var pad = "pad-pad-pad-pad-pad-pad-pad-pad-pad";
+        store64(big + bi * 8, netns_fw_rule_new(TRAFFIC_INBOUND, PROTO_TCP, bi + 1, "10.0.0.1", FW_DROP, pad));
+        bi = bi + 1;
+    }
+    var bp = netns_fw_policy_new(FW_ACCEPT, FW_DROP);
+    netns_fw_policy_set_rules(bp, big, 600);
+    var rendered = netns_render_nftables_ruleset(bp);
+    assert(strlen(rendered) > 16384, "fw_big_fx");
+    assert(strstr(rendered, "dport 600 drop") >= 0, "fw_big_last_rule");
+    assert(strstr(rendered, "chain output") >= 0, "fw_big_output_chain");
+
+    # F-22: the two ends always differ, and fit, and a name past the limit still works.
+    assert(streq(_netns_veth_name("agent-1", "-h"), "veth-agent-1-h") == 1, "veth_short_kept");
+    assert(streq(_netns_veth_name("abcdefgh", "-h"), "veth-abcdefgh-h") == 1, "veth_limit_kept");
+    var vh = _netns_veth_name("abcdefghi", "-h");
+    var va = _netns_veth_name("abcdefghi", "-a");
+    assert(streq(vh, va) == 0, "veth_long_ends_differ");
+    assert_eq(strlen(vh), 15, "veth_long_fits");
+    var v64 = alloc(65);
+    memset(v64, 97, 64);
+    store8(v64 + 64, 0);
+    assert_eq(strlen(_netns_veth_name(v64, "-a")), 15, "veth_max_fits");
+    var vl1 = _netns_veth_name("long-agent-one", "-h");
+    assert(streq(vl1, _netns_veth_name("long-agent-two", "-h")) == 0, "veth_long_names_differ");
+
+    # F-42: names and addresses.
+    assert_eq(_nsfx_valid("agent-1_A", "10.0.0.2", "10.0.0.1"), 1, "ns_v_ok");
+    assert_eq(_nsfx_valid("-agent", "10.0.0.2", "10.0.0.1"), 0, "ns_v_dash");
+    assert_eq(_nsfx_valid("a/b", "10.0.0.2", "10.0.0.1"), 0, "ns_v_slash");
+    assert_eq(_nsfx_valid("a b", "10.0.0.2", "10.0.0.1"), 0, "ns_v_space");
+    assert_eq(_nsfx_valid("a%d", "10.0.0.2", "10.0.0.1"), 0, "ns_v_template");
+    assert_eq(_nsfx_valid("a\nb", "10.0.0.2", "10.0.0.1"), 0, "ns_v_newline");
+    assert_eq(_nsfx_valid("a", "not-an-ip", "10.0.0.1"), 0, "ns_v_agent_ip");
+    assert_eq(_nsfx_valid("a", "10.0.0.2", "10.0.0"), 0, "ns_v_host_ip");
+    assert_eq(_nsfx_valid("a", "10.0.0.2", "10.0.0.1.1"), 0, "ns_v_five_parts");
+    assert_eq(_nsfx_valid("a", "10.0.0.2", "1000.0.0.1"), 0, "ns_v_digits");
+    assert_eq(_nsfx_valid("a", "10.0.0.2", ".0.0.1"), 0, "ns_v_empty_part");
+    assert(is_err_result(netns_validate_config(0)) == 1, "ns_v_null");
+
+    # F-45: a wider space, inside 10.100.0.0/16, on a /30.
+    var seen = map_new();
+    var clashes = 0;
+    var ii = 0;
+    while (ii < 64) {
+        var sbn = str_builder_new();
+        str_builder_add_cstr(sbn, "agent-");
+        str_builder_add_int(sbn, ii);
+        var nm = str_data(str_builder_build(sbn));
+        var ips = netns_generate_agent_ips(nm);
+        var hip = load64(ips);
+        var aip = load64(ips + 8);
+        assert(agnodrm_cstr_starts_with(hip, "10.100.") == 1, "ip_prefix");
+        assert_eq(_netns_ipv4_ok(hip, strlen(hip)), 1, "ip_host_valid");
+        assert_eq(_netns_ipv4_ok(aip, strlen(aip)), 1, "ip_agent_valid");
+        if (map_has(seen, hip) == 1) { clashes = clashes + 1; }
+        map_set(seen, hip, 1);
+        ii = ii + 1;
+    }
+    assert_eq(clashes, 0, "ip_no_clash_in_64");
+    var cfa = netns_config_for_agent("agent-1");
+    assert(is_ok(netns_validate_config(cfa)) == 1, "ip_for_agent_valid");
+
+    # Applying, with a stub `ip` and a run dir of our own.
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-fw-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "fw_fx_mkdir");
+    var stub = _blfx_path(root, "ip");
+    var log = _blfx_path(root, "ip.log");
+    var seen_path = _blfx_path(root, "seen");
+    var head = "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nfor a; do last=$a; done\n";
+    var keep = netns_concat2(head, "[ -f \"$last\" ] && /usr/bin/cp \"$last\" ");
+    var body = netns_concat3(keep, seen_path, "\nexit 0\n");
+    _updfx_tool(root, "/ip", body);
+    _netns_ip_path = stub;
+    var run = _blfx_path(root, "run");
+    _netns_run_dir = run;
+    var h = netns_handle_new("agnos-agent-x", "veth-x-h", "veth-x-a", "/var/run/netns/agnos-agent-x");
+    var a_t, a_v = netns_apply_nftables_ruleset(h, "table inet t {\n}\n");
+    assert(is_ok(a_t) == 1, "fw_apply_ok");
+    assert(_tmpx_holds(seen_path, "table inet t {\n}\n") == 1, "fw_apply_gave_ruleset");
+    assert(_nsfx_log_has(log, "netns exec agnos-agent-x /usr/sbin/nft -f ") == 1, "fw_apply_absolute_nft");
+    assert_eq(_lcfx_mode(run), 0x1ED, "fw_apply_run_dir_mode");
+    sys_chmod(run, 0x1FF);  # mode 0777
+    var w_t, w_v = netns_apply_nftables_ruleset(h, "table inet t {\n}\n");
+    assert(is_err_result(w_t) == 1, "fw_apply_refuses_open_run_dir");
+    sys_chmod(run, 0x1ED);
+    var left = vec_new();
+    assert_eq(dir_list_checked(str_from(run), left), 0, "fw_apply_listed");
+    assert_eq(vec_len(left), 0, "fw_apply_temp_removed");
+    var n1_t, n1_v = netns_apply_nftables_ruleset(0, "x");
+    assert(is_err_result(n1_t) == 1, "fw_apply_null_handle");
+    var n2_t, n2_v = netns_apply_nftables_ruleset(h, 0);
+    assert(is_err_result(n2_t) == 1, "fw_apply_null_ruleset");
+    var n3_t, n3_v = netns_destroy_agent_netns(0);
+    assert(is_err_result(n3_t) == 1, "fw_destroy_null");
+    xunlink(log);
+    var d_t, d_v = netns_destroy_agent_netns(h);
+    assert(is_ok(d_t) == 1, "fw_destroy_ok");
+    assert(_nsfx_log_has(log, "link delete veth-x-h") == 1, "fw_destroy_veth");
+    assert(_nsfx_log_has(log, "netns delete agnos-agent-x") == 1, "fw_destroy_ns");
+    # F-22 end to end: a long name reaches `ip` as two different ends.
+    xunlink(log);
+    var lc = netns_config_new("abcdefghijkl", "10.0.0.2", "10.0.0.1", 30, 1);
+    var lh_t, lh_v = netns_create_agent_netns(lc);
+    assert(is_ok(lh_t) == 1, "fw_long_create_ok");
+    assert(streq(netns_handle_veth_host(lh_v), netns_handle_veth_agent(lh_v)) == 0, "fw_long_handle_differs");
+    assert(_nsfx_log_has(log, "/usr/sbin/ip addr add 10.0.0.2/30") == 1, "fw_long_inner_absolute");
+    _netns_ip_path = 0;
+    _netns_run_dir = 0;
+    xunlink(stub);
+    xunlink(log);
+    xunlink(seen_path);
+    xrmdir(run);
+    assert_eq(xrmdir(root), 0, "fw_fx_cleanup");
+    return 0;
+}
+
+# ================================================================
+# fuse: mount, unmount and status (audit F-23, F-48)
+# ================================================================
+
+fn test_fuse_ops() {
+    println("-- fuse ops (audit F-23, F-48) --");
+    assert_eq(_fuse_type_ok("fuse"), 1, "ft_fuse");
+    assert_eq(_fuse_type_ok("fuseblk"), 1, "ft_fuseblk");
+    assert_eq(_fuse_type_ok("fuse.sshfs"), 1, "ft_subtype");
+    assert_eq(_fuse_type_ok("fuseblk.ntfs"), 1, "ft_blk_subtype");
+    assert_eq(_fuse_type_ok("fusectl"), 0, "ft_fusectl");
+    assert_eq(_fuse_type_ok("fuser"), 0, "ft_prefix");
+    assert_eq(_fuse_type_ok("ext4"), 0, "ft_ext4");
+
+    var sbd = str_builder_new();
+    str_builder_add_cstr(sbd, "/tmp/agnodrm-fo-");
+    str_builder_add_int(sbd, sys_getpid());
+    var root = str_data(str_builder_build(sbd));
+    assert_eq(xmkdir(root, 0x1C0), 0, "fo_fx_mkdir");
+    var mp = _blfx_path(root, "mnt");
+    assert_eq(xmkdir(mp, 0x1C0), 0, "fo_fx_mnt");
+    var tool = _blfx_path(root, "helper");
+    var log = _blfx_path(root, "helper.log");
+    _updfx_tool(root, "/helper", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
+
+    # F-23: nothing a helper would read as an option, and only an absolute helper.
+    var m_t, m_v = fuse_mount("u@h:/", mp, tool, "ro");
+    assert(is_ok(m_t) == 1, "fo_mount_ok");
+    assert(_nsfx_log_has(log, netns_concat3("u@h:/ ", mp, " -o ro")) == 1, "fo_mount_argv");
+    xunlink(log);
+    var d_t, d_v = fuse_mount("-ossh_command=/tmp/evil", mp, tool, 0);
+    assert(is_err_result(d_t) == 1, "fo_device_dash");
+    var p_t, p_v = fuse_mount("u@h:/", "-x", tool, 0);
+    assert(is_err_result(p_t) == 1, "fo_mountpoint_dash");
+    var r_t, r_v = fuse_mount("u@h:/", mp, "sshfs", 0);
+    assert(is_err_result(r_t) == 1, "fo_relative_helper");
+    # Both of these exist, so only the checks themselves can refuse them.
+    var rel = "./agnodrm-rel-helper";
+    _updfx_tool(".", "/agnodrm-rel-helper", "#!/bin/sh\necho \"$*\" >> \"$0.log\"\nexit 0\n");
+    var rh_t, rh_v = fuse_mount("u@h:/", mp, rel, 0);
+    assert(is_err_result(rh_t) == 1, "fo_relative_helper_exists");
+    assert_eq(file_exists("./agnodrm-rel-helper.log"), 0, "fo_relative_helper_never_ran");
+    xunlink(rel);
+    var dash = "-agnodrm-mp";
+    assert_eq(xmkdir(dash, 0x1C0), 0, "fo_dash_fx");
+    var dm_t, dm_v = fuse_mount("u@h:/", dash, tool, 0);
+    assert(is_err_result(dm_t) == 1, "fo_mountpoint_dash_exists");
+    xrmdir(dash);
+    var root_t, root_v = fuse_mount("u@h:/", "/", tool, 0);
+    assert(is_err_result(root_t) == 1, "fo_root_mountpoint");
+    assert_eq(file_exists(log), 0, "fo_refused_never_ran");
+    var n1_t, n1_v = fuse_mount(0, mp, tool, 0);
+    assert(is_err_result(n1_t) == 1, "fo_null_device");
+    var n2_t, n2_v = fuse_mount("x", 0, tool, 0);
+    assert(is_err_result(n2_t) == 1, "fo_null_mountpoint");
+    var n3_t, n3_v = fuse_mount("x", mp, 0, 0);
+    assert(is_err_result(n3_t) == 1, "fo_null_helper");
+    var fh = _blfx_path(root, "fails");
+    _updfx_tool(root, "/fails", "#!/bin/sh\nexit 1\n");
+    var ff_t, ff_v = fuse_mount("u@h:/", mp, fh, 0);
+    assert(is_err_result(ff_t) == 1, "fo_helper_failed");
+
+    # Unmount: "--" before the path, on either tool, with the same checks both ways.
+    _fuse_fusermount = tool;
+    var u_t, u_v = fuse_unmount("-weird");
+    assert(is_ok(u_t) == 1, "fo_unmount_ok");
+    assert(_nsfx_log_has(log, "-u -- -weird") == 1, "fo_unmount_argv");
+    var z_t, z_v = fuse_unmount_lazy(mp);
+    assert(is_ok(z_t) == 1, "fo_lazy_ok");
+    assert(_nsfx_log_has(log, "-uz -- ") == 1, "fo_lazy_argv");
+    var e1_t, e1_v = fuse_unmount("");
+    assert(is_err_result(e1_t) == 1, "fo_unmount_empty");
+    var e2_t, e2_v = fuse_unmount_lazy("");
+    assert(is_err_result(e2_t) == 1, "fo_lazy_empty");
+    var e3_t, e3_v = fuse_unmount(0);
+    assert(is_err_result(e3_t) == 1, "fo_unmount_null");
+    var e4_t, e4_v = fuse_unmount_lazy(0);
+    assert(is_err_result(e4_t) == 1, "fo_lazy_null");
+    _fuse_fusermount = 0;
+    var ut = _fuse_unmount_tool();
+    assert(agnodrm_cstr_starts_with(ut, "/usr/bin/fusermount") == 1, "fo_tool_default");
+
+    # F-48: root by identity, not by spelling.
+    var v0_t, v0_v = fuse_validate_mountpoint(mp);
+    assert(is_ok(v0_t) == 1, "fo_v_ok");
+    var v1_t, v1_v = fuse_validate_mountpoint("/");
+    assert(is_err_result(v1_t) == 1, "fo_v_root");
+    var v2_t, v2_v = fuse_validate_mountpoint("//");
+    assert(is_err_result(v2_t) == 1, "fo_v_double_slash");
+    var v3_t, v3_v = fuse_validate_mountpoint("/.");
+    assert(is_err_result(v3_t) == 1, "fo_v_dot");
+    var v4_t, v4_v = fuse_validate_mountpoint("/tmp/..");
+    assert(is_err_result(v4_t) == 1, "fo_v_dotdot");
+    var v5_t, v5_v = fuse_validate_mountpoint(_blfx_path(root, "missing"));
+    assert(is_err_result(v5_t) == 1, "fo_v_missing");
+    var v6_t, v6_v = fuse_validate_mountpoint(tool);
+    assert(is_err_result(v6_t) == 1, "fo_v_file");
+    var v7_t, v7_v = fuse_validate_mountpoint(0);
+    assert(is_err_result(v7_t) == 1, "fo_v_null");
+
+    # The mount table: fusectl is not FUSE, and a parse takes nothing from the heap for
+    # its read buffer.
+    var mt = _blfx_path(root, "mounts");
+    var tbl = "fusectl /sys/fs/fuse/connections fusectl rw 0 0\nu@h:/ /mnt/a fuse.sshfs rw 0 0\n";
+    tbl = netns_concat2(tbl, "/dev/sdb1 /mnt/b fuseblk rw 0 0\n");
+    file_write_all(mt, tbl, strlen(tbl));
+    var fd = sys_open(mt, O_RDONLY, 0);
+    var t_t, t_v = _fuse_collect_mounts(fd, 1);
+    sys_close(fd);
+    assert_eq(vec_len(t_v), 2, "fo_fusectl_out");
+    assert(streq(fuse_mount_mountpoint(vec_get(t_v, 0)), "/mnt/a") == 1, "fo_table_a");
+    var used0 = alloc_used();
+    fd = sys_open(mt, O_RDONLY, 0);
+    var t2_t, t2_v = _fuse_collect_mounts(fd, 1);
+    sys_close(fd);
+    assert((alloc_used() - used0) < 4096, "fo_table_no_buffer_on_heap");
+    assert_eq(_fuse_mounted_in(t_v, "/mnt/a"), 1, "fo_in_exact");
+    assert_eq(_fuse_mounted_in(t_v, "/mnt/a/"), 1, "fo_in_trailing_slash");
+    assert_eq(_fuse_mounted_in(t_v, "/mnt/a//"), 1, "fo_in_trailing_slashes");
+    assert_eq(_fuse_mounted_in(t_v, "/mnt"), 0, "fo_in_parent");
+    assert_eq(_fuse_mounted_in(t_v, "/mnt/ab"), 0, "fo_in_longer");
+    # Status, on this host: a path nothing is mounted at, with and without a slash.
+    var st_t, st_v = fuse_get_status("/definitely/not/mounted/");
+    assert(is_ok(st_t) == 1, "fo_status_ok");
+    assert_eq(st_v, FUSE_NOT_MOUNTED, "fo_status_not_mounted");
+    var sn_t, sn_v = fuse_get_status(0);
+    assert(is_err_result(sn_t) == 1, "fo_status_null");
+    var pm_t, pm_v = fuse_parse_proc_mounts(0, 4, 0);
+    assert(is_err_result(pm_t) == 1, "fo_parse_null");
+
+    xunlink(mt);
+    xunlink(tool);
+    xunlink(log);
+    xunlink(fh);
+    xrmdir(mp);
+    assert_eq(xrmdir(root), 0, "fo_fx_cleanup");
     return 0;
 }
 
@@ -1465,11 +3453,18 @@ fn main() {
     test_bootctl_parse();
     test_fd_hygiene();
     test_tmp_exclusive();
+    test_core_hardening();
+    test_bootloader_tree();
     test_update_slots();
+    test_update_lifecycle();
+    test_update_versions();
     test_fuse_mount_table();
     test_netns_setup();
     test_run_capture_status();
     test_journald_payload();
+    test_journald_io();
+    test_netns_firewall();
+    test_fuse_ops();
     test_fuse();
     test_udev();
     test_drm();

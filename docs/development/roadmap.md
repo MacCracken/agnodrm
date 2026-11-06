@@ -25,6 +25,24 @@ netns / bootloader / update / fuse) parked post-v1. It does NOT own:
 - **Trust / security / firmware / syscall / logging** — moved out at 1.4.4 to
   sigil / kavach / aegis / cyrius / sakshi (see the decomposition plan).
 
+## P(-1) audit ✅ (done at 1.7.2, 2026-11-05)
+
+- [x] Findings F-15 to F-60 repaired: 4 HIGH, 23 MEDIUM, 19 LOW; see [`docs/audit/2026-11-05-audit.md`](../audit/2026-11-05-audit.md).
+- [x] The slot write order written down in [`docs/architecture/001-slot-write-order.md`](../architecture/001-slot-write-order.md).
+- [x] `audit.sh` to 14 gates; four new fuzz harnesses; CI checks the toolchain hash and runs least-privilege.
+
+Left open:
+
+- [ ] **Authenticate updates.** `update_apply` compares a sha256 against an unsigned manifest, so it catches a corrupt image and not a forged one. The signature check belongs with sigil.
+- [ ] **Proving a reboot.** With the kernel's `boot_id` in the state file, a rollback could finish on a host whose `efibootmgr` fails. It refuses there today, which is safe to wait out.
+- [ ] **The journal's sealed-memfd path** for messages over about 212 KB, which return `EMSGSIZE` today.
+- [ ] **BLS `efi`, `uki`, `uki-url` and `extra` keys** on `bootloader_entry`, so a validator can see every way an entry boots.
+- [ ] **Inert fields:** `enable_nat`, the netns DNS fields, `min_version`, `max_retries`, `backup_dir`. Implement or remove them at 2.0.
+- [ ] **`BootOrder`.** Nothing updates it, so a slot stays selected past its one `BootNext` only if argonaut sees to it. Check against argonaut.
+- [ ] **A deadline on `journald_query`** for hostile `--grep` patterns.
+- [ ] **Run aarch64 tests in CI.** The lane builds and never runs, and this release's aarch64 run is local, under `qemu-aarch64`.
+- [ ] **Remove at 2.0:** `netns_nft_append`, `netns_truncate_veth`, `bootloader_is_dangerous_token`.
+
 ## Moving the cyrius pin to 6.7.18 ✅ (done at 1.7.1, 2026-11-05)
 
 - [x] `./lib/` rebuilt clean (40 files, byte-identical to the 6.7.18 snapshot) and `cyrius.lock` regenerated.

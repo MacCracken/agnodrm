@@ -9,6 +9,8 @@
 # Included directly (as drm.cyr does) for the per-target O_* open flags;
 # include-once, so includers pay nothing.
 include "lib/syscalls.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
 
 # ================================================================
 # Update slot constants
@@ -42,12 +44,50 @@ var VER_LESS = 0 - 1;
 var VER_EQUAL = 0;
 var VER_GREATER = 1;
 
+enum UpdateLimits {
+    UPDATE_JSON_MAX = 1048576;       # the state file and a manifest, bytes
+    UPDATE_STATE_FIELD_MAX = 1024;   # one saved version string, bytes
+    UPDATE_CMDLINE_MAX = 8192;       # past this /proc/cmdline cannot be read whole
+    UPDATE_COPY_CHUNK = 1048576;
+    UPDATE_BOOTS_MAX = 1000000000000000000;  # 18 digits, what the reader takes
+    UPDATE_VER_FIELD_DIGITS = 6;     # 20 bits; three of them fit a positive i64
+    UPDATE_VER_FIELD_BITS = 20;
+    UPDATE_VER_FIELD_MASK = 0xFFFFF;
+}
+
 # ================================================================
 # Atomic file write
 # ================================================================
 
+# Publish a finished temp over `dst`: set `mode` (negative leaves the temp's), flush,
+# close, rename, then flush the directory, so the rename is on disk before whatever the
+# caller does next. Consumes `fd`. Before the rename any failure removes the temp and
+# leaves `dst` alone. Returns Result: Ok(0) or Err.
+fn _update_commit_tmp(fd, tmppath, dst, mode): i64 {
+    var ret = 0;
+    if (mode >= 0) { ret = sys_fchmod(fd, mode); }
+    if (ret >= 0) { ret = agnodrm_fsync(fd); }
+    file_close(fd);
+    if (ret < 0) {
+        xunlink(tmppath);
+        return drm_err_io(0 - ret, "atomic update: chmod or fsync failed");
+    }
+    ret = agnodrm_rename(tmppath, dst);
+    if (ret < 0) {
+        xunlink(tmppath);
+        return drm_err_io(0 - ret, "atomic update: rename failed");
+    }
+    ret = _agnodrm_fsync_parent(dst);
+    if (ret < 0) {
+        return drm_err_io(0 - ret, "atomic update: directory fsync failed");
+    }
+    return Ok(0);
+}
+
 # Atomically write data to a file path. Writes to a temp file first,
-# then renames to the target path.
+# then renames to the target path. A target that exists keeps its permission bits, and
+# the temp is born with them, so a 0600 file's new bytes are never readable by more
+# than the old ones were (audit F-32). A new file is 0644 before umask.
 # path: destination file path (null-terminated).
 # data: pointer to data buffer.
 # data_len: number of bytes to write.
@@ -65,40 +105,24 @@ fn update_atomic_write(path, data, data_len): i64 {
     }
 
     # Write to an exclusive temp beside the target; see agnodrm_tmp_create.
+    var mode = _agnodrm_file_mode(path);
+    var born = 0x1A4;  # mode 0644
+    if (mode >= 0) { born = mode; }
     var tmppath = 0;
-    var fd = agnodrm_tmp_create(path, &tmppath);
+    var fd = _agnodrm_tmp_open(path, &tmppath, born);
     if (fd < 0) {
         return drm_err_io(0 - fd, "atomic_write: failed to create temp file");
     }
 
-    var written = 0;
-    while (written < data_len) {
-        var chunk = data_len - written;
-        if (chunk > 4096) { chunk = 4096; }
-        var ret = sys_write(fd, data + written, chunk);
-        if (ret < 0) {
-            sys_close(fd);
-            sys_unlink(tmppath);
-            return drm_err_io(0 - ret, "atomic_write: write failed");
-        }
-        written = written + ret;
-    }
-
-    # fsync, then close before the rename
-    var ret = agnodrm_fsync(fd);
-    sys_close(fd);
+    var ret = _agnodrm_write_all(fd, data, data_len);
     if (ret < 0) {
-        sys_unlink(tmppath);
-        return drm_err_io(0 - ret, "atomic_write: fsync failed");
+        file_close(fd);
+        xunlink(tmppath);
+        return drm_err_io(0 - ret, "atomic_write: write failed");
     }
 
-    # Rename temp to target
-    ret = agnodrm_rename(tmppath, path);
-    if (ret < 0) {
-        sys_unlink(tmppath);
-        return drm_err_io(0 - ret, "atomic_write: rename failed");
-    }
-
+    var res_t, res_v = _update_commit_tmp(fd, tmppath, path, mode);
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
     return Ok(0);
     #endif
 }
@@ -107,7 +131,33 @@ fn update_atomic_write(path, data, data_len): i64 {
 # Atomic file copy
 # ================================================================
 
-# Atomically copy src to dst (via temp + rename).
+# Copy all of `src_fd` to `dst_fd`. Returns the byte count, or a negative errno.
+fn _update_copy_fd(src_fd, dst_fd): i64 {
+    var cap = UPDATE_COPY_CHUNK;
+    var buf = _agnodrm_scratch_new(cap);
+    if (buf == 0) { return 0 - ENOMEM; }
+    var total = 0;
+    while (1) {
+        var n = _agnodrm_read_all(src_fd, buf, cap);
+        if (n < 0) {
+            total = n;
+            break;
+        }
+        if (n == 0) { break; }
+        var w = _agnodrm_write_all(dst_fd, buf, n);
+        if (w < 0) {
+            total = w;
+            break;
+        }
+        total = total + n;
+    }
+    _agnodrm_scratch_free(buf, cap);
+    return total;
+}
+
+# Atomically copy src to dst (via temp + rename). As with cp, an existing dst keeps its
+# permission bits and a new one takes src's, so a 0600 key stays 0600 and a tool stays
+# executable (audit F-32).
 # Returns Result: Ok(bytes_copied) or Err.
 fn update_atomic_copy(src, dst): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
@@ -118,63 +168,40 @@ fn update_atomic_copy(src, dst): i64 {
     if (dst == 0) { return drm_err_invalid_argument("atomic_copy dst is null"); }
 
     # Open source
-    var src_fd = sys_open(src, O_RDONLY, 0);
+    var src_fd = sys_open(src, O_RDONLY | O_CLOEXEC, 0);
     if (src_fd < 0) {
         return drm_err_io(0 - src_fd, "atomic_copy: failed to open source");
     }
 
+    var mode = _agnodrm_file_mode(dst);
+    var born = mode;
+    if (mode < 0) {
+        var st = alloc(STAT_BUFSZ);
+        born = 0x1A4;  # mode 0644
+        if (sys_fstat(src_fd, st) == 0) {
+            mode = load32(st + STAT_MODE) & 0x1FF;
+            born = mode;
+        }
+    }
+
     # Exclusive temp beside the destination; see agnodrm_tmp_create.
     var tmppath = 0;
-    var dst_fd = agnodrm_tmp_create(dst, &tmppath);
+    var dst_fd = _agnodrm_tmp_open(dst, &tmppath, born);
     if (dst_fd < 0) {
-        sys_close(src_fd);
+        file_close(src_fd);
         return drm_err_io(0 - dst_fd, "atomic_copy: failed to create temp dest");
     }
 
-    # Copy loop
-    var buf = alloc(4096);
-    var total = 0;
-    var nread = sys_read(src_fd, buf, 4096);
-    while (nread > 0) {
-        var nwritten = 0;
-        while (nwritten < nread) {
-            var ret = sys_write(dst_fd, buf + nwritten, nread - nwritten);
-            if (ret < 0) {
-                sys_close(dst_fd);
-                sys_close(src_fd);
-                sys_unlink(tmppath);
-                return drm_err_io(0 - ret, "atomic_copy: write failed");
-            }
-            nwritten = nwritten + ret;
-        }
-        total = total + nread;
-        nread = sys_read(src_fd, buf, 4096);
-    }
-    sys_close(src_fd);
-
-    if (nread < 0) {
-        sys_close(dst_fd);
-        sys_unlink(tmppath);
-        return drm_err_io(0 - nread, "atomic_copy: read failed");
+    var total = _update_copy_fd(src_fd, dst_fd);
+    file_close(src_fd);
+    if (total < 0) {
+        file_close(dst_fd);
+        xunlink(tmppath);
+        return drm_err_io(0 - total, "atomic_copy: copy failed");
     }
 
-    # fsync, then close before the rename. A failed fsync fails the copy, as it
-    # does in update_atomic_write — renaming an unflushed file over the target
-    # would publish data that may not be on disk.
-    var ret = agnodrm_fsync(dst_fd);
-    sys_close(dst_fd);
-    if (ret < 0) {
-        sys_unlink(tmppath);
-        return drm_err_io(0 - ret, "atomic_copy: fsync failed");
-    }
-
-    # Rename temp to target
-    ret = agnodrm_rename(tmppath, dst);
-    if (ret < 0) {
-        sys_unlink(tmppath);
-        return drm_err_io(0 - ret, "atomic_copy: rename failed");
-    }
-
+    var res_t, res_v = _update_commit_tmp(dst_fd, tmppath, dst, mode);
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
     return Ok(total);
     #endif
 }
@@ -183,80 +210,78 @@ fn update_atomic_copy(src, dst): i64 {
 # Version validation (CalVer YYYY.M.D)
 # ================================================================
 
+# Pack "Y.M.D" into one positive integer that orders as the version does, or -1 if it
+# is not exactly three runs of 1 to UPDATE_VER_FIELD_DIGITS digits. The digit cap is what
+# stops the wrap: unbounded, 18446744073709553642.1.1 parsed as 2026.1.1 and passed
+# validation (audit F-52). No heap: update_compare_versions is called per candidate.
+fn _update_version_key(version): i64 {
+    if (version == 0) { return 0 - 1; }
+    var key = 0;
+    var field = 0;
+    var digits = 0;
+    var parts = 0;
+    var i = 0;
+    while (1) {
+        var c = load8(version + i);
+        i = i + 1;
+        if (c >= 48 && c <= 57) {
+            digits = digits + 1;
+            if (digits > UPDATE_VER_FIELD_DIGITS) { return 0 - 1; }
+            field = field * 10 + (c - 48);
+            continue;
+        }
+        if (c != 46) {
+            if (c != 0) { return 0 - 1; }
+        }
+        if (digits == 0) { return 0 - 1; }
+        key = (key << UPDATE_VER_FIELD_BITS) | field;
+        parts = parts + 1;
+        if (c == 0) { break; }
+        if (parts == 3) { return 0 - 1; }
+        field = 0;
+        digits = 0;
+    }
+    if (parts != 3) { return 0 - 1; }
+    return key;
+}
+
 # Parse a version string into { year, month, day }.
 # Returns pointer to 24-byte struct, or 0 on parse failure.
 fn update_parse_version(version): i64 {
-    if (version == 0) { return 0; }
-    var vlen = strlen(version);
-    if (vlen == 0) { return 0; }
-
-    # Find first dot
-    var dot1 = 0;
-    var i = 0;
-    while (i < vlen) {
-        if (load8(version + i) == 46) { dot1 = i; break; }
-        i = i + 1;
-    }
-    if (dot1 == 0) { return 0; }
-
-    # Find second dot
-    var dot2 = 0;
-    i = dot1 + 1;
-    while (i < vlen) {
-        if (load8(version + i) == 46) { dot2 = i; break; }
-        i = i + 1;
-    }
-    if (dot2 == 0) { return 0; }
-
-    # Parse year (before first dot)
-    var year = 0;
-    i = 0;
-    while (i < dot1) {
-        var c = load8(version + i);
-        if (c < 48) { return 0; }
-        if (c > 57) { return 0; }
-        year = year * 10 + (c - 48);
-        i = i + 1;
-    }
-
-    # Parse month (between dots)
-    var month = 0;
-    i = dot1 + 1;
-    while (i < dot2) {
-        var c = load8(version + i);
-        if (c < 48) { return 0; }
-        if (c > 57) { return 0; }
-        month = month * 10 + (c - 48);
-        i = i + 1;
-    }
-
-    # Parse day (after second dot)
-    var day = 0;
-    i = dot2 + 1;
-    while (i < vlen) {
-        var c = load8(version + i);
-        if (c < 48) { return 0; }
-        if (c > 57) { return 0; }
-        day = day * 10 + (c - 48);
-        i = i + 1;
-    }
-
+    var key = _update_version_key(version);
+    if (key < 0) { return 0; }
     var v = alloc(24);
-    store64(v, year);
-    store64(v + 8, month);
-    store64(v + 16, day);
+    store64(v, key >> (UPDATE_VER_FIELD_BITS * 2));
+    store64(v + 8, (key >> UPDATE_VER_FIELD_BITS) & UPDATE_VER_FIELD_MASK);
+    store64(v + 16, key & UPDATE_VER_FIELD_MASK);
     return v;
 }
 
-# Validate a CalVer version string (YYYY.M.D).
+fn _update_month_days(year, month): i64 {
+    if (month == 2) {
+        if (year % 4 != 0) { return 28; }
+        if (year % 100 == 0) {
+            if (year % 400 != 0) { return 28; }
+        }
+        return 29;
+    }
+    if (month == 4) { return 30; }
+    if (month == 6) { return 30; }
+    if (month == 9) { return 30; }
+    if (month == 11) { return 30; }
+    return 31;
+}
+
+# Validate a CalVer version string (YYYY.M.D): a real date in 2024-2100.
 # Returns Result: Ok(0) or Err.
 fn update_validate_version(version): i64 {
-    var v = update_parse_version(version);
-    if (v == 0) {
+    var key = _update_version_key(version);
+    if (key < 0) {
         return drm_err_invalid_argument("version must have exactly 3 parts (YYYY.M.D)");
     }
-    var year = load64(v);
-    var month = load64(v + 8);
+    var year = key >> (UPDATE_VER_FIELD_BITS * 2);
+    var month = (key >> UPDATE_VER_FIELD_BITS) & UPDATE_VER_FIELD_MASK;
+    var day = key & UPDATE_VER_FIELD_MASK;
 
     if (year < 2024) {
         return drm_err_invalid_argument("version year out of range (2024-2100)");
@@ -270,6 +295,12 @@ fn update_validate_version(version): i64 {
     if (month > 12) {
         return drm_err_invalid_argument("version month out of range (1-12)");
     }
+    if (day < 1) {
+        return drm_err_invalid_argument("version day out of range");
+    }
+    if (day > _update_month_days(year, month)) {
+        return drm_err_invalid_argument("version day out of range");
+    }
     return Ok(0);
 }
 
@@ -277,54 +308,36 @@ fn update_validate_version(version): i64 {
 # Version comparison
 # ================================================================
 
+# Byte-wise order of two C strings, a null reading as empty.
+fn _update_compare_text(a, b): i64 {
+    if (a == 0) { a = ""; }
+    if (b == 0) { b = ""; }
+    var i = 0;
+    while (1) {
+        var ca = load8(a + i);
+        var cb = load8(b + i);
+        if (ca < cb) { return VER_LESS; }
+        if (ca > cb) { return VER_GREATER; }
+        if (ca == 0) { return VER_EQUAL; }
+        i = i + 1;
+    }
+    return VER_EQUAL;
+}
+
 # Compare two CalVer version strings.
 # Returns VER_LESS (-1), VER_EQUAL (0), or VER_GREATER (1).
-# Falls back to byte-by-byte comparison if either string is malformed.
+# Anything malformed orders below any version, and two malformed strings compare
+# byte by byte.
 fn update_compare_versions(a, b): i64 {
-    var va = update_parse_version(a);
-    var vb = update_parse_version(b);
-
-    if (va == 0) {
-        if (vb == 0) {
-            # Both malformed: lexicographic comparison
-            var alen = strlen(a);
-            var blen = strlen(b);
-            var minlen = alen;
-            if (blen < minlen) { minlen = blen; }
-            var i = 0;
-            while (i < minlen) {
-                var ca = load8(a + i);
-                var cb = load8(b + i);
-                if (ca < cb) { return VER_LESS; }
-                if (ca > cb) { return VER_GREATER; }
-                i = i + 1;
-            }
-            if (alen < blen) { return VER_LESS; }
-            if (alen > blen) { return VER_GREATER; }
-            return VER_EQUAL;
-        }
+    var ka = _update_version_key(a);
+    var kb = _update_version_key(b);
+    if (ka < 0) {
+        if (kb < 0) { return _update_compare_text(a, b); }
         return VER_LESS;
     }
-    if (vb == 0) { return VER_GREATER; }
-
-    # Compare year
-    var ay = load64(va);
-    var by = load64(vb);
-    if (ay < by) { return VER_LESS; }
-    if (ay > by) { return VER_GREATER; }
-
-    # Compare month
-    var am = load64(va + 8);
-    var bm = load64(vb + 8);
-    if (am < bm) { return VER_LESS; }
-    if (am > bm) { return VER_GREATER; }
-
-    # Compare day
-    var ad = load64(va + 16);
-    var bd = load64(vb + 16);
-    if (ad < bd) { return VER_LESS; }
-    if (ad > bd) { return VER_GREATER; }
-
+    if (kb < 0) { return VER_GREATER; }
+    if (ka < kb) { return VER_LESS; }
+    if (ka > kb) { return VER_GREATER; }
     return VER_EQUAL;
 }
 
@@ -377,25 +390,27 @@ fn update_channel_str(channel): i64 {
 }
 
 # ================================================================
-# UpdateState struct — 5 fields * 8 = 40 bytes.
+# UpdateState struct — 6 fields * 8 = 48 bytes.
 # Field names match 1.0 getters (`slot`/`version`/`pending`/
 # `rollback_available`/`boot_count`), not the doc-comment names
 # (`current_slot`/`current_version`/`pending_update`/
 # `boot_count_since_update`). The 1.0 `set_rollback/2` setter
 # (asymmetric — getter is `rollback_available`) stays as a thin
-# wrapper.
+# wrapper. `previous` is the version on the slot left behind, known
+# once an image is confirmed over it, or 0.
 # ================================================================
 
 #derive(accessors)
-struct update_state { slot; version; pending; rollback_available; boot_count; }
+struct update_state { slot; version; pending; rollback_available; boot_count; previous; }
 
 fn update_state_new(slot, version): i64 {
-    var s = alloc(40);
+    var s = alloc(48);
     update_state_set_slot(s, slot);
     update_state_set_version(s, version);
     update_state_set_pending(s, 0);
     update_state_set_rollback_available(s, 0);
     update_state_set_boot_count(s, 0);
+    update_state_set_previous(s, 0);
     return s;
 }
 
@@ -425,8 +440,10 @@ fn update_state_to_json(s, sb): i64 {
 # ================================================================
 # UpdateConfig struct — 7 fields * 8 = 56 bytes.
 # Field names match 1.0 getters: `url`/`slot_a`/`slot_b` (not the
-# doc names `update_url`/`slot_a_device`/`slot_b_device`); `verify`
-# (not `verify_after_apply`).
+# doc names `update_url`/`slot_a_device`/`slot_b_device`). `verify`,
+# on by default, compares the image's sha256 to the manifest's before
+# update_apply writes it. `max_retries` and `backup_dir` are carried
+# and nothing reads them (roadmap.md).
 # ================================================================
 
 #derive(accessors)
@@ -460,8 +477,8 @@ fn update_config_device_for_slot(c, slot): i64 {
 # ================================================================
 # UpdateManifest struct — 6 fields * 8 = 48 bytes.
 # Field name `files` matches 1.0 getter (not doc-comment `files_vec`).
-# Note: sha256_digest verification deferred — requires SHA-256 (roadmap.md V1.5.x).
-# For now, manifest validation checks structural integrity only (roadmap.md V1.5.x).
+# The manifest is not signed; see update_verify_manifest and update_apply. min_version
+# is carried and not enforced (roadmap.md).
 # ================================================================
 
 #derive(accessors)
@@ -517,24 +534,13 @@ fn _update_path(path): i64 {
     return full;
 }
 
-# The slot the kernel cmdline says this boot came from: Ok(SLOT_A or SLOT_B), Ok(0)
-# if it has no agnos.slot= token, or Err for one that cannot be read as a slot. Whole
-# tokens only: "xagnos.slot=b" is not the key and "agnos.slot=banana" is not slot B.
-# Tokens split as the kernel splits them: blanks inside double quotes do not end one,
-# so foo="bar agnos.slot=a" is one parameter of foo, and "--" ends the kernel's own
-# parameters, so anything after it is init's. Two tokens that disagree are an Err,
-# because update_apply overwrites by this answer.
-fn _update_cmdline_slot(): i64 {
-    #ifdef CYRIUS_TARGET_AGNOS
-    return Ok(0);            # agnos has no /proc/cmdline
-    #endif
-    #ifndef CYRIUS_TARGET_AGNOS
-    var fd = sys_open(_update_path("/proc/cmdline"), O_RDONLY, 0);
-    if (fd < 0) { return Ok(0); }
-    var text = agnodrm_read_fd_to_str(fd, 8192);
-    sys_close(fd);
-    var p = str_data(text);
-    var n = str_len(text);
+# Find agnos.slot= in `n` bytes of kernel cmdline. Whole tokens only: "xagnos.slot=b" is
+# not the key and "agnos.slot=banana" is not slot B. Tokens split as the kernel splits
+# them: blanks inside double quotes do not end one, so foo="bar agnos.slot=a" is one
+# parameter of foo, and "--" ends the kernel's own parameters, so anything after it is
+# init's. Two tokens that disagree are an Err, because update_apply overwrites by this
+# answer. Returns Result: Ok(SLOT_A or SLOT_B), Ok(0) if there is none, or Err.
+fn _update_scan_cmdline(p, n): i64 {
     var found = 0;
     var pos = 0;
     while (pos < n) {
@@ -575,6 +581,38 @@ fn _update_cmdline_slot(): i64 {
         found = slot;
     }
     return Ok(found);
+}
+
+# The slot the kernel cmdline says this boot came from: Ok(SLOT_A or SLOT_B), Ok(0) if
+# it has no agnos.slot= token, or Err for one that cannot be read as a slot. A cmdline
+# too long to read whole is an Err, since a conflicting token could be past the cut.
+fn _update_cmdline_slot(): i64 {
+    #ifdef CYRIUS_TARGET_AGNOS
+    return Ok(0);            # agnos has no /proc/cmdline
+    #endif
+    #ifndef CYRIUS_TARGET_AGNOS
+    var fd = sys_open(_update_path("/proc/cmdline"), O_RDONLY | O_CLOEXEC, 0);
+    if (fd < 0) { return Ok(0); }
+    var cap = UPDATE_CMDLINE_MAX + 1;
+    var buf = _agnodrm_scratch_new(cap);
+    if (buf == 0) {
+        sys_close(fd);
+        return drm_err_io(ENOMEM, "no memory to read the kernel cmdline");
+    }
+    var n = _agnodrm_read_all(fd, buf, cap);
+    sys_close(fd);
+    if (n < 0) {
+        _agnodrm_scratch_free(buf, cap);
+        return drm_err_io(0 - n, "failed to read the kernel cmdline");
+    }
+    if (n >= cap) {
+        _agnodrm_scratch_free(buf, cap);
+        return drm_err_invalid_argument("kernel cmdline is too long to read whole");
+    }
+    var res_t, res_v = _update_scan_cmdline(buf, n);
+    _agnodrm_scratch_free(buf, cap);
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
+    return Ok(res_v);
     #endif
 }
 
@@ -594,25 +632,8 @@ fn update_get_current_slot(): i64 {
     if (is_err_result(cmd_t) == 1) { return Err(cmd_v); }
     if (cmd_v != 0) { return Ok(cmd_v); }
 
-    # Fallback: read state file
-    var sfd = sys_open(_update_path("/var/lib/agnos/update-state.json"), O_RDONLY, 0);
-    if (sfd >= 0) {
-        var sbuf = alloc(4096);
-        var sn = sys_read(sfd, sbuf, 4095);
-        sys_close(sfd);
-        if (sn > 0) {
-            store8(sbuf + sn, 0);
-            var idx = strstr(sbuf, "\"current_slot\"");
-            if (idx >= 0) {
-                var vi = idx + 14;
-                while (vi < sn && load8(sbuf + vi) != 49 && load8(sbuf + vi) != 50) { vi = vi + 1; }
-                if (vi < sn) {
-                    if (load8(sbuf + vi) == 49) { return Ok(SLOT_A); }
-                    if (load8(sbuf + vi) == 50) { return Ok(SLOT_B); }
-                }
-            }
-        }
-    }
+    var st_t, st_v = update_load_state(_update_path("/var/lib/agnos/update-state.json"));
+    if (is_ok(st_t) == 1) { return Ok(update_state_slot(st_v)); }
 
     # Default to slot A
     return Ok(SLOT_A);
@@ -623,88 +644,275 @@ fn update_get_current_slot(): i64 {
 # State persistence
 # ================================================================
 
+# A small reader for the two JSON documents this module takes from disk. It walks the
+# tokens, so text inside a string is never read as a key: a version holding
+# "rollback_available":true stays a version (audit F-31). Bare substring scans read
+# "current_slot":0 as slot 2 and "rollback_available":null as true (audit F-53).
+
+fn _update_json_ws(p, n, i): i64 {
+    while (i < n) {
+        var c = load8(p + i);
+        if (c != 32) { if (c != 9) { if (c != 10) { if (c != 13) { break; } } } }
+        i = i + 1;
+    }
+    return i;
+}
+
+# The index just past the string opening at `i`, or -1.
+fn _update_json_skip_str(p, n, i): i64 {
+    i = i + 1;
+    while (i < n) {
+        var c = load8(p + i);
+        if (c == 34) { return i + 1; }
+        if (c < 32) { return 0 - 1; }
+        if (c == 92) { i = i + 1; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+# The index just past the value starting at `i`, or -1.
+fn _update_json_skip_value(p, n, i): i64 {
+    if (i >= n) { return 0 - 1; }
+    var c = load8(p + i);
+    if (c == 34) { return _update_json_skip_str(p, n, i); }
+    if (c == 123 || c == 91) {
+        var depth = 0;
+        while (i < n) {
+            c = load8(p + i);
+            if (c == 34) {
+                i = _update_json_skip_str(p, n, i);
+                if (i < 0) { return 0 - 1; }
+                continue;
+            }
+            if (c == 123 || c == 91) { depth = depth + 1; }
+            if (c == 125 || c == 93) {
+                depth = depth - 1;
+                if (depth == 0) { return i + 1; }
+            }
+            i = i + 1;
+        }
+        return 0 - 1;
+    }
+    var start = i;
+    while (i < n) {
+        c = load8(p + i);
+        if (c == 44 || c == 125 || c == 93) { break; }
+        if (c == 32 || c == 9 || c == 10 || c == 13) { break; }
+        i = i + 1;
+    }
+    if (i == start) { return 0 - 1; }
+    return i;
+}
+
+# The offset of top-level `key`'s value in the JSON object at `p`, -1 if it has none, or
+# -2 if the text is not one whole object. Always walks to the end, so a file cut short
+# is caught even when the key comes first. The first of a repeated key wins.
+fn _update_json_field(p, n, key): i64 {
+    var found = 0 - 1;
+    var klen = strlen(key);
+    var i = _update_json_ws(p, n, 0);
+    if (i >= n) { return 0 - 2; }
+    if (load8(p + i) != 123) { return 0 - 2; }
+    i = _update_json_ws(p, n, i + 1);
+    if (i < n) {
+        if (load8(p + i) == 125) {
+            if (_update_json_ws(p, n, i + 1) != n) { return 0 - 2; }
+            return found;
+        }
+    }
+    while (i < n) {
+        if (load8(p + i) != 34) { return 0 - 2; }
+        var kstart = i + 1;
+        var kend = _update_json_skip_str(p, n, i);
+        if (kend < 0) { return 0 - 2; }
+        i = _update_json_ws(p, n, kend);
+        if (i >= n) { return 0 - 2; }
+        if (load8(p + i) != 58) { return 0 - 2; }
+        i = _update_json_ws(p, n, i + 1);
+        var vstart = i;
+        i = _update_json_skip_value(p, n, i);
+        if (i < 0) { return 0 - 2; }
+        if (found < 0) {
+            if (kend - kstart - 1 == klen) {
+                if (memeq(p + kstart, key, klen) == 1) { found = vstart; }
+            }
+        }
+        i = _update_json_ws(p, n, i);
+        if (i >= n) { return 0 - 2; }
+        var sep = load8(p + i);
+        if (sep == 125) {
+            if (_update_json_ws(p, n, i + 1) != n) { return 0 - 2; }
+            return found;
+        }
+        if (sep != 44) { return 0 - 2; }
+        i = _update_json_ws(p, n, i + 1);
+    }
+    return 0 - 2;
+}
+
+# A heap copy of the string value at `i`, or 0 if there is no string there. One holding
+# an escape counts as none: nothing here writes one, and a version never needs one.
+fn _update_json_str(p, n, i): i64 {
+    if (i >= n) { return 0; }
+    if (load8(p + i) != 34) { return 0; }
+    var end = _update_json_skip_str(p, n, i);
+    if (end < 0) { return 0; }
+    var len = end - i - 2;
+    var out = alloc(len + 1);
+    memcpy(out, p + i + 1, len);
+    store8(out + len, 0);
+    if (memchr(out, 92, len) >= 0) { return 0; }
+    return out;
+}
+
+# 1 if the value at `i` is exactly the bare word `word`.
+fn _update_json_is(p, n, i, word): i64 {
+    var end = _update_json_skip_value(p, n, i);
+    if (end < 0) { return 0; }
+    var wlen = strlen(word);
+    if (end - i != wlen) { return 0; }
+    return memeq(p + i, word, wlen);
+}
+
+# 1 if a version string can be saved: bounded, and nothing that JSON would need escaped.
+fn _update_state_text_ok(s): i64 {
+    if (s == 0) { return 1; }
+    var n = strlen(s);
+    if (n > UPDATE_STATE_FIELD_MAX) { return 0; }
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c < 32 || c > 126 || c == 34 || c == 92) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
 # Save update state to a JSON file.
-# Returns Result: Ok(0) or Err.
+# Returns Result: Ok(0) or Err. A slot that is neither A nor B, a negative boot count, or
+# a version string JSON would have to escape is refused: nothing is written that
+# update_load_state would not read back unchanged (audit F-31, F-53).
 fn update_save_state(state, path): i64 {
     if (state == 0) { return drm_err_invalid_argument("state is null"); }
     if (path == 0) { return drm_err_invalid_argument("path is null"); }
 
-    # Build JSON manually. Size the buffer from the actual variable-length
-    # fields (version, pending) plus fixed scaffolding, so a large field
-    # value loaded from an external state file can't overflow a fixed
-    # allocation. Fixed literals + slot digit + boot_count int total <120
-    # bytes; 160 leaves headroom.
+    var slot = update_state_slot(state);
+    if (slot != SLOT_A) {
+        if (slot != SLOT_B) { return drm_err_invalid_argument("state slot is neither A nor B"); }
+    }
     var ver = update_state_version(state);
     var pending = update_state_pending(state);
-    var vlen = 0;
-    if (ver != 0) { vlen = strlen(ver); }
-    var plen = 0;
-    if (pending != 0) { plen = strlen(pending); }
-    var buf = alloc(160 + vlen + plen);
-    var pos = 0;
-
-    # JSON: current_slot, current_version, pending, rollback, boot_count
-    var hdr = "{\"current_slot\":";
-    memcpy(buf + pos, hdr, strlen(hdr));
-    pos = pos + strlen(hdr);
-
-    var slot = update_state_slot(state);
-    store8(buf + pos, 48 + slot);  # '0' + slot value (1 or 2)
-    pos = pos + 1;
-
-    var cvh = ",\"current_version\":\"";
-    memcpy(buf + pos, cvh, strlen(cvh));
-    pos = pos + strlen(cvh);
-
-    if (ver != 0) {
-        memcpy(buf + pos, ver, vlen);
-        pos = pos + vlen;
+    if (_update_state_text_ok(ver) != 1) {
+        return drm_err_invalid_argument("state version is too long or holds a character JSON escapes");
     }
-    store8(buf + pos, 34); pos = pos + 1;  # '"'
+    if (_update_state_text_ok(pending) != 1) {
+        return drm_err_invalid_argument("pending version is too long or holds a character JSON escapes");
+    }
+    var previous = update_state_previous(state);
+    if (_update_state_text_ok(previous) != 1) {
+        return drm_err_invalid_argument("previous version is too long or holds a character JSON escapes");
+    }
+    var boots = update_state_boot_count(state);
+    if (boots < 0) { return drm_err_invalid_argument("boot count is negative"); }
+    if (boots >= UPDATE_BOOTS_MAX) { return drm_err_invalid_argument("boot count is out of range"); }
 
-    # pending_update
-    var puh = ",\"pending_update\":";
-    memcpy(buf + pos, puh, strlen(puh));
-    pos = pos + strlen(puh);
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "{\"current_slot\":");
+    str_builder_add_int(sb, slot);
+    str_builder_add_cstr(sb, ",\"current_version\":\"");
+    if (ver != 0) { str_builder_add_cstr(sb, ver); }
+    str_builder_add_cstr(sb, "\",\"pending_update\":");
     if (pending == 0) {
-        memcpy(buf + pos, "null", 4);
-        pos = pos + 4;
+        str_builder_add_cstr(sb, "null");
     } else {
-        store8(buf + pos, 34); pos = pos + 1;
-        memcpy(buf + pos, pending, plen);
-        pos = pos + plen;
-        store8(buf + pos, 34); pos = pos + 1;
+        str_builder_add_cstr(sb, "\"");
+        str_builder_add_cstr(sb, pending);
+        str_builder_add_cstr(sb, "\"");
     }
-
-    # rollback_available
-    var rah = ",\"rollback_available\":";
-    memcpy(buf + pos, rah, strlen(rah));
-    pos = pos + strlen(rah);
+    str_builder_add_cstr(sb, ",\"rollback_available\":");
     if (update_state_rollback_available(state) == 1) {
-        memcpy(buf + pos, "true", 4); pos = pos + 4;
+        str_builder_add_cstr(sb, "true");
     } else {
-        memcpy(buf + pos, "false", 5); pos = pos + 5;
+        str_builder_add_cstr(sb, "false");
+    }
+    str_builder_add_cstr(sb, ",\"boot_count\":");
+    str_builder_add_int(sb, boots);
+    if (previous != 0) {
+        str_builder_add_cstr(sb, ",\"previous_version\":\"");
+        str_builder_add_cstr(sb, previous);
+        str_builder_add_cstr(sb, "\"");
+    }
+    str_builder_add_cstr(sb, "}\n");
+    var text = str_builder_build(sb);
+
+    return update_atomic_write(path, str_data(text), str_len(text));
+}
+
+# Parse a state document. current_slot is required and must be 1 or 2; the other fields
+# may be absent, and each must hold its own type. Returns Result: Ok(state_ptr) or Err.
+fn _update_parse_state(buf, n): i64 {
+    var why = "update state file is corrupt";
+    var si = _update_json_field(buf, n, "current_slot");
+    if (si < 0) { return drm_err_invalid_argument(why); }
+    var slot = 0;
+    if (_update_json_is(buf, n, si, "1") == 1) { slot = SLOT_A; }
+    if (_update_json_is(buf, n, si, "2") == 1) { slot = SLOT_B; }
+    if (slot == 0) { return drm_err_invalid_argument(why); }
+
+    var version = "";
+    var vi = _update_json_field(buf, n, "current_version");
+    if (vi >= 0) {
+        version = _update_json_str(buf, n, vi);
+        if (version == 0) { return drm_err_invalid_argument(why); }
+    }
+    var state = update_state_new(slot, version);
+
+    var pi = _update_json_field(buf, n, "pending_update");
+    if (pi >= 0) {
+        if (_update_json_is(buf, n, pi, "null") != 1) {
+            var pv = _update_json_str(buf, n, pi);
+            if (pv == 0) { return drm_err_invalid_argument(why); }
+            if (load8(pv) != 0) { update_state_set_pending(state, pv); }
+        }
     }
 
-    # boot_count
-    var bch = ",\"boot_count\":";
-    memcpy(buf + pos, bch, strlen(bch));
-    pos = pos + strlen(bch);
-    var bc = update_state_boot_count(state);
-    var bc_buf[24];   # i64 decimal scratch: up to 20 digits (+sign); was [8]=8B → fmt_int_buf OOB past 8 digits
-    var bc_len = fmt_int_buf(bc, &bc_buf);
-    memcpy(buf + pos, &bc_buf, bc_len);
-    pos = pos + bc_len;
+    var oi = _update_json_field(buf, n, "previous_version");
+    if (oi >= 0) {
+        var ov = _update_json_str(buf, n, oi);
+        if (ov == 0) { return drm_err_invalid_argument(why); }
+        update_state_set_previous(state, ov);
+    }
 
-    store8(buf + pos, 125); pos = pos + 1;  # '}'
-    store8(buf + pos, 10); pos = pos + 1;   # '\n'
-    store8(buf + pos, 0);
+    var ri = _update_json_field(buf, n, "rollback_available");
+    if (ri >= 0) {
+        if (_update_json_is(buf, n, ri, "true") == 1) {
+            update_state_set_rollback(state, 1);
+        } elif (_update_json_is(buf, n, ri, "false") != 1) {
+            return drm_err_invalid_argument(why);
+        }
+    }
 
-    return update_atomic_write(path, buf, pos);
+    var bi = _update_json_field(buf, n, "boot_count");
+    if (bi >= 0) {
+        var bend = _update_json_skip_value(buf, n, bi);
+        if (bend - bi > 18) { return drm_err_invalid_argument(why); }
+        var bc = 0;
+        while (bi < bend) {
+            var c = load8(buf + bi);
+            if (c < 48 || c > 57) { return drm_err_invalid_argument(why); }
+            bc = bc * 10 + (c - 48);
+            bi = bi + 1;
+        }
+        update_state_set_boot_count(state, bc);
+    }
+
+    return Ok(state);
 }
 
 # Load update state from a JSON file.
-# Returns Result: Ok(state_ptr) or Err.
+# Returns Result: Ok(state_ptr) or Err. A failed open keeps its errno, which is how
+# _update_load_or_new tells a missing file from an unreadable one.
 fn update_load_state(path): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("load update state (/var/lib/agnos A/B state file)");  # agnos: no A/B update subsystem
@@ -712,110 +920,51 @@ fn update_load_state(path): i64 {
     #ifndef CYRIUS_TARGET_AGNOS
     if (path == 0) { return drm_err_invalid_argument("state path is null"); }
 
-    var fd = sys_open(path, O_RDONLY, 0);
+    var fd = sys_open(path, O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) {
         return drm_err_io(0 - fd, "failed to open update state file");
     }
 
-    var buf = alloc(4096);
-    var n = sys_read(fd, buf, 4095);
+    var cap = UPDATE_JSON_MAX + 1;
+    var buf = _agnodrm_scratch_new(cap);
+    if (buf == 0) {
+        sys_close(fd);
+        return drm_err_io(ENOMEM, "no memory to read update state");
+    }
+    var n = _agnodrm_read_all(fd, buf, cap);
     sys_close(fd);
-    if (n <= 0) {
-        return drm_err_io(0, "failed to read update state file");
+    if (n < 0) {
+        _agnodrm_scratch_free(buf, cap);
+        return drm_err_io(0 - n, "failed to read update state file");
     }
-    store8(buf + n, 0);
-
-    # Parse current_slot
-    var slot = SLOT_A;
-    var sidx = strstr(buf, "\"current_slot\"");
-    if (sidx >= 0) {
-        var si = sidx + 14;
-        while (si < n && load8(buf + si) != 49 && load8(buf + si) != 50) { si = si + 1; }
-        if (si < n && load8(buf + si) == 50) { slot = SLOT_B; }
+    if (n >= cap) {
+        _agnodrm_scratch_free(buf, cap);
+        return drm_err_invalid_argument("update state file is too large");
     }
-
-    # Parse current_version
-    var version = "";
-    var vidx = strstr(buf, "\"current_version\"");
-    if (vidx >= 0) {
-        var qi = vidx + 17;
-        while (qi < n && load8(buf + qi) != 34) { qi = qi + 1; }
-        qi = qi + 1;
-        var vstart = qi;
-        while (qi < n && load8(buf + qi) != 34) { qi = qi + 1; }
-        var vlen = qi - vstart;
-        if (vlen > 0) {
-            version = alloc(vlen + 1);
-            memcpy(version, buf + vstart, vlen);
-            store8(version + vlen, 0);
-        }
-    }
-
-    var state = update_state_new(slot, version);
-
-    # Parse pending_update
-    var pidx = strstr(buf, "\"pending_update\"");
-    if (pidx >= 0) {
-        var pi = pidx + 16;
-        # Check for null
-        while (pi < n && (load8(buf + pi) == 32 || load8(buf + pi) == 58)) { pi = pi + 1; }
-        if (pi + 3 < n && memeq(buf + pi, "null", 4) != 1) {
-            # Skip to opening quote
-            while (pi < n && load8(buf + pi) != 34) { pi = pi + 1; }
-            pi = pi + 1;
-            var pstart = pi;
-            while (pi < n && load8(buf + pi) != 34) { pi = pi + 1; }
-            var plen = pi - pstart;
-            if (plen > 0) {
-                var pv = alloc(plen + 1);
-                memcpy(pv, buf + pstart, plen);
-                store8(pv + plen, 0);
-                update_state_set_pending(state, pv);
-            }
-        }
-    }
-
-    # Parse rollback_available
-    var ridx = strstr(buf, "\"rollback_available\"");
-    if (ridx >= 0) {
-        var ri = ridx + 20;
-        # skip to 't' or 'f'
-        while (ri < n && load8(buf + ri) != 116 && load8(buf + ri) != 102) {
-            ri = ri + 1;
-        }
-        if (ri < n && load8(buf + ri) == 116) {
-            update_state_set_rollback(state, 1);
-        }
-    }
-
-    # Parse boot_count
-    var bidx = strstr(buf, "\"boot_count\"");
-    if (bidx >= 0) {
-        var bi = bidx + 12;
-        while (bi < n && (load8(buf + bi) < 48 || load8(buf + bi) > 57)) { bi = bi + 1; }
-        var bc = 0;
-        while (bi < n && load8(buf + bi) >= 48 && load8(buf + bi) <= 57) {
-            bc = bc * 10 + (load8(buf + bi) - 48);
-            bi = bi + 1;
-        }
-        update_state_set_boot_count(state, bc);
-    }
-
-    return Ok(state);
+    var res_t, res_v = _update_parse_state(buf, n);
+    _agnodrm_scratch_free(buf, cap);
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
+    return Ok(res_v);
     #endif
+}
+
+# Load the state, or a fresh one on `slot` if the file does not exist yet. Only a missing
+# file is fresh: one that cannot be read or parsed still holds the rollback record, and
+# overwriting it would erase that (audit F-30).
+fn _update_load_or_new(path, slot): i64 {
+    var res_t, res_v = update_load_state(path);
+    if (is_ok(res_t) == 1) { return Ok(res_v); }
+    if (drm_syserr_errno(res_v) == ENOENT) { return Ok(update_state_new(slot, "")); }
+    return Err(res_v);
 }
 
 # ================================================================
 # Manifest validation
 # ================================================================
 
-# Validate structural integrity of an update manifest.
-# Returns Result: Ok(0) or Err.
-# Note: SHA-256 digest verification requires a SHA-256 implementation
-# which is not yet in Cyrius stdlib (roadmap.md V1.5.x). Structural checks only.
-fn update_verify_manifest(manifest): i64 {
-    if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
-
+# What an image needs from its manifest: a valid version, and at least one file, each
+# with a well-formed sha256. Returns Result: Ok(0) or Err.
+fn _update_check_manifest_files(manifest): i64 {
     var ver = update_manifest_version(manifest);
     if (ver == 0 || strlen(ver) == 0) {
         return drm_err_invalid_argument("manifest version must not be empty");
@@ -826,11 +975,6 @@ fn update_verify_manifest(manifest): i64 {
         return drm_err_invalid_argument("manifest must contain at least one file");
     }
 
-    var rd = update_manifest_release_date(manifest);
-    if (rd == 0 || strlen(rd) == 0) {
-        return drm_err_invalid_argument("manifest release_date must not be empty");
-    }
-
     # Validate version format
     var vres_t, vres_v = update_validate_version(ver);
     if (is_err_result(vres_t) == 1) { return Err(vres_v); }
@@ -839,6 +983,7 @@ fn update_verify_manifest(manifest): i64 {
     var fi = 0;
     while (fi < vec_len(files)) {
         var f = vec_get(files, fi);
+        if (f == 0) { return drm_err_invalid_argument("manifest holds a null file"); }
         var hash = update_file_sha256(f);
         if (hash == 0 || strlen(hash) != 64) {
             return drm_err_invalid_argument("file has invalid sha256 (expected 64 hex chars)");
@@ -856,6 +1001,21 @@ fn update_verify_manifest(manifest): i64 {
     }
 
     return Ok(0);
+}
+
+# Validate structural integrity of an update manifest.
+# Returns Result: Ok(0) or Err.
+# Structural checks only: the digest itself is compared by update_apply, against the
+# image on disk, and nothing here says who wrote the manifest.
+fn update_verify_manifest(manifest): i64 {
+    if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
+
+    var rd = update_manifest_release_date(manifest);
+    if (rd == 0 || strlen(rd) == 0) {
+        return drm_err_invalid_argument("manifest release_date must not be empty");
+    }
+
+    return _update_check_manifest_files(manifest);
 }
 
 # ================================================================
@@ -879,6 +1039,7 @@ fn update_check(config, current_version): i64 {
     if (current_version == 0) { return drm_err_invalid_argument("current_version is null"); }
 
     var url = update_config_url(config);
+    if (url == 0) { return drm_err_invalid_argument("update url is null"); }
     var path = url;
 
     # Strip file:// prefix if present
@@ -892,40 +1053,39 @@ fn update_check(config, current_version): i64 {
     }
 
     # Read manifest file
-    var fd = sys_open(path, O_RDONLY, 0);
+    var fd = sys_open(path, O_RDONLY | O_CLOEXEC, 0);
     if (fd < 0) {
         return drm_err_io(0 - fd, "failed to open manifest file");
     }
-
-    # Reserve the last byte for the NUL terminator so `total` can never
-    # reach the allocation end (store8 below would otherwise write one
-    # byte past a full 16384-byte buffer). Mirrors ima_read_measurements.
-    var buf = alloc(16384);
-    var total = 0;
-    var nread = sys_read(fd, buf + total, 16384 - total - 1);
-    while (nread > 0) {
-        total = total + nread;
-        if (total >= 16384 - 1) { break; }
-        nread = sys_read(fd, buf + total, 16384 - total - 1);
+    var cap = UPDATE_JSON_MAX + 1;
+    var buf = _agnodrm_scratch_new(cap);
+    if (buf == 0) {
+        sys_close(fd);
+        return drm_err_io(ENOMEM, "no memory to read the manifest");
     }
+    var total = _agnodrm_read_all(fd, buf, cap);
     sys_close(fd);
-    store8(buf + total, 0);
+    if (total < 0) {
+        _agnodrm_scratch_free(buf, cap);
+        return drm_err_io(0 - total, "failed to read manifest file");
+    }
 
-    # Parse version from manifest JSON
-    # Look for "version":"X.Y.Z"
-    var vidx = strstr(buf, "\"version\"");
-    if (vidx < 0) {
+    # The top-level "version", read from the whole document or not at all. A cut file
+    # is not one whole object, and a key or value elsewhere named "version" is not it.
+    var manifest_version = 0;
+    var vidx = 0 - 2;
+    if (total < cap) { vidx = _update_json_field(buf, total, "version"); }
+    if (vidx >= 0) { manifest_version = _update_json_str(buf, total, vidx); }
+    _agnodrm_scratch_free(buf, cap);
+    if (vidx == 0 - 2) {
+        return drm_err_invalid_argument("manifest is not one whole JSON object");
+    }
+    if (manifest_version == 0) {
         return drm_err_invalid_argument("manifest missing version field");
     }
-    var qi = vidx + 9;
-    while (qi < total && load8(buf + qi) != 34) { qi = qi + 1; }
-    qi = qi + 1;  # skip opening quote
-    var vstart = qi;
-    while (qi < total && load8(buf + qi) != 34) { qi = qi + 1; }
-    var vlen = qi - vstart;
-    var manifest_version = alloc(vlen + 1);
-    memcpy(manifest_version, buf + vstart, vlen);
-    store8(manifest_version + vlen, 0);
+    # An unvalidated version is not an update: 9999.99.99 outranks anything.
+    var vchk_t, vchk_v = update_validate_version(manifest_version);
+    if (is_err_result(vchk_t) == 1) { return Err(vchk_v); }
 
     # Compare versions
     var cmp = update_compare_versions(manifest_version, current_version);
@@ -944,8 +1104,94 @@ fn update_check(config, current_version): i64 {
 # Apply update to inactive slot
 # ================================================================
 
+# Run sha256sum over the image and compare with the manifest's digest, as hex in either
+# case. A missing tool fails: `verify` is a promise, and skipping it would break it
+# silently. Returns Result: Ok(0) or Err.
+fn _update_verify_image(image, expected): i64 {
+    var args = vec_new();
+    vec_push(args, _update_path("/usr/bin/sha256sum"));
+    vec_push(args, image);
+    var cap = 128;
+    var buf = alloc(cap);
+    var res_t, res_v = agnodrm_run_capture(args, buf, cap, "sha256sum of the update image failed");
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
+    if (res_v < 64) { return drm_err_unknown("sha256sum printed no digest"); }
+    var i = 0;
+    while (i < 64) {
+        var got = load8(buf + i);
+        var want = load8(expected + i);
+        if (got >= 65 && got <= 90) { got = got + 32; }
+        if (want >= 65 && want <= 90) { want = want + 32; }
+        if (got != want) {
+            return drm_err_invalid_argument("update image does not match the manifest's sha256");
+        }
+        i = i + 1;
+    }
+    return Ok(0);
+}
+
+# Refuse an image file that is not a regular file of the size the manifest gives. A size
+# of 0 means the manifest gave none. Returns Result: Ok(0) or Err.
+fn _update_check_image_file(image, size): i64 {
+    var st = alloc(STAT_BUFSZ);
+    if (xstat(image, st) != 0) {
+        return drm_err_invalid_argument("update image cannot be read");
+    }
+    if ((load32(st + STAT_MODE) & 0xF000) != 0x8000) {   # S_IFREG
+        return drm_err_invalid_argument("update image is not a regular file");
+    }
+    if (size != 0) {
+        if (load64(st + STAT_SIZE) != size) {
+            return drm_err_invalid_argument("update image is not the size the manifest gives");
+        }
+    }
+    return Ok(0);
+}
+
+# Make the marker name `slot`. It is written unless it provably says so already, so one
+# that is missing or cannot be read comes out right, or the write fails.
+# Returns Result: Ok(0) or Err.
+fn _update_aim_marker(slot): i64 {
+    var marker = _update_path("/var/lib/agnos/next-slot");
+    var suffix = update_slot_suffix(slot);
+    var old = alloc(16);
+    var old_len = file_read_all(marker, old, 16);
+    if (old_len == strlen(suffix)) {
+        if (memeq(old, suffix, old_len) == 1) { return Ok(0); }
+    }
+    var res_t, res_v = update_atomic_write(marker, suffix, strlen(suffix));
+    if (is_err_result(res_t) == 1) { return Err(res_v); }
+    return Ok(0);
+}
+
+# Make the next boot certain to stay on `slot`, the marker and then the firmware, before
+# the other slot is written. BootNext outranks the marker, so a firmware that cannot
+# answer on an EFI host is a refusal, even with everything here agreeing: a best-effort
+# switch can have left a BootNext behind that nothing on disk records.
+# Returns Result: Ok(0), or Err if the next boot cannot be shown to stay.
+fn _update_hold_boot(slot): i64 {
+    var mk_t, mk_v = _update_aim_marker(slot);
+    if (is_err_result(mk_t) == 1) { return Err(mk_v); }
+    return _update_set_bootnext(slot, 1, 1);
+}
+
 # Write update image to the inactive slot's block device.
 # Returns Result: Ok(0) or Err.
+#
+# The manifest must describe one whole raw image with a valid version and digest: this
+# does not decompress, apply a delta, or write a second file, and `dd` would put any of
+# those on the slot as it stands (audit F-29). With the config's `verify` on, the image
+# must match the manifest's sha256 before a byte is written. That catches a corrupt
+# image, not a forged one: the manifest is not signed.
+#
+# The target slot may hold the only known-good image, and the write destroys it. So
+# this runs in an order a power cut can stop anywhere: first the next boot is proven to
+# stay on the running slot, then the rollback record is cleared and saved, and only then
+# does `dd` start. In the other order a cut boots the slot about to be written with its
+# record gone, and a write that dies leaves a rollback that boots half an image (audit
+# F-16). An image on trial refuses outright: the target would be the one good slot left.
+# Afterwards the image is pending, and rollback_available stays clear until
+# update_switch_slot leaves a good slot behind.
 fn update_apply(config, manifest): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("apply update to inactive slot (dd to block device)");  # agnos: no A/B slots
@@ -954,9 +1200,19 @@ fn update_apply(config, manifest): i64 {
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
     if (manifest == 0) { return drm_err_invalid_argument("manifest is null"); }
 
+    var vm_t, vm_v = _update_check_manifest_files(manifest);
+    if (is_err_result(vm_t) == 1) { return Err(vm_v); }
+
     var files = update_manifest_files(manifest);
-    if (files == 0 || vec_len(files) == 0) {
-        return drm_err_invalid_argument("manifest contains no files to apply");
+    if (vec_len(files) != 1) {
+        return drm_err_not_supported("update_apply writes one image; the manifest lists several");
+    }
+    var file = vec_get(files, 0);
+    if (update_file_compressed(file) != 0) {
+        return drm_err_not_supported("update_apply writes a raw image, not a compressed one");
+    }
+    if (update_file_delta_from(file) != 0) {
+        return drm_err_not_supported("update_apply writes a whole image, not a delta");
     }
 
     # Only the boot itself can say which slot is running, and a wrong answer overwrites
@@ -972,8 +1228,16 @@ fn update_apply(config, manifest): i64 {
 
     var target_slot = update_other_slot(current);
     var target_dev = update_config_device_for_slot(config, target_slot);
+    if (target_dev == 0 || strlen(target_dev) == 0) {
+        return drm_err_invalid_argument("target slot has no device");
+    }
+    # dd would create a missing one as a plain file, and report success.
+    var devst = alloc(STAT_BUFSZ);
+    if (xstat(target_dev, devst) != 0) {
+        return drm_err_invalid_argument("target slot device does not exist");
+    }
 
-    var image = update_file_path(vec_get(files, 0));
+    var image = update_file_path(file);
     if (image == 0 || strlen(image) == 0) {
         return drm_err_invalid_argument("update image path is empty");
     }
@@ -992,9 +1256,38 @@ fn update_apply(config, manifest): i64 {
         return drm_err_invalid_argument("update image must be within /var/lib/agnos/updates/");
     }
 
+    var state_file = update_config_state_file(config);
+    var load_t, load_v = _update_load_or_new(state_file, current);
+    if (is_err_result(load_t) == 1) { return Err(load_v); }
+    var state = load_v;
+    if (update_state_pending(state) != 0) {
+        if (update_state_rollback_available(state) == 1) {
+            if (update_state_slot(state) == current) {
+                return drm_err_invalid_argument("an update is on trial: confirm it or roll back first");
+            }
+        }
+    }
+
+    var ck_t, ck_v = _update_check_image_file(image, update_file_size(file));
+    if (is_err_result(ck_t) == 1) { return Err(ck_v); }
+    if (update_config_verify(config) != 0) {
+        var hash_t, hash_v = _update_verify_image(image, update_file_sha256(file));
+        if (is_err_result(hash_t) == 1) { return Err(hash_v); }
+    }
+
+    # From here the target slot holds nothing anyone may boot.
+    var hold_t, hold_v = _update_hold_boot(current);
+    if (is_err_result(hold_t) == 1) { return Err(hold_v); }
+    update_state_set_slot(state, current);
+    update_state_set_pending(state, 0);
+    update_state_set_rollback(state, 0);
+    update_state_set_boot_count(state, 0);
+    update_state_set_previous(state, 0);
+    var pre_t, pre_v = update_save_state(state, state_file);
+    if (is_err_result(pre_t) == 1) { return Err(pre_v); }
+
     # Write via dd. Element 0 is the ABSOLUTE path — execve does no PATH
-    # lookup. agnodrm_run_checked checks dd's exit code; the old 2-arg
-    # run_capture("dd", args) ignored it and left buf/buflen garbage.
+    # lookup. agnodrm_run_checked checks dd's exit code.
     var args = vec_new();
     vec_push(args, "/usr/bin/dd");
 
@@ -1016,19 +1309,8 @@ fn update_apply(config, manifest): i64 {
     var dd_res_t, dd_res_v = agnodrm_run_checked(args, "dd image write failed");
     if (is_err_result(dd_res_t) == 1) { return Err(dd_res_v); }
 
-    # Update persistent state
-    var state_file = update_config_state_file(config);
-    var load_res_t, load_res_v = update_load_state(state_file);
-    var state = 0;
-    if (is_ok(load_res_t) == 1) {
-        state = load_res_v;
-    } else {
-        state = update_state_new(current, "");
-    }
+    # A caller must not switch to the image with no pending record on disk.
     update_state_set_pending(state, update_manifest_version(manifest));
-    update_state_set_rollback(state, 1);
-    # The image is on the slot by now, but a caller must not switch to it with no
-    # pending or rollback record on disk.
     var save_t, save_v = update_save_state(state, state_file);
     if (is_err_result(save_t) == 1) { return Err(save_v); }
 
@@ -1090,101 +1372,240 @@ fn _update_efi_bootnum(text, label): i64 {
     return 0;
 }
 
-# Point the firmware's next boot at `slot`. Best effort: the marker is what
-# argonaut reads, and a host may have no EFI, no efibootmgr or no such entry.
-# `--bootnext` takes a hex boot number, not a label, so the number comes from the
-# entry list. (Through 1.7.0 this passed "AGNOS-A", which efibootmgr always refused.)
-fn _update_set_bootnext(slot): i64 {
-    var efibootmgr = _update_path("/usr/bin/efibootmgr");
-    var list_args = vec_new();
-    vec_push(list_args, efibootmgr);
-    var cap = 65536;
-    var buf = alloc(cap + 1);
-    var list_t, list_v = agnodrm_run_capture(list_args, buf, cap, "efibootmgr failed");
-    if (is_err_result(list_t) == 1) { return 0; }
-    store8(buf + list_v, 0);
+# The 4-character number after a "BootNext:" line in `efibootmgr` output, or 0.
+fn _update_efi_bootnext(text): i64 {
+    var textlen = strlen(text);
+    var pos = 0;
+    while (pos + 13 < textlen) {
+        if (memeq(text + pos, "BootNext: ", 10) == 1) {
+            var num = alloc(5);
+            memcpy(num, text + pos + 10, 4);
+            store8(num + 4, 0);
+            return num;
+        }
+        while (pos < textlen) {
+            if (load8(text + pos) == 10) { break; }
+            pos = pos + 1;
+        }
+        pos = pos + 1;
+    }
+    return 0;
+}
 
+# "AGNOS-A" or "AGNOS-B", the label an entry carries.
+fn _update_efi_label(slot): i64 {
     var label = alloc(8);
     memcpy(label, "AGNOS-", 6);
     if (slot == SLOT_A) { store8(label + 6, 65); }  # 'A'
     else { store8(label + 6, 66); }                   # 'B'
     store8(label + 7, 0);
+    return label;
+}
 
-    var num = _update_efi_bootnum(buf, label);
+# Point the firmware's next boot at `slot`. `hold` 1 touches firmware only if a BootNext
+# is aimed at the other slot, so an update writes no NVRAM for nothing and leaves alone a
+# BootNext someone set for their own entry. `strict` 1 is an Err if a BootNext there cannot
+# be ruled out, which matters because BootNext outranks the marker. Otherwise this is best
+# effort: the marker is what commits a switch, and a host may have no EFI, no efibootmgr or
+# no such entry. With no EFI or no efibootmgr there is no BootNext this library could set.
+# `--bootnext` takes a hex boot number, not a label, so the number comes from the
+# entry list. (Through 1.7.0 this passed "AGNOS-A", which efibootmgr always refused.)
+# Returns Result: Ok(0) or Err.
+fn _update_set_bootnext(slot, hold, strict): i64 {
+    var efibootmgr = _update_path("/usr/bin/efibootmgr");
+    var list_args = vec_new();
+    vec_push(list_args, efibootmgr);
+    var cap = 65536;
+    var buf = _agnodrm_scratch_new(cap + 1);
+    if (buf == 0) {
+        if (strict == 1) { return drm_err_io(ENOMEM, "no memory for the EFI boot list"); }
+        return Ok(0);
+    }
+    var list_t, list_v = agnodrm_run_capture(list_args, buf, cap, "efibootmgr failed");
+    if (is_err_result(list_t) == 1) {
+        _agnodrm_scratch_free(buf, cap + 1);
+        if (strict != 1) { return Ok(0); }
+        if (sys_access(_update_path("/sys/firmware/efi"), 0) != 0) { return Ok(0); }
+        if (sys_access(efibootmgr, 0) != 0) { return Ok(0); }
+        return drm_err_unknown("cannot tell where the firmware boots next");
+    }
+    store8(buf + list_v, 0);
+
+    var num = _update_efi_bootnum(buf, _update_efi_label(slot));
+    var away = _update_efi_bootnum(buf, _update_efi_label(update_other_slot(slot)));
+    var next = _update_efi_bootnext(buf);
+    _agnodrm_scratch_free(buf, cap + 1);
+
+    if (hold == 1) {
+        if (next == 0) { return Ok(0); }
+        if (away == 0) { return Ok(0); }
+        if (memeq(next, away, 4) != 1) { return Ok(0); }
+    }
+
     if (num != 0) {
         var args = vec_new();
         vec_push(args, efibootmgr);
         vec_push(args, "--bootnext");
         vec_push(args, num);
-        if (exec_vec(args) == 0) { return 0; }  # execve needs the abs path above
+        if (exec_vec(args) == 0) { return Ok(0); }  # execve needs the abs path above
     }
 
     # BootNext cannot point at this slot. One left by an earlier switch would send the
     # next boot to the wrong slot, so clear it: the firmware then follows BootOrder.
-    if (strstr(buf, "BootNext:") >= 0) {
+    if (next != 0) {
         var clear_args = vec_new();
         vec_push(clear_args, efibootmgr);
         vec_push(clear_args, "--delete-bootnext");
-        exec_vec(clear_args);
+        if (exec_vec(clear_args) != 0) {
+            if (strict == 1) { return drm_err_unknown("cannot clear the firmware's BootNext"); }
+        }
     }
+    return Ok(0);
+}
+
+# Swap the version with the one recorded for the other slot, if there is one: a move
+# between two confirmed images.
+fn _update_swap_versions(state): i64 {
+    var previous = update_state_previous(state);
+    if (previous == 0) { return 0; }
+    update_state_set_previous(state, update_state_version(state));
+    update_state_set_version(state, previous);
     return 0;
 }
 
-# Switch to `slot`: the marker, then one state write, then the firmware.
-# `after_rollback` also clears the pending and rollback records in that same write.
-# Doing both in one save is what keeps a rollback from undoing its own switch: a
-# second save of an earlier snapshot put the old slot back, and the next
-# update_apply could then target the slot the host was running from (audit F-3).
+# Move forward onto `slot`: the state, then the marker, then the firmware, each flushed
+# before the next. The state goes first because the marker is what commits the move: a
+# power cut between them boots the old slot, with a state that reads as a fallback and
+# that update_rollback squares. Marker first would boot an image the state knows nothing
+# about. Leaving a running slot leaves a good slot behind, which is what
+# rollback_available records, and so does moving onto a pending image, even one booted by
+# hand first: it stays on trial until confirmed. `running` is the booted slot, 0 if
+# unknown. Only a real move resets the boot count, so repeating a switch cannot disarm a
+# trial.
 #
-# An Err leaves things as they were: if the state cannot be saved the marker goes back
-# to what it said, or away if there was none, and the firmware is left alone. Putting
-# it back is best effort: a directory that refuses both writes keeps the new marker.
-fn _update_switch(config, slot, after_rollback): i64 {
-    var marker = _update_path("/var/lib/agnos/next-slot");
-    var old_marker = alloc(16);
-    var old_len = file_read_all(marker, old_marker, 16);
-    var suffix = update_slot_suffix(slot);
-    var res_t, res_v = update_atomic_write(marker, suffix, strlen(suffix));
-    if (is_err_result(res_t) == 1) { return Err(res_v); }
-
+# An Err from the state write can come after its rename, if only the directory flush
+# failed. An Err from the marker puts the state back, best effort. The firmware is left
+# alone either way.
+fn _update_switch_forward(config, state, slot, running): i64 {
     var state_file = update_config_state_file(config);
-    var load_res_t, load_res_v = update_load_state(state_file);
-    var state = 0;
-    if (is_ok(load_res_t) == 1) {
-        state = load_res_v;
-    } else {
-        state = update_state_new(update_other_slot(slot), "");
-    }
+    var old_slot = update_state_slot(state);
+    var old_rollback = update_state_rollback_available(state);
+    var old_boots = update_state_boot_count(state);
+    var old_version = update_state_version(state);
+    var old_previous = update_state_previous(state);
+
     update_state_set_slot(state, slot);
-    update_state_set_boot_count(state, 0);
-    if (after_rollback == 1) {
-        update_state_set_pending(state, 0);
-        update_state_set_rollback(state, 0);
+    if (old_slot != slot) {
+        update_state_set_boot_count(state, 0);
+        var leaves_slot = running != slot;
+        if (update_state_pending(state) != 0) { leaves_slot = 1; }
+        if (leaves_slot == 1) { update_state_set_rollback(state, 1); }
+        if (update_state_pending(state) == 0) { _update_swap_versions(state); }
     }
     var save_t, save_v = update_save_state(state, state_file);
-    if (is_err_result(save_t) == 1) {
-        if (old_len > 0) {
-            update_atomic_write(marker, old_marker, old_len);
-        } else {
-            xunlink(marker);
-        }
-        return Err(save_v);
+    if (is_err_result(save_t) == 1) { return Err(save_v); }
+
+    var marker = _update_path("/var/lib/agnos/next-slot");
+    var suffix = update_slot_suffix(slot);
+    var res_t, res_v = update_atomic_write(marker, suffix, strlen(suffix));
+    if (is_err_result(res_t) == 1) {
+        update_state_set_slot(state, old_slot);
+        update_state_set_rollback(state, old_rollback);
+        update_state_set_boot_count(state, old_boots);
+        update_state_set_version(state, old_version);
+        update_state_set_previous(state, old_previous);
+        update_save_state(state, state_file);
+        return Err(res_v);
     }
 
-    _update_set_bootnext(slot);
+    var fw_t, fw_v = _update_set_bootnext(slot, 0, 0);
     return Ok(0);
+}
+
+# Move back to the slot a switch left behind: the marker, then the firmware, then the
+# state, the reverse of going forward. Clearing the record is what makes the good slot
+# unreachable, so it goes last, once the next boot is shown to be there: with the state
+# first, a power cut booted the bad slot with no record left to roll back with (audit
+# F-15). Stopping anywhere leaves a state that reads as a trial or a fallback, and running
+# this again finishes the job.
+#
+# On an EFI host a failing efibootmgr refuses this, because a BootNext left on the bad
+# slot would outrank the marker. Nothing is lost by that: the marker has moved, the
+# record stays, and running this again once the firmware answers finishes the job.
+# Neither running the target nor a counted boot shows a BootNext is spent, since a switch
+# made this boot leaves it armed; see docs/architecture/001-slot-write-order.md.
+# `keep_pending` leaves an image that never booted as it was after update_apply, written
+# and ready to switch to.
+fn _update_roll_back(config, state, keep_pending): i64 {
+    var previous = update_other_slot(update_state_slot(state));
+    var mk_t, mk_v = _update_aim_marker(previous);
+    if (is_err_result(mk_t) == 1) { return Err(mk_v); }
+
+    var fw_t, fw_v = _update_set_bootnext(previous, 0, 1);
+    if (is_err_result(fw_t) == 1) { return Err(fw_v); }
+
+    if (keep_pending != 1) {
+        if (update_state_pending(state) == 0) {
+            _update_swap_versions(state);
+            update_state_set_previous(state, 0);
+        }
+        update_state_set_pending(state, 0);
+    }
+    update_state_set_slot(state, previous);
+    update_state_set_boot_count(state, 0);
+    update_state_set_rollback(state, 0);
+    return update_save_state(state, update_config_state_file(config));
 }
 
 # Mark a slot as active for the next boot.
 # Writes slot marker for argonaut and optionally sets EFI boot entry.
 # Returns Result: Ok(0) or Err.
+#
+# Moving to the other slot needs a reason to think it boots: an image on it, or a record
+# that it was left in working order. After a write that died, or a finished rollback, it
+# has neither, and this refuses (audit F-16). With no state file yet nothing is known
+# against it, and a cmdline saying the host runs that slot is proof it boots. Leaving an
+# image on trial for the good slot is a rollback, whichever call asks for it: going
+# forward would keep the trial armed against the good slot. If the image never booted and
+# the host still runs the good slot, it stays pending and can be switched to again.
 fn update_switch_slot(config, slot): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("switch active slot (efibootmgr --bootnext)");  # agnos: no efibootmgr
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
-    return _update_switch(config, slot, 0);
+    if (slot != SLOT_A) {
+        if (slot != SLOT_B) { return drm_err_invalid_argument("slot is neither A nor B"); }
+    }
+
+    var running = 0;
+    var run_t, run_v = _update_cmdline_slot();
+    if (is_ok(run_t) == 1) { running = run_v; }
+
+    var state_file = update_config_state_file(config);
+    var load_t, load_v = update_load_state(state_file);
+    if (is_err_result(load_t) == 1) {
+        if (drm_syserr_errno(load_v) != ENOENT) { return Err(load_v); }
+        var fresh = update_state_new(update_other_slot(slot), "");
+        return _update_switch_forward(config, fresh, slot, running);
+    }
+    var state = load_v;
+    if (slot != update_state_slot(state)) {
+        var pending = update_state_pending(state);
+        var behind = update_state_rollback_available(state);
+        if (pending != 0) {
+            if (behind == 1) {
+                var unbooted = 0;
+                if (running == slot) { unbooted = update_state_boot_count(state) == 0; }
+                return _update_roll_back(config, state, unbooted);
+            }
+        } elif (behind == 0) {
+            if (running != slot) {
+                return drm_err_invalid_argument("the other slot holds nothing known to boot");
+            }
+        }
+    }
+    return _update_switch_forward(config, state, slot, running);
     #endif
 }
 
@@ -1192,8 +1613,14 @@ fn update_switch_slot(config, slot): i64 {
 # Rollback
 # ================================================================
 
-# Roll back to the previous slot.
+# Roll back to the previous slot, or abandon an image nothing has switched to.
 # Returns Result: Ok(0) or Err.
+#
+# rollback_available says a switch left a good slot behind. With it clear and an update
+# pending, update_apply wrote an image and no switch followed: the running slot is the
+# good one, so the pending record goes and the next boot stays where it is. Through
+# 1.7.1 this took "not state.slot" as the slot to return to, which there is the image
+# just written (audit F-15).
 fn update_rollback(config): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return drm_err_not_supported("rollback to previous slot (argonaut + efibootmgr)");  # agnos: no A/B slots
@@ -1207,19 +1634,24 @@ fn update_rollback(config): i64 {
     var state = load_res_v;
 
     if (update_state_rollback_available(state) == 0) {
-        return drm_err_invalid_argument("no rollback image available");
+        if (update_state_pending(state) == 0) {
+            return drm_err_invalid_argument("no rollback image available");
+        }
+        update_state_set_pending(state, 0);
+        return update_save_state(state, state_file);
     }
 
-    var previous = update_other_slot(update_state_slot(state));
+    var back_t, back_v = _update_roll_back(config, state, 0);
+    if (is_err_result(back_t) == 1) { return Err(back_v); }
 
-    # Stop services before switching (best effort)
+    # Stop services only once the rollback stands, so a failed one leaves them running.
     var stop_args = vec_new();
     vec_push(stop_args, _update_path("/usr/bin/argonaut"));
     vec_push(stop_args, "stop");
     vec_push(stop_args, "daimon");
     exec_vec(stop_args);  # best effort — ignore failure (execve needs the abs path above)
 
-    return _update_switch(config, previous, 1);
+    return Ok(0);
     #endif
 }
 
@@ -1227,30 +1659,89 @@ fn update_rollback(config): i64 {
 # Boot confirmation
 # ================================================================
 
-# Mark the current boot as successful.
-# Increments boot counter, clears pending update flag.
+# The saved state, or 0 if there is no state file: nothing has been updated, so a boot has
+# nothing to record. Returns Result: Ok(state_ptr or 0) or Err.
+fn _update_load_if_any(state_file): i64 {
+    var res_t, res_v = update_load_state(state_file);
+    if (is_ok(res_t) == 1) { return Ok(res_v); }
+    if (drm_syserr_errno(res_v) == ENOENT) { return Ok(0); }
+    return Err(res_v);
+}
+
+# 1 if the state records an image on trial: pending, with a good slot behind it. An
+# image no switch has reached is pending too, and not on trial.
+fn _update_on_trial(state): i64 {
+    if (update_state_pending(state) == 0) { return 0; }
+    return update_state_rollback_available(state) == 1;
+}
+
+# Count this boot against an image on trial. Call it once, early in every boot, then ask
+# update_needs_rollback. Only a boot that update_mark_boot_successful never reaches
+# leaves the count standing, which is what makes this a count of failed boots; nothing
+# else in the library counted them, so update_needs_rollback could never fire (audit
+# F-17). Writes only while an image is on trial.
+# Returns Result: Ok(boot_count) or Err.
+fn update_mark_boot_attempt(config): i64 {
+    if (config == 0) { return drm_err_invalid_argument("config is null"); }
+
+    var state_file = update_config_state_file(config);
+    var load_res_t, load_res_v = _update_load_if_any(state_file);
+    if (is_err_result(load_res_t) == 1) { return Err(load_res_v); }
+    var state = load_res_v;
+    if (state == 0) { return Ok(0); }
+
+    var boots = update_state_boot_count(state);
+    if (_update_on_trial(state) != 1) { return Ok(boots); }
+
+    boots = boots + 1;
+    update_state_set_boot_count(state, boots);
+    var save_t, save_v = update_save_state(state, state_file);
+    if (is_err_result(save_t) == 1) { return Err(save_v); }
+    return Ok(boots);
+}
+
+# Mark the current boot as successful: an image on trial becomes the current version, and
+# the trial ends. With no trial there is nothing to confirm, and this writes nothing: in
+# particular a pending image no switch has reached was not what just booted.
 # Returns Result: Ok(0) or Err.
+#
+# Confirming needs proof that the image is what booted. A cmdline naming another slot
+# means the firmware fell back, or the switch never took, and one naming no slot says
+# nothing: both refuse and keep the pending record, and update_rollback squares the
+# state with where the host is (audit F-25).
 fn update_mark_boot_successful(config): i64 {
     if (config == 0) { return drm_err_invalid_argument("config is null"); }
 
     var state_file = update_config_state_file(config);
-    var load_res_t, load_res_v = update_load_state(state_file);
+    var load_res_t, load_res_v = _update_load_if_any(state_file);
     if (is_err_result(load_res_t) == 1) { return Err(load_res_v); }
     var state = load_res_v;
+    if (state == 0) { return Ok(0); }
+    if (_update_on_trial(state) != 1) { return Ok(0); }
 
-    var bc = update_state_boot_count(state) + 1;
-    update_state_set_boot_count(state, bc);
-
-    if (update_state_pending(state) != 0) {
-        update_state_set_pending(state, 0);
+    var run_t, run_v = _update_cmdline_slot();
+    if (is_err_result(run_t) == 1) { return Err(run_v); }
+    if (run_v != update_state_slot(state)) {
+        return drm_err_invalid_argument("cannot show the image on trial is what booted");
     }
 
+    # A rollback cut short after its marker can boot the image anyway. Confirmed, it is
+    # where the host stays, so the marker comes back with it.
+    var mk_t, mk_v = _update_aim_marker(run_v);
+    if (is_err_result(mk_t) == 1) { return Err(mk_v); }
+
+    update_state_set_previous(state, update_state_version(state));
+    update_state_set_version(state, update_state_pending(state));
+    update_state_set_pending(state, 0);
+    update_state_set_boot_count(state, 0);
     return update_save_state(state, state_file);
 }
 
-# Pure function: returns 1 if boot count exceeds max_attempts
-# and there is a pending update (indicating automatic rollback needed).
+# Pure function: returns 1 once `max_boot_attempts` boots of an image on trial have gone
+# unconfirmed, so call it after update_mark_boot_attempt. An image no switch has reached
+# is not on trial, however often the running slot has booted.
 fn update_needs_rollback(state, max_boot_attempts): i64 {
-    if (update_state_pending(state) == 0) { return 0; }
+    if (state == 0) { return 0; }
+    if (_update_on_trial(state) != 1) { return 0; }
     return update_state_boot_count(state) >= max_boot_attempts;
 }

@@ -94,30 +94,45 @@ fn bootloader_config_set_entries(c, arr, count): i64 {
 # Bootloader detection
 # ================================================================
 
-# Detect the installed bootloader by probing well-known paths.
+# Test seam, 0 outside tests/tcyr: the directory the fixed /boot and /efi paths resolve
+# under, so a test can stand up a boot tree without touching this host's.
+var _bootloader_root = 0;
+
+fn _bootloader_path(path): i64 {
+    if (_bootloader_root == 0) { return path; }
+    var rootlen = strlen(_bootloader_root);
+    var pathlen = strlen(path);
+    var full = alloc(rootlen + pathlen + 1);
+    memcpy(full, _bootloader_root, rootlen);
+    memcpy(full + rootlen, path, pathlen);
+    store8(full + rootlen + pathlen, 0);
+    return full;
+}
+
+# 1 if `path` opens as a directory, or as a file when `want_dir` is 0.
+fn _bootloader_probe(path, want_dir): i64 {
+    var flags = O_RDONLY;
+    # O_DIRECTORY is the per-target symbol; a raw 0x10000 is O_DIRECT on arm64.
+    if (want_dir == 1) { flags = flags | O_DIRECTORY; }
+    var fd = file_open(_bootloader_path(path), flags, 0);
+    if (fd < 0) { return 0; }
+    file_close(fd);
+    return 1;
+}
+
+# Detect the installed bootloader by probing well-known paths: systemd-boot under each
+# place an ESP is mounted, the roots the entry fallback reads, then either GRUB layout.
 # Returns Result: Ok(BootloaderType constant).
 fn bootloader_detect(): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return Ok(BOOT_UNKNOWN);     # agnos boots via gnoboot, not GRUB/systemd-boot
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    # Check for systemd-boot: /boot/efi/EFI/systemd
-    var sd_path = "/boot/efi/EFI/systemd";
-    # O_RDONLY | O_DIRECTORY — the per-target symbol; a raw 0x10000 is O_DIRECT on arm64.
-    var fd = sys_open(sd_path, O_DIRECTORY, 0);
-    if (fd >= 0) {
-        sys_close(fd);
-        return Ok(BOOT_SYSTEMD_BOOT);
-    }
-
-    # Check for GRUB2: /boot/grub/grub.cfg
-    var grub_path = "/boot/grub/grub.cfg";
-    fd = sys_open(grub_path, O_RDONLY, 0);
-    if (fd >= 0) {
-        sys_close(fd);
-        return Ok(BOOT_GRUB2);
-    }
-
+    if (_bootloader_probe("/boot/efi/EFI/systemd", 1) == 1) { return Ok(BOOT_SYSTEMD_BOOT); }
+    if (_bootloader_probe("/efi/EFI/systemd", 1) == 1) { return Ok(BOOT_SYSTEMD_BOOT); }
+    if (_bootloader_probe("/boot/EFI/systemd", 1) == 1) { return Ok(BOOT_SYSTEMD_BOOT); }
+    if (_bootloader_probe("/boot/grub/grub.cfg", 0) == 1) { return Ok(BOOT_GRUB2); }
+    if (_bootloader_probe("/boot/grub2/grub.cfg", 0) == 1) { return Ok(BOOT_GRUB2); }
     return Ok(BOOT_UNKNOWN);
     #endif
 }
@@ -178,12 +193,19 @@ fn bootloader_parse_loader_conf(text): i64 {
     while (pos < textlen) {
         var linestart = pos;
         while (pos < textlen) {
-            if (load8(text + pos) == 10) { break; }
+            var lc = load8(text + pos);
+            if (lc == 10 || lc == 13) { break; }   # CR ends a line, as in an entry
             pos = pos + 1;
         }
         var linelen = pos - linestart;
         if (pos < textlen) { pos = pos + 1; }  # skip newline
 
+        # Trailing blanks are not part of a value.
+        while (linelen > 0) {
+            var tail = load8(text + linestart + linelen - 1);
+            if (tail != 32) { if (tail != 9) { break; } }
+            linelen = linelen - 1;
+        }
         if (linelen == 0) { continue; }
 
         # Skip comment lines
@@ -197,27 +219,28 @@ fn bootloader_parse_loader_conf(text): i64 {
             if (load8(text + first) == 35) { continue; }  # '#'
         }
 
-        var kp = bootloader_line_starts_with(text + linestart, linelen, "timeout");
+        var kp = _bootloader_entry_key(text + linestart, linelen, "timeout");
         if (kp > 0) {
             var val = bootloader_extract_value(text + linestart, linelen, kp);
             if (val != 0) {
-                # Parse integer
+                # Seconds, or a word such as menu-force that has no number to give:
+                # that leaves the default, rather than reading its digits, if any.
                 var t = 0;
                 var vi = 0;
                 var vl = strlen(val);
+                var isnum = vl <= 9;
                 while (vi < vl) {
                     var ch = load8(val + vi);
-                    if (ch >= 48) { if (ch <= 57) {
-                            t = t * 10 + (ch - 48);
-                        } }
+                    if (ch < 48 || ch > 57) { isnum = 0; }
+                    t = t * 10 + (ch - 48);
                     vi = vi + 1;
                 }
-                store64(result, t);
+                if (isnum == 1) { store64(result, t); }
             }
             continue;
         }
 
-        kp = bootloader_line_starts_with(text + linestart, linelen, "default");
+        kp = _bootloader_entry_key(text + linestart, linelen, "default");
         if (kp > 0) {
             var val = bootloader_extract_value(text + linestart, linelen, kp);
             if (val != 0) {
@@ -254,28 +277,27 @@ var _bootloader_bootctl = 0;
 
 # List boot entries: `bootctl list` first, then the BLS Type #1 drop-ins.
 # result_arr: caller-allocated array of max_entries BootEntry pointers.
-# When bootctl is missing, fails, or prints nothing, the first readable of
-# /boot/loader/entries, /efi/loader/entries, /boot/efi/loader/entries is
-# parsed by bootloader_list_loader_entries (file-name order). is_default is
+# When bootctl is missing, fails, or prints nothing, every readable one of
+# /boot/loader/entries, /efi/loader/entries and /boot/efi/loader/entries is
+# parsed by _bootloader_scan_entries_dir and merged, as systemd-boot merges the ESP
+# and XBOOTLDR. Two directories can each hold an id, and both are returned: hiding one
+# would hide what may boot. Two paths to one directory are read once. is_default is
 # never set by either path (see _bootloader_scan_entries_dir).
 # Returns Result: Ok(count) — 0 when a source was read and held no entries —
-# or Err(not_supported) when bootctl produced nothing AND no entries directory
-# could be read, so "no source" no longer reads as "no entries".
+# Err(not_supported) when bootctl produced nothing AND no entries directory
+# could be read, so "no source" no longer reads as "no entries", or Err when the
+# entries cannot all be returned: more than max_entries, or a file over the cap.
 fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
     return Ok(0);               # agnos boots via gnoboot; no systemd-boot entries
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
-    if (max_entries < 0) {
-        return drm_err_invalid_argument("max_entries is negative");
-    }
-    if (max_entries > 0) {
-        if (result_arr == 0) { return drm_err_invalid_argument("result_arr is null"); }
+    if (_agnodrm_out_ok(result_arr, max_entries) != 1) {
+        return drm_err_invalid_argument("result array is null or max_entries is negative");
     }
     # Use bootctl list (systemd-boot) as it provides structured output.
     # argv vec: element 0 is the ABSOLUTE command path (execve does no PATH
-    # lookup). The old 2-arg run_capture(cmd, argv) form left buf/buflen
-    # garbage — see CHANGELOG. Mirrors udev_list_devices / journald_query.
+    # lookup). Mirrors udev_list_devices / journald_query.
     var args = vec_new();
     vec_push(args, "/usr/bin/bootctl");
     vec_push(args, "list");
@@ -283,7 +305,8 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
     if (_bootloader_bootctl != 0) { vec_set(args, 0, _bootloader_bootctl); }
 
     var cap = 65536;
-    var buf = alloc(cap + 1);
+    var buf = _agnodrm_scratch_new(cap + 1);
+    if (buf == 0) { return drm_err_io(ENOMEM, "no memory for bootctl output"); }
     var res_t, res_v = agnodrm_run_capture(args, buf, cap, "bootctl list failed");
     if (is_ok(res_t) == 1) {
         var nbytes = res_v;
@@ -291,22 +314,51 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
         # options (a kernel parameter the caller then never sees) and later
         # entries would vanish. Refuse rather than return a truncated list.
         if (nbytes >= cap) {
+            _agnodrm_scratch_free(buf, cap + 1);
             return drm_err_io(0, "bootctl list output exceeds 64 KiB; not parsing a truncated list");
         }
         if (nbytes > 0) {
             store8(buf + nbytes, 0);
-            return bootloader_parse_bootctl_list(buf, result_arr, max_entries);
+            var p_t, p_v = bootloader_parse_bootctl_list(buf, result_arr, max_entries);
+            _agnodrm_scratch_free(buf, cap + 1);
+            if (is_err_result(p_t) == 1) { return Err(p_v); }
+            return Ok(p_v);
         }
     }
+    _agnodrm_scratch_free(buf, cap + 1);
 
-    # Fallback (roadmap V1.6.x): read the loader entries directly. The first
-    # directory that opens as a directory wins, even when it holds no entries.
-    var n = _bootloader_scan_entries_dir("/boot/loader/entries", result_arr, max_entries);
-    if (n >= 0) { return Ok(n); }
-    n = _bootloader_scan_entries_dir("/efi/loader/entries", result_arr, max_entries);
-    if (n >= 0) { return Ok(n); }
-    n = _bootloader_scan_entries_dir("/boot/efi/loader/entries", result_arr, max_entries);
-    if (n >= 0) { return Ok(n); }
+    # Fallback (roadmap V1.6.x): read the loader entries directly, from all of them.
+    # Through 1.7.1 the first directory won, so an empty /boot hid every entry on /efi.
+    var dirs = vec_new();
+    vec_push(dirs, "/boot/loader/entries");
+    vec_push(dirs, "/efi/loader/entries");
+    vec_push(dirs, "/boot/efi/loader/entries");
+    var count = 0;
+    var readable = 0;
+    var di = 0;
+    while (di < vec_len(dirs)) {
+        var dir = _bootloader_path(vec_get(dirs, di));
+        var seen = 0;
+        var pi = 0;
+        while (pi < di) {
+            seen = seen | _bootloader_same_dir(dir, _bootloader_path(vec_get(dirs, pi)));
+            pi = pi + 1;
+        }
+        di = di + 1;
+        if (seen == 1) { continue; }
+        var n = _bootloader_scan_entries_dir(dir, result_arr, max_entries, count);
+        if (n <= BOOTLOADER_SCAN_TOO_LARGE) { return _bootloader_scan_err(n); }
+        if (n >= 0) {
+            readable = 1;
+            count = n;
+        } elif (n != 0 - ENOENT) {
+            # A directory that exists and cannot be read may hold what boots.
+            if (n != 0 - ENOTDIR) {
+                return drm_err_io(0 - n, "a loader entries directory cannot be read");
+            }
+        }
+    }
+    if (readable == 1) { return Ok(count); }
     var why = "bootctl list printed nothing and no loader/entries dir under /boot, /efi or /boot/efi is readable";
     return drm_err_not_supported(why);
     #endif
@@ -316,14 +368,16 @@ fn bootloader_list_boot_entries(result_arr, max_entries): i64 {
 # Loader-entries fallback — Boot Loader Specification Type #1
 # ================================================================
 #
-# Everything read here is EXTERNAL INPUT, and every read is bounded:
+# Everything read here is EXTERNAL INPUT, and every read is bounded. The rule for a
+# file that cannot be read in full is to fail the listing, never to leave it out:
+# systemd-boot reads a file of any size, so an entry skipped here is one a validator
+# never sees and the machine still boots (audit F-28).
 #   * a file is read with lib/io.cyr file_read_all into ONE buffer of
 #     BOOTLOADER_ENTRY_FILE_MAX + 1 bytes, allocated once per directory walk.
-#     A file that fills that extra byte is over the cap and is SKIPPED, never
-#     truncated — a cut `options` line could silently drop a hardening
-#     parameter. A file at the cap leaves index `cap` for the terminator.
-#   * a file holding a NUL byte is not a text entry and is skipped, so no
-#     value is ever cut short at an embedded NUL;
+#     A file that fills that extra byte is over the cap and fails the call: it is
+#     neither truncated nor dropped. A file at the cap leaves index `cap` for the
+#     terminator;
+#   * a file holding a NUL byte is read up to it, where systemd-boot stops;
 #   * only names that stat as regular files are opened (xstat follows
 #     symlinks), so a FIFO or device node already in the directory is skipped.
 #     The stat and the open are separate calls: a FIFO swapped in between them
@@ -339,8 +393,46 @@ enum BootloaderEntryLimits {
     BOOTLOADER_ENTRY_NAME_MAX = 255;     # NAME_MAX; a longer name is skipped
 }
 
+# _bootloader_scan_entries_dir's refusals, below every negative errno.
+var BOOTLOADER_SCAN_TOO_LARGE = 0 - 5000;
+var BOOTLOADER_SCAN_TOO_MANY = 0 - 5001;
+var BOOTLOADER_SCAN_UNREADABLE = 0 - 5002;
+
+fn _bootloader_scan_err(n): i64 {
+    if (n == BOOTLOADER_SCAN_TOO_MANY) {
+        return drm_err_invalid_argument("more loader entries than max_entries");
+    }
+    if (n == BOOTLOADER_SCAN_UNREADABLE) {
+        return drm_err_io(0, "a loader entry cannot be read; not parsing part of the list");
+    }
+    return drm_err_io(0, "a loader entry is over 64 KiB; not parsing part of the list");
+}
+
+# 1 if two paths are one directory, by device and inode. st_dev is at +0 and st_ino at +8
+# on x86_64 and aarch64 alike; the stdlib names neither.
+fn _bootloader_same_dir(a, b): i64 {
+    var sa = alloc(STAT_BUFSZ);
+    var sb = alloc(STAT_BUFSZ);
+    if (xstat(a, sa) != 0) { return 0; }
+    if (xstat(b, sb) != 0) { return 0; }
+    if (load64(sa) != load64(sb)) { return 0; }
+    return load64(sa + 8) == load64(sb + 8);
+}
+
+# 1 if the `nlen` bytes at `nd` end in ".conf" in any case, as systemd-boot matches it.
+fn _bootloader_has_conf_suffix(nd, nlen): i64 {
+    var i = 0;
+    while (i < 5) {
+        var c = load8(nd + nlen - 5 + i);
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        if (c != load8(".conf" + i)) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
+
 # 1 if a directory entry name (Str) names a loader entry file we will open:
-# it ends in ".conf" (case-sensitive, as systemd-boot matches it) after a
+# it ends in ".conf" in any case (systemd-boot folds it) after a
 # non-empty stem, is not hidden (which also excludes "." and ".."), is at most
 # BOOTLOADER_ENTRY_NAME_MAX bytes, and holds no '/', control byte or DEL.
 # Linux getdents cannot yield a '/' or an over-long name; those two checks are
@@ -360,7 +452,7 @@ fn _bootloader_entry_name_ok(name: Str): i64 {
         if (ch == 127) { return 0; }           # DEL
         i = i + 1;
     }
-    return path_has_ext(name, ".conf");
+    return _bootloader_has_conf_suffix(nd, nlen);
 }
 
 # vec_sort_by comparator over two Str names: byte-wise unsigned order, a name
@@ -382,13 +474,19 @@ fn _bootloader_name_cmp(a, b): i64 {
     return al - bl;
 }
 
-# 1 if `path` (cstring) resolves to a regular file. xstat follows symlinks,
-# so a link to a regular file counts; a FIFO, device node, socket or directory
-# does not. STAT_MODE is the per-target st_mode offset (24 on x86_64, 16 on
-# aarch64, 0 on agnos) — never a hardcoded offset. S_IFMT 0xF000, S_IFREG 0x8000.
+# 1 if `path` (cstring) resolves to a regular file, 0 if it does not or resolves to
+# nothing (a dangling or looping link), or -1 if it cannot be told: an entry that may be a
+# file and cannot be read is not one to leave out. xstat follows symlinks, so a link to a regular file counts; a FIFO,
+# device node, socket or directory does not. STAT_MODE is the per-target st_mode offset
+# (24 on x86_64, 16 on aarch64, 0 on agnos) — never a hardcoded offset. S_IFMT 0xF000,
+# S_IFREG 0x8000.
 fn _bootloader_is_regular(path): i64 {
     var st[144];
-    if (xstat(path, &st) != 0) { return 0; }
+    var ret = xstat(path, &st);
+    if (ret == 0 - ENOENT) { return 0; }
+    if (ret == 0 - ENOTDIR) { return 0; }
+    if (ret == 0 - ELOOP) { return 0; }
+    if (ret != 0) { return 0 - 1; }
     var mode = load32(&st + STAT_MODE);
     if ((mode & 0xF000) == 0x8000) { return 1; }
     return 0;
@@ -421,8 +519,9 @@ fn _bootloader_sb_append(sb, val): i64 {
 }
 
 # Parse one BLS Type #1 entry body — `textlen` bytes at `text`, not
-# NUL-delimited — into entry `e`. Lines split on LF; a trailing CR and
-# trailing spaces/tabs are trimmed; blank lines and lines whose first
+# NUL-delimited — into entry `e`. Lines end at LF or CR, as systemd-boot ends them: with
+# LF alone, "# x\roptions init=/bin/sh" read as a comment here and booted as an option
+# (audit F-27). Trailing spaces/tabs are trimmed; blank lines and lines whose first
 # non-blank byte is '#' are skipped. The key is the first word, the value the
 # rest of the line after the separating whitespace. title / version / linux
 # are single-valued (last wins); initrd and options may repeat and are joined
@@ -437,19 +536,20 @@ fn _bootloader_parse_entry_text(e, text, textlen): i64 {
     while (pos < textlen) {
         var ls = pos;
         while (pos < textlen) {
-            if (load8(text + pos) == 10) { break; }
+            var lc = load8(text + pos);
+            if (lc == 10 || lc == 13) { break; }
             pos = pos + 1;
         }
         var ll = pos - ls;
-        if (pos < textlen) { pos = pos + 1; }   # skip the LF
+        if (pos < textlen) { pos = pos + 1; }   # skip the LF or CR
 
-        # Trim trailing CR / space / tab (CRLF files, padded values).
+        # Trim trailing space / tab (padded values).
         var trim = 1;
         while (trim == 1) {
             if (ll == 0) { trim = 0; }
             else {
                 var tc = load8(text + ls + ll - 1);
-                if (tc == 13 || tc == 32 || tc == 9) { ll = ll - 1; }
+                if (tc == 32 || tc == 9) { ll = ll - 1; }
                 else { trim = 0; }
             }
         }
@@ -500,29 +600,27 @@ fn _bootloader_parse_entry_text(e, text, textlen): i64 {
     return 0;
 }
 
-# Walk one entries directory (cstring `dir`) into result_arr. Returns the
-# entry count (>= 0), or the negative errno of the failed directory open when
-# `dir` is not a readable directory (agnos calls fail with a bare -1).
+# Walk one entries directory (cstring `dir`) into result_arr from index `count`. Returns
+# the new count (>= 0), the negative errno of a failed directory read (agnos calls fail
+# with a bare -1), or a BOOTLOADER_SCAN_* refusal: a file over the cap or unreadable, or
+# more entries than max_entries. max_entries 0 asks for nothing, and is no overflow.
 # Callers validate arguments.
 #
 # Order is deterministic: candidate names are sorted byte-wise
-# (_bootloader_name_cmp) BEFORE max_entries is applied, so a truncated listing
-# is always the same prefix. That is file-name order, NOT systemd-boot's menu
+# (_bootloader_name_cmp) first, so a listing is always in the same order.
+# That is file-name order, NOT systemd-boot's menu
 # order (sort-key, machine-id, version); `version` is filled in so a caller
 # can reorder. is_default is left 0: the effective default is the
 # LoaderEntryDefault / LoaderEntryOneShot EFI variables before loader.conf's
 # `default`, which may itself be a glob, so no exact answer exists from the
 # entries directory alone. (The bootctl path leaves it 0 as well: see
 # bootloader_parse_bootctl_list.)
-fn _bootloader_scan_entries_dir(dir, result_arr, max_entries): i64 {
-    # One directory open to learn whether `dir` is a readable directory, with
-    # the real errno. file_open maps O_DIRECTORY onto agnos's AO_DIRECTORY.
-    var dfd = file_open(dir, O_RDONLY | O_DIRECTORY, 0);
-    if (dfd < 0) { return dfd; }
-    file_close(dfd);
-
+fn _bootloader_scan_entries_dir(dir, result_arr, max_entries, count): i64 {
     var dstr = str_from(dir);
-    var names = dir_list(dstr);
+    var names = vec_new();
+    # dir_list would read a directory that fails part way as a short one.
+    var listed = dir_list_checked(dstr, names);
+    if (listed < 0) { return listed; }
     var cand = vec_new();
     var ni = 0;
     var nn = vec_len(names);
@@ -534,25 +632,38 @@ fn _bootloader_scan_entries_dir(dir, result_arr, max_entries): i64 {
     vec_sort_by(cand, &_bootloader_name_cmp);
 
     var cap = BOOTLOADER_ENTRY_FILE_MAX;
-    var buf = alloc(cap + 1);
-    var count = 0;
+    var buf = _agnodrm_scratch_new(cap + 1);
+    if (buf == 0) { return 0 - ENOMEM; }
+    var ret = 0;
     var ci = 0;
     var cn = vec_len(cand);
     while (ci < cn) {
-        if (count >= max_entries) { break; }
+        if (max_entries == 0) { break; }
         var cname = vec_get(cand, ci);
         ci = ci + 1;
         var full = str_data(path_join(dstr, cname));
-        if (_bootloader_is_regular(full) != 1) { continue; }
+        var kind = _bootloader_is_regular(full);
+        if (kind < 0) {
+            ret = BOOTLOADER_SCAN_UNREADABLE;
+            break;
+        }
+        if (kind == 0) { continue; }
         # Read up to cap + 1 bytes into the cap + 1 buffer: a full read means
         # the file is over the cap. Otherwise got <= cap and buf[got] is in bounds.
         var got = file_read_all(full, buf, cap + 1);
-        if (got < 0) { continue; }
-        if (got > cap) { continue; }
-        if (memchr(buf, 0, got) >= 0) { continue; }
+        if (got < 0) {
+            if (got == 0 - ENOENT) { continue; }  # removed since the listing
+            ret = BOOTLOADER_SCAN_UNREADABLE;
+            break;
+        }
+        if (got > cap) {
+            ret = BOOTLOADER_SCAN_TOO_LARGE;
+            break;
+        }
+        var nul = memchr(buf, 0, got);
+        if (nul >= 0) { got = nul; }
         store8(buf + got, 0);
 
-        var e = bootloader_entry_new();
         # The id is the whole file name, ".conf" included — systemd-boot's entry
         # id, and what the bootctl path reports for a .conf entry. The paths
         # still differ elsewhere: bootctl also lists UKIs and automatic entries,
@@ -561,31 +672,39 @@ fn _bootloader_scan_entries_dir(dir, result_arr, max_entries): i64 {
         var id = alloc(idlen + 1);
         memcpy(id, str_data(cname), idlen);
         store8(id + idlen, 0);
+        if (count >= max_entries) {
+            ret = BOOTLOADER_SCAN_TOO_MANY;
+            break;
+        }
+        var e = bootloader_entry_new();
         bootloader_entry_set_id(e, id);
         _bootloader_parse_entry_text(e, buf, got);
         store64(result_arr + count * 8, e);
         count = count + 1;
     }
+    _agnodrm_scratch_free(buf, cap + 1);
+    if (ret < 0) { return ret; }
     return count;
 }
 
 # List Boot Loader Specification Type #1 entries from one directory, e.g.
-# "/boot/loader/entries". Every "<id>.conf" regular file is parsed, in
-# byte-wise file-name order, into a bootloader_entry (id = the file name,
+# "/boot/loader/entries". Every "<id>.conf" regular file, the suffix in any case, is
+# parsed, in byte-wise file-name order, into a bootloader_entry (id = the file name,
 # ".conf" included, as systemd-boot and the bootctl path report it; repeated
-# initrd / options joined with a space; is_default 0), up to
-# max_entries into the caller-allocated result_arr. Hidden, non-.conf and
-# over-long names, non-regular files, files over 64 KiB (BOOTLOADER_ENTRY_FILE_MAX)
-# and files holding a NUL byte are skipped.
+# initrd / options joined with a space; is_default 0), into the caller-allocated
+# result_arr. Hidden and over-long names and non-regular files are skipped, as
+# systemd-boot skips them.
 # Returns Result: Ok(count) — 0 for a readable directory with no entries — or
-# Err when `dir` is not a readable directory or an argument is invalid.
+# Err when `dir` is not a readable directory, an argument is invalid, or the entries
+# cannot all be returned: a file over 64 KiB (BOOTLOADER_ENTRY_FILE_MAX) or unreadable,
+# or more entries than max_entries. The bootloader would boot what a short list leaves out.
 fn bootloader_list_loader_entries(dir, result_arr, max_entries): i64 {
     if (dir == 0) { return drm_err_invalid_argument("loader entries dir is null"); }
-    if (max_entries < 0) { return drm_err_invalid_argument("max_entries is negative"); }
-    if (max_entries > 0) {
-        if (result_arr == 0) { return drm_err_invalid_argument("result_arr is null"); }
+    if (_agnodrm_out_ok(result_arr, max_entries) != 1) {
+        return drm_err_invalid_argument("result array is null or max_entries is negative");
     }
-    var n = _bootloader_scan_entries_dir(dir, result_arr, max_entries);
+    var n = _bootloader_scan_entries_dir(dir, result_arr, max_entries, 0);
+    if (n <= BOOTLOADER_SCAN_TOO_LARGE) { return _bootloader_scan_err(n); }
     if (n < 0) {
         return drm_err_io(0 - n, "loader entries directory is not a readable directory");
     }
@@ -632,13 +751,16 @@ fn _bootloader_is_continuation(line, linelen, indent, colon): i64 {
 }
 
 # Finish a bootctl block: set the joined initrd / options, then store the entry
-# if the block carried an id. Returns the new count.
+# if the block carried an id. Returns the new count, or -1 if result_arr is full, which
+# fails the parse: an entry a caller cannot see is one it cannot validate. max_entries
+# 0 asks for nothing and is no overflow.
 fn _bootloader_bootctl_flush(e, sb_initrd, sb_options, result_arr, max_entries, count): i64 {
     if (e == 0) { return count; }
     if (sb_initrd != 0) { bootloader_entry_set_initrd(e, str_data(str_builder_build(sb_initrd))); }
     if (sb_options != 0) { bootloader_entry_set_options(e, str_data(str_builder_build(sb_options))); }
     if (bootloader_entry_id(e) == 0) { return count; }
-    if (count >= max_entries) { return count; }
+    if (max_entries == 0) { return count; }
+    if (count >= max_entries) { return 0 - 1; }
     store64(result_arr + count * 8, e);
     return count + 1;
 }
@@ -679,9 +801,8 @@ fn _bootloader_bootctl_flush(e, sb_initrd, sb_options, result_arr, max_entries, 
 # the entry files' own values use bootloader_list_loader_entries.
 fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
     if (text == 0) { return drm_err_invalid_argument("bootctl text is null"); }
-    if (max_entries < 0) { return drm_err_invalid_argument("max_entries is negative"); }
-    if (max_entries > 0) {
-        if (result_arr == 0) { return drm_err_invalid_argument("result_arr is null"); }
+    if (_agnodrm_out_ok(result_arr, max_entries) != 1) {
+        return drm_err_invalid_argument("result array is null or max_entries is negative");
     }
     var count = 0;
     var current = 0;
@@ -708,6 +829,7 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
                 if (indent >= colon) { continue; }
             }
             count = _bootloader_bootctl_flush(current, sb_initrd, sb_options, result_arr, max_entries, count);
+            if (count < 0) { return drm_err_invalid_argument("more boot entries than max_entries"); }
             current = 0;
             sb_initrd = 0;
             sb_options = 0;
@@ -763,6 +885,7 @@ fn bootloader_parse_bootctl_list(text, result_arr, max_entries): i64 {
         }
     }
     count = _bootloader_bootctl_flush(current, sb_initrd, sb_options, result_arr, max_entries, count);
+    if (count < 0) { return drm_err_invalid_argument("more boot entries than max_entries"); }
 
     return Ok(count);
 }
@@ -798,69 +921,199 @@ fn bootloader_is_dangerous_token(text, textlen, token): i64 {
     return 0;
 }
 
+# What a danger-map key means: the whole token matches; the key part names a switch
+# whose value turns a protection off; the key part is dangerous with any value; the token
+# matches only standing alone, for a word as common as "1".
+enum BootloaderDanger {
+    BL_DANGER_TOKEN = 1;
+    BL_DANGER_IF_OFF = 2;
+    BL_DANGER_ANY_VALUE = 4;
+    BL_DANGER_BARE = 8;
+}
+
 var _bootloader_danger_map = 0;
 
 fn bootloader_danger_reset(): i64 { _bootloader_danger_map = 0; return 0; }
 
+# Copy `n` bytes at `src` to `out` the way the kernel reads a parameter: quotes go
+# (next_arg strips them), and before the first '=' a '-' is a '_' (parameq folds them,
+# as systemd does for its own). Lowercased, because this check is case-insensitive.
+# Returns the new length. Without this, init="/bin/sh" and init-on-alloc=0 passed.
+fn _bootloader_norm_token(src, n, out): i64 {
+    var len = 0;
+    var inkey = 1;
+    var i = 0;
+    while (i < n) {
+        var c = load8(src + i);
+        i = i + 1;
+        if (c == 34) { continue; }
+        if (c == 61) { inkey = 0; }
+        if (c >= 65 && c <= 90) { c = c + 32; }
+        if (inkey == 1) {
+            if (c == 45) { c = 95; }
+        }
+        store8(out + len, c);
+        len = len + 1;
+    }
+    store8(out + len, 0);
+    return len;
+}
+
+# Add `key` in its normal form, so an entry is spelled here as people spell it.
+fn _bootloader_danger_add(key, kind): i64 {
+    var n = strlen(key);
+    var norm = alloc(n + 1);
+    _bootloader_norm_token(key, n, norm);
+    map_set(_bootloader_danger_map, norm, map_get(_bootloader_danger_map, norm) | kind);
+    return 0;
+}
+
 fn _bootloader_danger_init(): i64 {
     if (_bootloader_danger_map != 0) { return 0; }
     _bootloader_danger_map = map_new();
-    # Single-user / shell-escape patterns
-    map_set(_bootloader_danger_map, "init=/bin/sh", 1);
-    map_set(_bootloader_danger_map, "init=/bin/bash", 1);
-    map_set(_bootloader_danger_map, "init=/bin/dash", 1);
-    map_set(_bootloader_danger_map, "single", 1);
-    map_set(_bootloader_danger_map, "emergency", 1);
-    map_set(_bootloader_danger_map, "rd.break", 1);
-    map_set(_bootloader_danger_map, "debug_shell", 1);
-    map_set(_bootloader_danger_map, "systemd.debug-shell", 1);
-    # F-8 (1.1.14): kernel-lockdown / module-signing downgrades
-    map_set(_bootloader_danger_map, "lockdown=none", 1);
-    map_set(_bootloader_danger_map, "lockdown=integrity", 1);
-    map_set(_bootloader_danger_map, "module.sig_enforce=0", 1);
-    # F-8: LSM disable downgrades
-    map_set(_bootloader_danger_map, "selinux=0", 1);
-    map_set(_bootloader_danger_map, "apparmor=0", 1);
-    map_set(_bootloader_danger_map, "enforcing=0", 1);
-    map_set(_bootloader_danger_map, "audit=0", 1);
-    # F-8: heap-hardening downgrades
-    map_set(_bootloader_danger_map, "init_on_alloc=0", 1);
-    map_set(_bootloader_danger_map, "init_on_free=0", 1);
-    map_set(_bootloader_danger_map, "slab_nomerge=0", 1);
-    # F-8: EFI / DMA-protection escape
-    map_set(_bootloader_danger_map, "efi=disable_early_pci_dma", 1);
-    # F-1 (1.5.3): the init= entries above enumerated exactly three shells, so
-    # every other interpreter walked straight through. Same class of gap for
-    # rescue targets and for the CPU-mitigation / KASLR downgrades, none of
-    # which were represented at all.
-    map_set(_bootloader_danger_map, "init=/bin/zsh", 1);
-    map_set(_bootloader_danger_map, "init=/bin/ksh", 1);
-    map_set(_bootloader_danger_map, "init=/bin/csh", 1);
-    map_set(_bootloader_danger_map, "init=/bin/tcsh", 1);
-    map_set(_bootloader_danger_map, "init=/bin/ash", 1);
-    map_set(_bootloader_danger_map, "init=/bin/busybox", 1);
-    map_set(_bootloader_danger_map, "init=/bin/sulogin", 1);
-    map_set(_bootloader_danger_map, "init=/sbin/sulogin", 1);
+    var m = BL_DANGER_TOKEN;
+    # Single-user / shell-escape patterns. An init= shell is matched by file name in any
+    # directory; see _bootloader_init_is_shell.
+    _bootloader_danger_add("single", m);
+    _bootloader_danger_add("emergency", m);
+    _bootloader_danger_add("rd.break", m);
+    _bootloader_danger_add("rd.shell", m);
+    _bootloader_danger_add("rd.shell=1", m);
+    _bootloader_danger_add("debug_shell", m);
+    _bootloader_danger_add("systemd.debug-shell", m);
     # Rescue / emergency targets — the systemd spelling of `single`.
-    map_set(_bootloader_danger_map, "rescue", 1);
-    map_set(_bootloader_danger_map, "rd.rescue", 1);
-    map_set(_bootloader_danger_map, "systemd.unit=rescue.target", 1);
-    map_set(_bootloader_danger_map, "systemd.unit=emergency.target", 1);
-    # CPU-mitigation downgrades.
-    map_set(_bootloader_danger_map, "mitigations=off", 1);
-    map_set(_bootloader_danger_map, "nopti", 1);
-    map_set(_bootloader_danger_map, "pti=off", 1);
-    map_set(_bootloader_danger_map, "nospectre_v1", 1);
-    map_set(_bootloader_danger_map, "nospectre_v2", 1);
-    map_set(_bootloader_danger_map, "nosmep", 1);
-    map_set(_bootloader_danger_map, "nosmap", 1);
-    # KASLR / NX downgrades.
-    map_set(_bootloader_danger_map, "nokaslr", 1);
-    map_set(_bootloader_danger_map, "kaslr=off", 1);
-    map_set(_bootloader_danger_map, "noexec=off", 1);
-    # LSM disable / downgrade spellings not covered by the =0 forms above.
-    map_set(_bootloader_danger_map, "security=none", 1);
-    map_set(_bootloader_danger_map, "selinux=permissive", 1);
+    _bootloader_danger_add("rescue", m);
+    _bootloader_danger_add("rd.rescue", m);
+    _bootloader_danger_add("systemd.unit=rescue.target", m);
+    _bootloader_danger_add("systemd.unit=emergency.target", m);
+    _bootloader_danger_add("rd.systemd.unit=rescue.target", m);
+    _bootloader_danger_add("rd.systemd.unit=emergency.target", m);
+    _bootloader_danger_add("systemd.unit=rescue", m);
+    _bootloader_danger_add("systemd.unit=emergency", m);
+    # F-8 (1.1.14): kernel-lockdown / module-signing downgrades
+    _bootloader_danger_add("lockdown=none", m);
+    _bootloader_danger_add("lockdown=integrity", m);
+    # LSM disable / downgrade spellings the off-values below do not cover.
+    _bootloader_danger_add("security=none", m);
+    _bootloader_danger_add("selinux=permissive", m);
+    # F-8: EFI / DMA-protection escape
+    _bootloader_danger_add("efi=disable_early_pci_dma", m);
+    _bootloader_danger_add("efi=no_disable_early_pci_dma", m);
+    # CPU-mitigation and KASLR / NX downgrades with no value to read.
+    _bootloader_danger_add("nopti", m);
+    _bootloader_danger_add("nospectre_v1", m);
+    _bootloader_danger_add("nospectre_v2", m);
+    _bootloader_danger_add("nospec_store_bypass_disable", m);
+    _bootloader_danger_add("nosmep", m);
+    _bootloader_danger_add("nosmap", m);
+    _bootloader_danger_add("nokaslr", m);
+
+    # The SysV spellings of `single`. Inside a quoted value these are ordinary words: a
+    # dm-verity table holds a 1.
+    m = BL_DANGER_BARE;
+    _bootloader_danger_add("s", m);
+    _bootloader_danger_add("-s", m);
+    _bootloader_danger_add("1", m);
+
+    # Switches whose every "off" spelling (0, off, n, no, false) is the downgrade.
+    m = BL_DANGER_IF_OFF;
+    _bootloader_danger_add("selinux", m);
+    _bootloader_danger_add("apparmor", m);
+    _bootloader_danger_add("enforcing", m);
+    _bootloader_danger_add("audit", m);
+    _bootloader_danger_add("module.sig_enforce", m);
+    _bootloader_danger_add("loadpin.enforce", m);
+    _bootloader_danger_add("init_on_alloc", m);
+    _bootloader_danger_add("init_on_free", m);
+    _bootloader_danger_add("slab_nomerge", m);
+    _bootloader_danger_add("kaslr", m);
+    _bootloader_danger_add("noexec", m);
+    _bootloader_danger_add("mitigations", m);
+    _bootloader_danger_add("pti", m);
+    _bootloader_danger_add("spectre_v2", m);
+    _bootloader_danger_add("spectre_v2_user", m);
+    _bootloader_danger_add("spec_store_bypass_disable", m);
+    _bootloader_danger_add("l1tf", m);
+    _bootloader_danger_add("mds", m);
+    _bootloader_danger_add("tsx_async_abort", m);
+    _bootloader_danger_add("retbleed", m);
+    _bootloader_danger_add("iommu", m);
+    _bootloader_danger_add("intel_iommu", m);
+    _bootloader_danger_add("amd_iommu", m);
+
+    # Any value: `rdinit=` overrides the initramfs init, the escape `init=` gives, and
+    # never appears in an ordinary cmdline; rd.break= names where to drop to a shell;
+    # systemd.run= runs its value.
+    m = BL_DANGER_ANY_VALUE;
+    _bootloader_danger_add("rdinit", m);
+    _bootloader_danger_add("rd.break", m);
+    _bootloader_danger_add("systemd.run", m);
+    return 0;
+}
+
+# 1 if `val` (`n` bytes) is one of the spellings a kernel switch reads as off.
+fn _bootloader_value_is_off(val, n): i64 {
+    if (n == 1) {
+        if (load8(val) == 48) { return 1; }             # 0
+        return load8(val) == 110;                       # n
+    }
+    if (n == 2) { return memeq(val, "no", 2); }
+    if (n == 3) { return memeq(val, "off", 3); }
+    if (n == 5) { return memeq(val, "false", 5); }
+    return 0;
+}
+
+# 1 if the init= value `val` ends in the name of an interpreter or rescue tool, in any
+# directory: /bin/sh, /usr/bin/bash, /tmp/x/sh. Listing directories missed the /usr
+# spelling of every shell on a merged system.
+fn _bootloader_init_is_shell(val, n): i64 {
+    var base = 0;
+    var i = 0;
+    while (i < n) {
+        if (load8(val + i) == 47) { base = i + 1; }
+        i = i + 1;
+    }
+    var name = val + base;
+    var len = n - base;
+    if (len < 2) { return 0; }
+    if (streq(name, "sh") == 1) { return 1; }
+    if (streq(name, "ash") == 1) { return 1; }
+    if (streq(name, "bash") == 1) { return 1; }
+    if (streq(name, "rbash") == 1) { return 1; }
+    if (streq(name, "dash") == 1) { return 1; }
+    if (streq(name, "zsh") == 1) { return 1; }
+    if (streq(name, "ksh") == 1) { return 1; }
+    if (streq(name, "csh") == 1) { return 1; }
+    if (streq(name, "tcsh") == 1) { return 1; }
+    if (streq(name, "fish") == 1) { return 1; }
+    if (streq(name, "busybox") == 1) { return 1; }
+    if (streq(name, "sulogin") == 1) { return 1; }
+    return 0;
+}
+
+# 1 if the normalised, NUL-terminated token at `tok` is dangerous. `bare` is 1 unless the
+# word sat inside a quoted value.
+fn _bootloader_token_danger(tok, tlen, bare): i64 {
+    var whole = map_get(_bootloader_danger_map, tok);
+    if ((whole & BL_DANGER_TOKEN) != 0) { return 1; }
+    if ((whole & BL_DANGER_BARE) != 0) { return bare; }
+    var eq = 0;
+    while (eq < tlen) {
+        if (load8(tok + eq) == 61) { break; }
+        eq = eq + 1;
+    }
+    if (eq == 0) { return 0; }
+    if (eq == tlen) { return 0; }
+    var val = tok + eq + 1;
+    var vlen = tlen - eq - 1;
+    if (eq == 4) {
+        if (memeq(tok, "init", 4) == 1) { return _bootloader_init_is_shell(val, vlen); }
+    }
+    store8(tok + eq, 0);
+    var kind = map_get(_bootloader_danger_map, tok);
+    store8(tok + eq, 61);
+    if ((kind & BL_DANGER_ANY_VALUE) != 0) { return 1; }
+    if ((kind & BL_DANGER_IF_OFF) != 0) { return _bootloader_value_is_off(val, vlen); }
     return 0;
 }
 
@@ -871,10 +1124,15 @@ fn _bootloader_danger_init(): i64 {
 # was, or if the cmdline is malformed (non-printable, non-ASCII, > 4096 chars).
 #
 # NOTE: Ok(0) means "nothing on the denylist matched" — NOT "this cmdline is
-# safe". Matching is exact per space-delimited token (plus a `rdinit=` prefix
-# rule), so an unlisted interpreter, an equivalent spelling, or a novel kernel
-# parameter passes. Treat this as a hygiene check that catches known footguns,
-# not as an authorisation boundary. An allowlist-based API is roadmap V2.0.
+# safe". Every space-separated word is checked, inside quotes too: the kernel holds a
+# quoted value together, but an initramfs may not, and dracut-style parsers split words
+# their own way, so foo="x rd.break y" is refused. Only a word as common as "1" is
+# exempt inside quotes, so dm-mod.create="... verity 1 ..." passes. Each word is read as
+# the kernel reads a parameter (quotes stripped, '-' and '_' folded in the name, either
+# case), then matched exactly, by an off-value of a known switch, or by an init= shell's
+# file name. An unlisted interpreter, an equivalent spelling, or a novel kernel
+# parameter passes. Treat this as a hygiene check that catches known footguns, not as an
+# authorisation boundary. An allowlist-based API is roadmap V2.0.
 fn bootloader_validate_kernel_cmdline(options): i64 {
     if (options == 0) {
         return drm_err_invalid_argument("kernel cmdline is null");
@@ -890,9 +1148,12 @@ fn bootloader_validate_kernel_cmdline(options): i64 {
 
     var i = 0;
     var tok_start = 0;
+    var quoted = 0;
+    var word_quoted = 0;
     while (i <= optlen) {
         var c = 0;
         if (i < optlen) { c = load8(options + i); }
+        if (c == 34) { quoted = 1 - quoted; }
 
         # Check printable ASCII (space=32..tilde=126)
         if (i < optlen) {
@@ -904,40 +1165,20 @@ fn bootloader_validate_kernel_cmdline(options): i64 {
             }
         }
 
-        # On space or end-of-string, check the token
+        # On a space or end-of-string, check the word. It stands alone if it neither
+        # started nor ended inside quotes.
         if (c == 32 || i == optlen) {
+            var bare = 1 - quoted;
+            if (word_quoted == 1) { bare = 0; }
+            word_quoted = quoted;
             var tlen = i - tok_start;
             if (tlen > 0) {
                 # Extract token to null-terminated buffer
                 var tok[128];
                 if (tlen > 127) { tlen = 127; }
-                memcpy(&tok, options + tok_start, tlen);
-                store8(&tok + tlen, 0);
-                # Lowercase the token for case-insensitive match
-                var ti = 0;
-                while (ti < tlen) {
-                    var tc = load8(&tok + ti);
-                    if (tc >= 65) { if (tc <= 90) { store8(&tok + ti, tc + 32); } }
-                    ti = ti + 1;
-                }
-                if (map_has(_bootloader_danger_map, &tok) == 1) {
+                var nlen = _bootloader_norm_token(options + tok_start, tlen, &tok);
+                if (_bootloader_token_danger(&tok, nlen, bare) == 1) {
                     return drm_err_invalid_argument("kernel cmdline contains dangerous parameter");
-                }
-                # `rdinit=` overrides the initramfs init to an arbitrary
-                # binary — the exact escape `init=` gives, and it was absent
-                # from the map entirely. Matched by prefix rather than
-                # enumerated: unlike `init=`, rdinit never appears in an
-                # ordinary cmdline, so any value is suspect.
-                # Cheap guards first: "rdinit=" is 7 bytes and starts with
-                # 'r' (114), and the token is already lowercased. Skipping the
-                # call for every token that cannot match keeps this check off
-                # the per-token cost for ordinary cmdlines.
-                if (tlen >= 7) {
-                    if (load8(&tok) == 114) {
-                        if (bootloader_line_starts_with(&tok, tlen, "rdinit=") != 0) {
-                            return drm_err_invalid_argument("kernel cmdline contains dangerous parameter");
-                        }
-                    }
                 }
             }
             tok_start = i + 1;

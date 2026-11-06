@@ -59,7 +59,7 @@ cyrius test                               # run tests/tcyr/*.tcyr
 cyrius distlib                            # regenerate dist/agnosys.cyr (full)
 cyrius distlib core                       # regen dist/agnosys-core.cyr
                                           # (also: security, storage, trust, system)
-scripts/audit.sh                          # full local quality run (12 gates, mirrors CI)
+scripts/audit.sh                          # full local quality run (14 gates, mirrors CI)
 ```
 
 ## Consumer quickstart
@@ -117,11 +117,12 @@ See [`docs/development/capacity-baseline.md`](docs/development/capacity-baseline
 
 ## Quality gates
 
-Every change must pass `scripts/audit.sh` — 12 gates, identical to CI:
+Every change must pass `scripts/audit.sh` — 14 gates, identical to CI:
 
 ```
 syntax → API surface (snapshot + prose) → capability map → capacity →
-build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks
+build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks →
+dist staleness → lockfile
 ```
 
 | Gate | Command |
@@ -131,9 +132,11 @@ build → smoke → tests → fmt drift → lint → vet → fuzz → benchmarks
 | Capability map staleness | [`scripts/gen-capability-map.sh`](scripts/gen-capability-map.sh) `--check` |
 | Capacity (<85% all tables) | `cyrius capacity --check src/main.cyr` |
 | Fmt drift | `cyrfmt <file>` output must match the committed file (**not** `cyrius fmt` — it rewrites in place and prints nothing) |
-| Tests (202 assertions) | `cyrius test` |
-| Fuzz (4 harnesses) | `fuzz/*.fcyr` under `timeout 10 ... 500` |
-| Benchmarks (18 across 6 groups) | `tests/bcyr/bench_all.bcyr` |
+| Tests | `cyrius test` |
+| Fuzz (8 harnesses) | `fuzz/*.fcyr` under `timeout 10` |
+| Benchmarks (22 across 7 groups) | `tests/bcyr/bench_all.bcyr` |
+| Dist staleness | `cyrius distlib` and `cyrius distlib core` regenerate the committed bundles exactly |
+| Lockfile | `cyrius deps --locked`, first and last: other gates re-vendor `lib/` |
 
 ## Docs
 

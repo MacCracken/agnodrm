@@ -8,8 +8,10 @@ on:
       - 'v[0-9]+.[0-9]+.[0-9]+'
       - '[0-9]+.[0-9]+.[0-9]+'
 
+# Read-only by default, so the CI gate and the build, which run the toolchain, hold no
+# write token. Only the job that publishes the release gets one.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   ci:
@@ -21,7 +23,9 @@ jobs:
     needs: [ci]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Verify version
         run: |
@@ -39,7 +43,10 @@ jobs:
         run: |
           CYRIUS_VERSION="${CYRIUS_VERSION:-$(grep -oP '(?<=^cyrius = ")[^"]+' cyrius.cyml)}"
           echo "Installing Cyrius $CYRIUS_VERSION"
-          curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          curl -fsSLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
+          # The compiler runs in this job, so it is checked before it is unpacked. A pin
+          # with no line in the hash file fails here: see CLAUDE.md.
+          grep -F "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz" .github/toolchain.sha256 | sha256sum -c -
           tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
           CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
           mkdir -p "$HOME/.cyrius/versions/$CYRIUS_VERSION/bin" "$HOME/.cyrius/versions/$CYRIUS_VERSION/lib"
@@ -60,15 +67,14 @@ jobs:
         run: cyrius --version
 
       - name: Resolve deps
-        run: cyrius deps
+        # --locked first: `cyrius deps` rewrites cyrius.lock, so the verify after it could
+        # not see a drifted lock. It writes nothing, and checks the lock against the tags.
+        run: |
+          cyrius deps --locked
+          cyrius deps
 
       - name: Verify dep hashes
-        run: |
-          if [ -f cyrius.lock ]; then
-            cyrius deps --verify
-          else
-            echo "::warning::cyrius.lock not committed — skipping hash verification"
-          fi
+        run: cyrius deps --verify
 
       - name: Build (DCE)
         # Read the log as well as the exit code: cyrius exits 0 on an
@@ -204,7 +210,7 @@ jobs:
           fi
           sha256sum agnodrm-*.tar.gz agnodrm-*.cyr agnodrm-*-linux 2>/dev/null > SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-artifacts
           path: |
@@ -218,16 +224,20 @@ jobs:
     name: Create GitHub Release
     needs: [build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-artifacts
       - name: Changelog
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           awk "/^## \\[${TAG}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" CHANGELOG.md > /tmp/body.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: "agnodrm ${{ github.ref_name }}"
           body_path: /tmp/body.md

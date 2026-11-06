@@ -10,6 +10,8 @@
 # Included directly (as drm.cyr does) for the per-target O_* open flags;
 # include-once, so includers pay nothing.
 include "lib/syscalls.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
 
 # ================================================================
 # Traffic direction / protocol / action constants
@@ -134,7 +136,7 @@ fn netns_fw_policy_set_rules(p, rules_arr, count): i64 {
 # IP address generation from agent name hash
 # ================================================================
 
-# Simple hash function for agent name -> 10.100.x.{1,2}/30
+# Simple hash function for agent name
 fn netns_hash_name(name): i64 {
     var h = 5381;
     var i = 0;
@@ -144,41 +146,34 @@ fn netns_hash_name(name): i64 {
         h = h * 33 + c;
         i = i + 1;
     }
-    # Make positive
+    # Make positive. The most negative i64 negates to itself.
     if (h < 0) { h = 0 - h; }
+    if (h < 0) { h = 0; }
     return h;
 }
 
-# Generate agent IPs. Returns a struct { host_ip, agent_ip }.
+# "10.100.<third>.<last>" as a heap string.
+fn _netns_ip4(third, last): i64 {
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "10.100.");
+    str_builder_add_int(sb, third);
+    str_builder_add_cstr(sb, ".");
+    str_builder_add_int(sb, last);
+    return str_cstr(str_builder_build(sb));
+}
+
+# Generate agent IPs. Returns a struct { host_ip, agent_ip }: the first two hosts of one
+# of the 16384 /30 subnets in 10.100.0.0/16, chosen by a hash of the name. Through 1.7.1
+# there were 255, and any 20 agents more likely than not shared one (audit F-45). A
+# hash cannot rule that out and nothing here keeps a registry, so a caller running many
+# agents must still check for a clash.
 fn netns_generate_agent_ips(agent_name): i64 {
-    var h = netns_hash_name(agent_name);
-    var third = h % 255;
-
-    # Build "10.100.X.1" and "10.100.X.2"
-    var host_ip = alloc(16);
-    var agent_ip = alloc(16);
-
-    var prefix = "10.100.";
-    memcpy(host_ip, prefix, 7);
-    memcpy(agent_ip, prefix, 7);
-
-    # Convert third octet to string
-    var tbuf = alloc(24);  # 24, not a digit count: see agnodrm_tmp_create
-    var tlen = fmt_int_buf(third, tbuf);
-
-    memcpy(host_ip + 7, tbuf, tlen);
-    store8(host_ip + 7 + tlen, 46);  # '.'
-    store8(host_ip + 7 + tlen + 1, 49);  # '1'
-    store8(host_ip + 7 + tlen + 2, 0);
-
-    memcpy(agent_ip + 7, tbuf, tlen);
-    store8(agent_ip + 7 + tlen, 46);  # '.'
-    store8(agent_ip + 7 + tlen + 1, 50);  # '2'
-    store8(agent_ip + 7 + tlen + 2, 0);
-
+    var idx = netns_hash_name(agent_name) % 16384;
+    var third = idx >> 6;
+    var base = (idx & 63) * 4;
     var result = alloc(16);
-    store64(result, host_ip);
-    store64(result + 8, agent_ip);
+    store64(result, _netns_ip4(third, base + 1));
+    store64(result + 8, _netns_ip4(third, base + 2));
     return result;
 }
 
@@ -197,11 +192,137 @@ fn netns_config_for_agent(name): i64 {
 # Validate namespace config
 # ================================================================
 
+# 1 if `s` is a dotted-quad IPv4 address. A leading zero is refused: `ip` and `nft` read
+# it as octal, so 010.0.0.1 is 8.0.0.1 to them, a rule on the wrong host.
+fn _netns_ipv4_ok(s, n): i64 {
+    var parts = 0;
+    var digits = 0;
+    var val = 0;
+    var i = 0;
+    while (i <= n) {
+        var c = 0;
+        if (i < n) { c = load8(s + i); }
+        if (c >= 48 && c <= 57) {
+            if (digits > 0) {
+                if (val == 0) { return 0; }
+            }
+            digits = digits + 1;
+            if (digits > 3) { return 0; }
+            val = val * 10 + (c - 48);
+            if (val > 255) { return 0; }
+        } else {
+            if (i < n) {
+                if (c != 46) { return 0; }
+            }
+            if (digits == 0) { return 0; }
+            parts = parts + 1;
+            digits = 0;
+            val = 0;
+        }
+        i = i + 1;
+    }
+    return parts == 4;
+}
+
+# 1 if the `n` bytes at `s` are an IPv6 address: at most eight groups of 1-4 hex digits,
+# exactly eight unless one "::" stands for the rest. Nothing else reaches ruleset text.
+fn _netns_ipv6_ok(s, n): i64 {
+    if (n < 2) { return 0; }
+    if (n > 39) { return 0; }
+    var groups = 0;
+    var digits = 0;
+    var compressed = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        if (c == 58) {
+            var had = digits;
+            if (digits > 0) { groups = groups + 1; }
+            digits = 0;
+            var gap = 0;
+            if (i + 1 < n) { gap = load8(s + i + 1) == 58; }
+            if (gap == 1) {
+                if (compressed == 1) { return 0; }
+                compressed = 1;
+                i = i + 1;
+            } else {
+                if (had == 0) { return 0; }        # a ':' with no group before it
+                if (i + 1 >= n) { return 0; }      # a lone trailing ':'
+            }
+        } elif (agnodrm_is_hex_char(c) == 1) {
+            digits = digits + 1;
+            if (digits > 4) { return 0; }
+        } else {
+            return 0;
+        }
+        i = i + 1;
+    }
+    if (digits > 0) { groups = groups + 1; }
+    if (compressed == 1) { return groups <= 7; }
+    return groups == 8;
+}
+
+# What `addr` is: 4 for IPv4, 6 for IPv6, either with an optional /prefix; 0 for
+# anything else. This is what stops a remote_addr holding nft syntax (audit F-19).
+fn _netns_addr_family(addr): i64 {
+    var n = strlen(addr);
+    var hostlen = n;
+    var i = 0;
+    while (i < n) {
+        if (load8(addr + i) == 47) {
+            hostlen = i;
+            break;
+        }
+        i = i + 1;
+    }
+    var family = 0;
+    var maxprefix = 0;
+    if (_netns_ipv4_ok(addr, hostlen) == 1) {
+        family = 4;
+        maxprefix = 32;
+    } elif (_netns_ipv6_ok(addr, hostlen) == 1) {
+        family = 6;
+        maxprefix = 128;
+    }
+    if (family == 0) { return 0; }
+    if (hostlen == n) { return family; }
+    var plen = n - hostlen - 1;
+    if (plen < 1) { return 0; }
+    if (plen > 3) { return 0; }
+    if (plen > 1) {
+        if (load8(addr + hostlen + 1) == 48) { return 0; }  # octal to nft, as above
+    }
+    var val = 0;
+    i = hostlen + 1;
+    while (i < n) {
+        var c = load8(addr + i);
+        if (c < 48 || c > 57) { return 0; }
+        val = val * 10 + (c - 48);
+        i = i + 1;
+    }
+    if (val > maxprefix) { return 0; }
+    return family;
+}
+
+# Validate a namespace config. The name goes into `ip` arguments and an interface name,
+# so it is held to letters, digits, '-' and '_', and cannot start with '-'. `ip` takes
+# "%d" in an interface name as a template and picks a number, which left a link no
+# cleanup could name. Both addresses must be IPv4: the /30 this module configures.
 fn netns_validate_config(config): i64 {
+    if (config == 0) { return drm_err_invalid_argument("namespace config is null"); }
     var name = netns_config_name(config);
     if (name == 0) { return drm_err_invalid_argument("namespace name is null"); }
-    if (strlen(name) == 0) { return drm_err_invalid_argument("namespace name cannot be empty"); }
-    if (strlen(name) > 64) { return drm_err_invalid_argument("namespace name too long (max 64)"); }
+    var nlen = strlen(name);
+    if (nlen == 0) { return drm_err_invalid_argument("namespace name cannot be empty"); }
+    if (nlen > 64) { return drm_err_invalid_argument("namespace name too long (max 64)"); }
+    if (load8(name) == 45) { return drm_err_invalid_argument("namespace name cannot start with '-'"); }
+    var ni = 0;
+    while (ni < nlen) {
+        if (agnodrm_is_name_char(load8(name + ni)) != 1) {
+            return drm_err_invalid_argument("namespace name holds a character other than a-z, A-Z, 0-9, - or _");
+        }
+        ni = ni + 1;
+    }
 
     var aip = netns_config_agent_ip(config);
     var hip = netns_config_host_ip(config);
@@ -209,6 +330,8 @@ fn netns_validate_config(config): i64 {
     if (hip == 0) { return drm_err_invalid_argument("host IP is null"); }
     if (strlen(aip) == 0) { return drm_err_invalid_argument("agent IP cannot be empty"); }
     if (strlen(hip) == 0) { return drm_err_invalid_argument("host IP cannot be empty"); }
+    if (_netns_ipv4_ok(aip, strlen(aip)) != 1) { return drm_err_invalid_argument("agent IP is not an IPv4 address"); }
+    if (_netns_ipv4_ok(hip, strlen(hip)) != 1) { return drm_err_invalid_argument("host IP is not an IPv4 address"); }
 
     var plen = netns_config_prefix_len(config);
     # `< 1` (not `== 0`): a negative prefix_len passed both old checks, and
@@ -223,6 +346,26 @@ fn netns_validate_config(config): i64 {
 # ================================================================
 # Truncate veth name to 15 chars (Linux max)
 # ================================================================
+
+# One end of an agent's veth pair: `veth-<name><tail>` when that fits in 15 bytes, or
+# `veth-<8 hex of a hash of the name><tail>` when it does not. Truncating cut the tail
+# off, so both ends of a name of 9 or more bytes were the same name and `ip link add`
+# refused every one (audit F-22).
+fn _netns_veth_name(name, tail): i64 {
+    var plain = netns_concat3("veth-", name, tail);
+    if (strlen(plain) <= 15) { return plain; }
+    var h = netns_hash_name(name) & 0xFFFFFFFF;
+    var hex = alloc(9);
+    var i = 0;
+    while (i < 8) {
+        var d = (h >> ((7 - i) * 4)) & 15;
+        if (d < 10) { store8(hex + i, 48 + d); }
+        else { store8(hex + i, 87 + d); }
+        i = i + 1;
+    }
+    store8(hex + 8, 0);
+    return netns_concat3("veth-", hex, tail);
+}
 
 fn netns_truncate_veth(base): i64 {
     var len = strlen(base);
@@ -252,6 +395,7 @@ fn netns_truncate_veth(base): i64 {
 # _netns_ip_path is a test seam, 0 outside tests/tcyr: a stub to run in place of
 # /usr/sbin/ip, so a test can make a chosen step fail. Nothing but a test sets it.
 var _netns_ip_path = 0;
+var _netns_run_dir = 0;
 
 fn netns_run_ip(args): i64 {
     #ifdef CYRIUS_TARGET_AGNOS
@@ -325,8 +469,8 @@ fn netns_create_agent_netns(config): i64 {
 
     var name = netns_config_name(config);
     var ns_name = netns_concat2("agnos-agent-", name);
-    var veth_host = netns_truncate_veth(netns_concat3("veth-", name, "-h"));
-    var veth_agent = netns_truncate_veth(netns_concat3("veth-", name, "-a"));
+    var veth_host = _netns_veth_name(name, "-h");
+    var veth_agent = _netns_veth_name(name, "-a");
 
     # 1. Create namespace: ip netns add <ns_name>
     var args1 = vec_new();
@@ -376,10 +520,11 @@ fn netns_create_agent_netns(config): i64 {
     if (is_err_result(res4_t) == 1) { return Err(res4_v); }
 
     # ip netns exec <ns> ip addr add <agent_cidr> dev <agent>
-    # (the inner `ip` is PATH-resolved by `ip netns exec`, so it stays bare)
+    # The inner `ip` is absolute too: exec_vec passes an empty environment, so
+    # `ip netns exec` would look it up on the libc default path alone.
     var args5 = vec_new();
     vec_push(args5, "/usr/sbin/ip"); vec_push(args5, "netns"); vec_push(args5, "exec"); vec_push(args5, ns_name);
-    vec_push(args5, "ip"); vec_push(args5, "addr"); vec_push(args5, "add"); vec_push(args5, agent_cidr);
+    vec_push(args5, "/usr/sbin/ip"); vec_push(args5, "addr"); vec_push(args5, "add"); vec_push(args5, agent_cidr);
     vec_push(args5, "dev"); vec_push(args5, veth_agent);
     var res5_t, res5_v = _netns_setup_step(args5, veth_host, ns_name);
     if (is_err_result(res5_t) == 1) { return Err(res5_v); }
@@ -394,7 +539,7 @@ fn netns_create_agent_netns(config): i64 {
     # Bring up agent side in namespace
     var args7 = vec_new();
     vec_push(args7, "/usr/sbin/ip"); vec_push(args7, "netns"); vec_push(args7, "exec"); vec_push(args7, ns_name);
-    vec_push(args7, "ip"); vec_push(args7, "link"); vec_push(args7, "set"); vec_push(args7, veth_agent);
+    vec_push(args7, "/usr/sbin/ip"); vec_push(args7, "link"); vec_push(args7, "set"); vec_push(args7, veth_agent);
     vec_push(args7, "up");
     var res7_t, res7_v = _netns_setup_step(args7, veth_host, ns_name);
     if (is_err_result(res7_t) == 1) { return Err(res7_v); }
@@ -402,7 +547,7 @@ fn netns_create_agent_netns(config): i64 {
     # Bring up loopback in namespace
     var args8 = vec_new();
     vec_push(args8, "/usr/sbin/ip"); vec_push(args8, "netns"); vec_push(args8, "exec"); vec_push(args8, ns_name);
-    vec_push(args8, "ip"); vec_push(args8, "link"); vec_push(args8, "set"); vec_push(args8, "lo");
+    vec_push(args8, "/usr/sbin/ip"); vec_push(args8, "link"); vec_push(args8, "set"); vec_push(args8, "lo");
     vec_push(args8, "up");
     var res8_t, res8_v = _netns_setup_step(args8, veth_host, ns_name);
     if (is_err_result(res8_t) == 1) { return Err(res8_v); }
@@ -410,7 +555,7 @@ fn netns_create_agent_netns(config): i64 {
     # Set default route inside namespace
     var args9 = vec_new();
     vec_push(args9, "/usr/sbin/ip"); vec_push(args9, "netns"); vec_push(args9, "exec"); vec_push(args9, ns_name);
-    vec_push(args9, "ip"); vec_push(args9, "route"); vec_push(args9, "add"); vec_push(args9, "default");
+    vec_push(args9, "/usr/sbin/ip"); vec_push(args9, "route"); vec_push(args9, "add"); vec_push(args9, "default");
     vec_push(args9, "via"); vec_push(args9, netns_config_host_ip(config));
     var res9_t, res9_v = _netns_setup_step(args9, veth_host, ns_name);
     if (is_err_result(res9_t) == 1) { return Err(res9_v); }
@@ -432,6 +577,7 @@ fn netns_destroy_agent_netns(handle): i64 {
     return drm_err_not_supported("network namespace destruction");  # agnos: no netns
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    if (handle == 0) { return drm_err_invalid_argument("namespace handle is null"); }
     var veth_host = netns_handle_veth_host(handle);
     var ns_name = netns_handle_name(handle);
 
@@ -453,8 +599,9 @@ fn netns_destroy_agent_netns(handle): i64 {
 # Render nftables ruleset from FirewallPolicy
 # ================================================================
 
-# Helper to append a string to a buffer, return new position.
-# Checks bounds against buf_size; if exceeded, returns pos unchanged (truncation).
+# Append to a fixed 16 KiB buffer, silently dropping what does not fit. The renderer no
+# longer uses this: a firewall must not lose rules to a buffer (audit F-43).
+#deprecated("the renderer uses a str_builder; removed in agnodrm 2.0.0")
 fn netns_nft_append(buf, pos, str): i64 {
     var len = strlen(str);
     if (pos + len >= 16384) { return pos; }
@@ -473,128 +620,182 @@ fn netns_nft_proto_str(proto): i64 {
     return 0;
 }
 
-# Render a FirewallPolicy into an nftables ruleset string.
-# Returns a heap-allocated null-terminated string.
-fn netns_render_nftables_ruleset(policy): i64 {
-    var buf_size = 16384;
-    var buf = alloc(buf_size);
-    var pos = 0;
+enum NetnsNftLimits {
+    NFT_COMMENT_MAX = 128;   # NFT_USERDATA_MAXLEN
+}
 
-    pos = netns_nft_append(buf, pos, "table inet kavach {\n");
+# 1 if a rule comment can sit inside nft's double quotes: printable ASCII, no quote or
+# backslash, within nft's own limit. Anything else could close the string and add rules.
+fn _netns_comment_ok(comment): i64 {
+    if (comment == 0) { return 1; }
+    var n = strlen(comment);
+    if (n > NFT_COMMENT_MAX) { return 0; }
+    var i = 0;
+    while (i < n) {
+        var c = load8(comment + i);
+        if (c < 32 || c > 126 || c == 34 || c == 92) { return 0; }
+        i = i + 1;
+    }
+    return 1;
+}
 
-    # Input chain
-    pos = netns_nft_append(buf, pos, "  chain input { type filter hook input priority 0; policy ");
-    pos = netns_nft_append(buf, pos, netns_nft_action_str(netns_fw_policy_default_in(policy)));
-    pos = netns_nft_append(buf, pos, ";\n");
-    pos = netns_nft_append(buf, pos, "    ct state established,related accept\n");
-    pos = netns_nft_append(buf, pos, "    iif lo accept\n");
+# Check one rule. Returns Result: Ok(0) or Err.
+fn _netns_rule_validate(rule): i64 {
+    if (rule == 0) { return drm_err_invalid_argument("firewall rule is null"); }
+    var dir = netns_fw_rule_direction(rule);
+    if (dir != TRAFFIC_INBOUND) {
+        if (dir != TRAFFIC_OUTBOUND) { return drm_err_invalid_argument("firewall rule has no direction"); }
+    }
+    var action = netns_fw_rule_action(rule);
+    if (action != FW_ACCEPT) {
+        if (action != FW_DROP) { return drm_err_invalid_argument("firewall rule has no action"); }
+    }
+    var proto = netns_fw_rule_protocol(rule);
+    var port = netns_fw_rule_port(rule);
+    if (proto != PROTO_TCP) { if (proto != PROTO_UDP) { if (proto != PROTO_ANY) {
+                return drm_err_invalid_argument("firewall rule has an unknown protocol");
+            } } }
+    if (port < 0 || port > 65535) {
+        return drm_err_invalid_argument("firewall rule port is out of range");
+    }
+    if (port != 0) {
+        if (proto == PROTO_ANY) { return drm_err_invalid_argument("firewall rule has a port and no protocol"); }
+    }
+    var raddr = netns_fw_rule_remote_addr(rule);
+    if (raddr != 0) {
+        if (strlen(raddr) > 0) {
+            if (_netns_addr_family(raddr) == 0) {
+                return drm_err_invalid_argument("firewall rule remote_addr is not an address");
+            }
+        }
+    }
+    if (_netns_comment_ok(netns_fw_rule_comment(rule)) != 1) {
+        return drm_err_invalid_argument("firewall rule comment holds a quote, backslash or control byte");
+    }
+    return Ok(0);
+}
+
+# Check that every rule of a policy can be rendered as written, before anything acts on
+# it. A rule that cannot be expressed is an error, not a line to leave out: under a
+# default accept, a DROP that vanishes is a hole (audit F-18, F-19).
+# Returns Result: Ok(0) or Err naming the first problem.
+fn netns_fw_policy_validate(policy): i64 {
+    if (policy == 0) { return drm_err_invalid_argument("firewall policy is null"); }
+    var count = netns_fw_policy_rule_count(policy);
+    var rules = netns_fw_policy_rules(policy);
+    if (_agnodrm_out_ok(rules, count) != 1) {
+        return drm_err_invalid_argument("firewall rules are null or the count is negative");
+    }
+    var i = 0;
+    while (i < count) {
+        var res_t, res_v = _netns_rule_validate(load64(rules + i * 8));
+        if (is_err_result(res_t) == 1) { return Err(res_v); }
+        i = i + 1;
+    }
+    return Ok(0);
+}
+
+# Render one rule as a single line: everything it names must match together. Through
+# 1.7.1 a port and an address became two independent rules, so "ssh from the bastion"
+# opened 22 to everyone and every port to the bastion (audit F-18). `dir_word` is saddr
+# or daddr. A rule that names nothing matches everything.
+fn _netns_render_rule(sb, rule, dir_word): i64 {
+    str_builder_add_cstr(sb, "    ");
+    var raddr = netns_fw_rule_remote_addr(rule);
+    if (raddr != 0) {
+        if (strlen(raddr) > 0) {
+            if (_netns_addr_family(raddr) == 6) { str_builder_add_cstr(sb, "ip6 "); }
+            else { str_builder_add_cstr(sb, "ip "); }
+            str_builder_add_cstr(sb, dir_word);
+            str_builder_add_cstr(sb, " ");
+            str_builder_add_cstr(sb, raddr);
+            str_builder_add_cstr(sb, " ");
+        }
+    }
+    var proto = netns_nft_proto_str(netns_fw_rule_protocol(rule));
+    var port = netns_fw_rule_port(rule);
+    if (proto != 0) {
+        if (port != 0) {
+            str_builder_add_cstr(sb, proto);
+            str_builder_add_cstr(sb, " dport ");
+            str_builder_add_int(sb, port);
+            str_builder_add_cstr(sb, " ");
+        } else {
+            str_builder_add_cstr(sb, "meta l4proto ");
+            str_builder_add_cstr(sb, proto);
+            str_builder_add_cstr(sb, " ");
+        }
+    }
+    str_builder_add_cstr(sb, netns_nft_action_str(netns_fw_rule_action(rule)));
+    var comment = netns_fw_rule_comment(rule);
+    if (comment != 0) {
+        if (strlen(comment) > 0) {
+            str_builder_add_cstr(sb, " comment \"");
+            str_builder_add_cstr(sb, comment);
+            str_builder_add_cstr(sb, "\"");
+        }
+    }
+    str_builder_add_cstr(sb, "\n");
+    return 0;
+}
+
+# Render the base chain of one direction, and its rules.
+fn _netns_render_chain(sb, policy, direction): i64 {
+    var chain = "output";
+    var default_action = netns_fw_policy_default_out(policy);
+    var lo_word = "oif";
+    var dir_word = "daddr";
+    if (direction == TRAFFIC_INBOUND) {
+        chain = "input";
+        default_action = netns_fw_policy_default_in(policy);
+        lo_word = "iif";
+        dir_word = "saddr";
+    }
+    str_builder_add_cstr(sb, "  chain ");
+    str_builder_add_cstr(sb, chain);
+    str_builder_add_cstr(sb, " { type filter hook ");
+    str_builder_add_cstr(sb, chain);
+    str_builder_add_cstr(sb, " priority 0; policy ");
+    str_builder_add_cstr(sb, netns_nft_action_str(default_action));
+    str_builder_add_cstr(sb, ";\n");
+    str_builder_add_cstr(sb, "    ct state established,related accept\n");
+    str_builder_add_cstr(sb, "    ");
+    str_builder_add_cstr(sb, lo_word);
+    str_builder_add_cstr(sb, " lo accept\n");
 
     var rules = netns_fw_policy_rules(policy);
     var count = netns_fw_policy_rule_count(policy);
     var i = 0;
     while (i < count) {
         var rule = load64(rules + i * 8);
-        if (netns_fw_rule_direction(rule) == TRAFFIC_INBOUND) {
-            var action = netns_nft_action_str(netns_fw_rule_action(rule));
-            var proto = netns_nft_proto_str(netns_fw_rule_protocol(rule));
-            var port = netns_fw_rule_port(rule);
-            if (proto != 0) {
-                # Port is caller-supplied via netns_fw_rule_new and was never
-                # range-checked: fmt_int_buf of an i64 needs up to 20 digits
-                # (+ sign), so an 8+ digit port overran the old alloc(8) —
-                # `store8(pbuf + plen, 0)` wrote past the end. Bound the value
-                # to the real TCP/UDP range (a larger one cannot produce a
-                # loadable nft rule anyway) and size the scratch buffer for a
-                # full i64, matching the [24] convention in error/update.
-                if (port > 0 && port <= 65535) {
-                    pos = netns_nft_append(buf, pos, "    ");
-                    pos = netns_nft_append(buf, pos, proto);
-                    pos = netns_nft_append(buf, pos, " dport ");
-                    var pbuf = alloc(24);
-                    var plen = fmt_int_buf(port, pbuf);
-                    store8(pbuf + plen, 0);
-                    pos = netns_nft_append(buf, pos, pbuf);
-                    pos = netns_nft_append(buf, pos, " ");
-                    pos = netns_nft_append(buf, pos, action);
-                    pos = netns_nft_append(buf, pos, " comment \"");
-                    pos = netns_nft_append(buf, pos, netns_fw_rule_comment(rule));
-                    pos = netns_nft_append(buf, pos, "\"\n");
-                }
-            }
-            var raddr = netns_fw_rule_remote_addr(rule);
-            if (raddr != 0) {
-                if (strlen(raddr) > 0) {
-                    pos = netns_nft_append(buf, pos, "    ip saddr ");
-                    pos = netns_nft_append(buf, pos, raddr);
-                    pos = netns_nft_append(buf, pos, " ");
-                    pos = netns_nft_append(buf, pos, action);
-                    pos = netns_nft_append(buf, pos, " comment \"");
-                    pos = netns_nft_append(buf, pos, netns_fw_rule_comment(rule));
-                    pos = netns_nft_append(buf, pos, "\"\n");
-                }
-            }
+        if (netns_fw_rule_direction(rule) == direction) {
+            _netns_render_rule(sb, rule, dir_word);
         }
         i = i + 1;
     }
-    pos = netns_nft_append(buf, pos, "  }\n");
+    str_builder_add_cstr(sb, "  }\n");
+    return 0;
+}
 
-    # Output chain
-    pos = netns_nft_append(buf, pos, "  chain output { type filter hook output priority 0; policy ");
-    pos = netns_nft_append(buf, pos, netns_nft_action_str(netns_fw_policy_default_out(policy)));
-    pos = netns_nft_append(buf, pos, ";\n");
-    pos = netns_nft_append(buf, pos, "    ct state established,related accept\n");
-    pos = netns_nft_append(buf, pos, "    oif lo accept\n");
+# Render a FirewallPolicy into an nftables ruleset string.
+# Returns a heap-allocated null-terminated string, or 0 if netns_fw_policy_validate
+# refuses the policy; that call says why.
+#
+# The ruleset replaces the table: declaring it first makes the delete safe on a first
+# apply, and `nft -f` runs the file as one transaction. Without that a second apply
+# merges, so a tightened policy keeps its old accepts (audit F-24).
+fn netns_render_nftables_ruleset(policy): i64 {
+    var chk_t, chk_v = netns_fw_policy_validate(policy);
+    if (is_err_result(chk_t) == 1) { return 0; }
 
-    i = 0;
-    while (i < count) {
-        var rule = load64(rules + i * 8);
-        if (netns_fw_rule_direction(rule) == TRAFFIC_OUTBOUND) {
-            var action = netns_nft_action_str(netns_fw_rule_action(rule));
-            var proto = netns_nft_proto_str(netns_fw_rule_protocol(rule));
-            var port = netns_fw_rule_port(rule);
-            if (proto != 0) {
-                # Port is caller-supplied via netns_fw_rule_new and was never
-                # range-checked: fmt_int_buf of an i64 needs up to 20 digits
-                # (+ sign), so an 8+ digit port overran the old alloc(8) —
-                # `store8(pbuf + plen, 0)` wrote past the end. Bound the value
-                # to the real TCP/UDP range (a larger one cannot produce a
-                # loadable nft rule anyway) and size the scratch buffer for a
-                # full i64, matching the [24] convention in error/update.
-                if (port > 0 && port <= 65535) {
-                    pos = netns_nft_append(buf, pos, "    ");
-                    pos = netns_nft_append(buf, pos, proto);
-                    pos = netns_nft_append(buf, pos, " dport ");
-                    var pbuf = alloc(24);
-                    var plen = fmt_int_buf(port, pbuf);
-                    store8(pbuf + plen, 0);
-                    pos = netns_nft_append(buf, pos, pbuf);
-                    pos = netns_nft_append(buf, pos, " ");
-                    pos = netns_nft_append(buf, pos, action);
-                    pos = netns_nft_append(buf, pos, " comment \"");
-                    pos = netns_nft_append(buf, pos, netns_fw_rule_comment(rule));
-                    pos = netns_nft_append(buf, pos, "\"\n");
-                }
-            }
-            var raddr = netns_fw_rule_remote_addr(rule);
-            if (raddr != 0) {
-                if (strlen(raddr) > 0) {
-                    pos = netns_nft_append(buf, pos, "    ip daddr ");
-                    pos = netns_nft_append(buf, pos, raddr);
-                    pos = netns_nft_append(buf, pos, " ");
-                    pos = netns_nft_append(buf, pos, action);
-                    pos = netns_nft_append(buf, pos, " comment \"");
-                    pos = netns_nft_append(buf, pos, netns_fw_rule_comment(rule));
-                    pos = netns_nft_append(buf, pos, "\"\n");
-                }
-            }
-        }
-        i = i + 1;
-    }
-    pos = netns_nft_append(buf, pos, "  }\n");
-    pos = netns_nft_append(buf, pos, "}\n");
-    store8(buf + pos, 0);
-
-    return buf;
+    var sb = str_builder_new();
+    str_builder_add_cstr(sb, "table inet kavach\n");
+    str_builder_add_cstr(sb, "delete table inet kavach\n");
+    str_builder_add_cstr(sb, "table inet kavach {\n");
+    _netns_render_chain(sb, policy, TRAFFIC_INBOUND);
+    _netns_render_chain(sb, policy, TRAFFIC_OUTBOUND);
+    str_builder_add_cstr(sb, "}\n");
+    return str_cstr(str_builder_build(sb));
 }
 
 # ================================================================
@@ -609,36 +810,50 @@ fn netns_apply_nftables_ruleset(handle, ruleset): i64 {
     return drm_err_not_supported("nftables ruleset in network namespace");  # agnos: no netns/nft
     #endif
     #ifndef CYRIUS_TARGET_AGNOS
+    if (handle == 0) { return drm_err_invalid_argument("namespace handle is null"); }
+    if (ruleset == 0) { return drm_err_invalid_argument("nft ruleset is null"); }
     var ns_name = netns_handle_name(handle);
 
-    # Ensure directory exists (ignore errors)
-    var mkdir_args = vec_new();
-    vec_push(mkdir_args, "/usr/bin/mkdir"); vec_push(mkdir_args, "-p");
-    vec_push(mkdir_args, "/run/agnos");
-    exec_vec(mkdir_args);
+    # kybernet makes this 0755, and other services read it, so that is the mode here. A
+    # directory anyone else can write to is refused, by its mode or by owning it: the
+    # ruleset sits there, closed, until nft reads it. Test seam: _netns_run_dir, 0 outside
+    # tests/tcyr.
+    var run_dir = "/run/agnos";
+    if (_netns_run_dir != 0) { run_dir = _netns_run_dir; }
+    xmkdir(run_dir, 0x1ED);  # mode 0755; a failure shows at the temp below
+    var run_st = alloc(STAT_BUFSZ);
+    if (xstat(run_dir, run_st) == 0) {
+        var run_uid = load32(run_st + STAT_UID);
+        if ((load32(run_st + STAT_MODE) & 0x12) != 0) {
+            return drm_err_invalid_argument("nft run directory is writable by others");
+        }
+        if (run_uid != 0) {
+            if (run_uid != sys_geteuid()) {
+                return drm_err_invalid_argument("nft run directory belongs to another user");
+            }
+        }
+    }
 
     # Write ruleset to an exclusive temp; see agnodrm_tmp_create.
     var tmp_path = 0;
-    var fd = agnodrm_tmp_create("/run/agnos/nft", &tmp_path);
+    var fd = agnodrm_tmp_create(netns_concat2(run_dir, "/nft"), &tmp_path);
     if (fd < 0) {
         return drm_err_io(0 - fd, "failed to create nft temp file");
     }
     # A short or failed write would hand nft a truncated ruleset, silently
     # dropping rules, so it fails the call instead of being applied.
-    var rlen = strlen(ruleset);
-    var wrote = sys_write(fd, ruleset, rlen);
+    var wrote = _agnodrm_write_all(fd, ruleset, strlen(ruleset));
     sys_close(fd);
-    if (wrote != rlen) {
+    if (wrote < 0) {
         sys_unlink(tmp_path);
-        if (wrote < 0) { return drm_err_io(0 - wrote, "failed to write nft temp file"); }
-        return drm_err_io(0, "short write to nft temp file");
+        return drm_err_io(0 - wrote, "failed to write nft temp file");
     }
 
     # ip netns exec <ns> nft -f <path>
-    # (the inner `nft` is PATH-resolved by `ip netns exec`, so it stays bare)
+    # The inner `nft` is absolute, as the inner `ip` is above.
     var nft_args = vec_new();
     vec_push(nft_args, "/usr/sbin/ip"); vec_push(nft_args, "netns"); vec_push(nft_args, "exec");
-    vec_push(nft_args, ns_name); vec_push(nft_args, "nft"); vec_push(nft_args, "-f");
+    vec_push(nft_args, ns_name); vec_push(nft_args, "/usr/sbin/nft"); vec_push(nft_args, "-f");
     vec_push(nft_args, tmp_path);
 
     var run_t, run_v = netns_run_ip(nft_args);

@@ -1,0 +1,102 @@
+# Fuzz: the udev block parser, --export-db splitter and rule validator, on mutated
+# udevadm output that ends against unmapped memory, so a read past the end faults.
+# Invariants: no crash; a device node never holds a ".." component; the db walk never
+# writes past its array.
+
+#define LINUX
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/tagged.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/process.cyr"
+include "src/error.cyr"
+include "src/util.cyr"
+include "src/udev.cyr"
+
+alloc_init();
+
+var fz_seed = 0x2545F4914F6CDD1D;
+fn fz_rand(): i64 {
+    var x = fz_seed;
+    x = x ^ (x << 13);
+    x = x ^ ((x >> 7) & 0x1FFFFFFFFFFFFFF);
+    x = x ^ (x << 17);
+    fz_seed = x;
+    return x & 0x7FFFFFFF;
+}
+
+# `len` bytes ending exactly at an unmapped page.
+fn fz_guarded(len): i64 {
+    var p = _agnodrm_scratch_new(16384);
+    _agnodrm_scratch_free(p + 12288, 4096);
+    return p + 12288 - len;
+}
+
+var seed_sb = str_builder_new();
+str_builder_add_cstr(seed_sb, "P: /devices/pci/block/sda\nN: sda\nU: block\nT: disk\nV: nvme\n");
+str_builder_add_cstr(seed_sb, "E: DEVNAME=/dev/sda\nE: SUBSYSTEM=block\nE: K=v=w\n\n");
+str_builder_add_cstr(seed_sb, "P: /devices/two\nN: dri/card0\nU: drm\n\n");
+var seedtext = str_data(str_builder_build(seed_sb));
+var seedlen = strlen(seedtext);
+var alphabet = "PNUTVE: =/.\n\t-_a0";
+var alphalen = strlen(alphabet);
+
+var arr = alloc(8 * 8);
+var guard_arr = alloc(8);
+store64(guard_arr, 0x5A5A);
+var it = 0;
+while (it < 40000) {
+    var len = fz_rand() % (seedlen + 1);
+    var buf = fz_guarded(len);
+    memcpy(buf, seedtext, len);
+    var muts = fz_rand() % 8;
+    var m = 0;
+    while (m < muts) {
+        if (len > 0) { store8(buf + fz_rand() % len, load8(alphabet + fz_rand() % alphalen)); }
+        m = m + 1;
+    }
+    var t, v = _udev_parse_block(buf, len);
+    if (is_ok(t) == 1) {
+        var node = udev_devinfo_devnode(v);
+        if (node != 0) {
+            if (_udev_has_dotdot(node, strlen(node)) == 1) { sys_exit(30); }
+            if (agnodrm_cstr_starts_with(node, "/dev/") != 1) { sys_exit(31); }
+        }
+        if (udev_devinfo_subsystem(v) == 0) { sys_exit(32); }
+        # The quick filter says what the parser says, for this block's own subsystem.
+        var sub = udev_devinfo_subsystem(v);
+        if (strlen(sub) > 0) {
+            if (_udev_block_on_subsystem(buf, len, sub) != 1) { sys_exit(35); }
+        }
+    }
+    var count = _udev_parse_db(buf, len, 0, arr, 2);
+    if (count < 0) { sys_exit(33); }
+    if (count > 2) { sys_exit(34); }
+    _agnodrm_scratch_free(buf + len - 12288, 12288);
+    it = it + 1;
+}
+
+# Rule keys: anything built on RUN{ is refused, whatever follows.
+var keys = alloc(8);
+var ki = 0;
+while (ki < 20000) {
+    var klen = 4 + fz_rand() % 12;
+    var key = alloc(klen + 1);
+    memcpy(key, "RUN{", 4);
+    var j = 4;
+    while (j < klen) {
+        store8(key + j, 33 + fz_rand() % 90);
+        j = j + 1;
+    }
+    store8(key + klen, 0);
+    store64(keys, key);
+    var rt, rv = udev_validate_rule(keys, 1);
+    if (is_ok(rt) == 1) { sys_exit(40); }
+    ki = ki + 1;
+}
+sys_exit(0);
